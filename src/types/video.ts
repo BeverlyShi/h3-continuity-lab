@@ -12,11 +12,19 @@ export type VideoClip = {
   id: string
   prompt: string
   duration: number
-  retryCount: number
+  retryCount?: number
   status: VideoClipStatus
   videoUrl?: string
   thumbnailUrl?: string
   error?: string
+}
+
+export type VideoProject = {
+  id: string
+  name: string
+  clips: VideoClip[]
+  createdAt: number
+  updatedAt: number
 }
 
 export type GeneratedVideo = {
