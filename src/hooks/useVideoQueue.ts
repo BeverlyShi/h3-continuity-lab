@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useReducer, useRef } from 'react'
 import { mockVideoGenerator } from '../services/mockVideoGenerator'
 import {
-  MAX_VIDEO_DURATION,
-  MIN_VIDEO_DURATION,
+  VIDEO_DURATION,
   type GeneratedVideo,
   type VideoClip,
   type VideoClipStatus,
@@ -17,10 +16,11 @@ type QueueState = {
 }
 
 type QueueAction =
-  | { type: 'enqueue'; clip: VideoClip }
+  | { type: 'enqueue'; clips: VideoClip[] }
   | { type: 'set-status'; id: string; status: VideoClipStatus }
   | { type: 'ready'; id: string; result: GeneratedVideo }
   | { type: 'failed'; id: string; error: string }
+  | { type: 'retry'; id: string }
   | { type: 'ended' }
   | { type: 'play' }
   | { type: 'pause' }
@@ -46,14 +46,16 @@ const updateStatus = (
 function queueReducer(state: QueueState, action: QueueAction): QueueState {
   switch (action.type) {
     case 'enqueue':
-      return { ...state, clips: [...state.clips, action.clip] }
+      return { ...state, clips: [...state.clips, ...action.clips] }
 
     case 'set-status':
       return { ...state, clips: updateStatus(state.clips, action.id, action.status) }
 
     case 'ready': {
       const clips = state.clips.map((clip) =>
-        clip.id === action.id ? { ...clip, ...action.result, status: 'ready' as const } : clip,
+        clip.id === action.id
+          ? { ...clip, ...action.result, status: 'ready' as const, error: undefined }
+          : clip,
       )
       const nextClip = clips[state.activeIndex + 1]
       const shouldAdvance =
@@ -65,7 +67,7 @@ function queueReducer(state: QueueState, action: QueueAction): QueueState {
         ...state,
         clips,
         activeIndex: shouldAdvance ? state.activeIndex + 1 : state.activeIndex,
-        isUserPaused: clips[0]?.id === action.id ? false : state.isUserPaused,
+        isUserPaused: clips[state.activeIndex]?.id === action.id ? false : state.isUserPaused,
         isWaitingForNext: shouldAdvance ? false : state.isWaitingForNext,
       }
     }
@@ -76,6 +78,21 @@ function queueReducer(state: QueueState, action: QueueAction): QueueState {
         clips: state.clips.map((clip) =>
           clip.id === action.id
             ? { ...clip, status: 'failed', error: action.error }
+            : clip,
+        ),
+      }
+
+    case 'retry':
+      return {
+        ...state,
+        clips: state.clips.map((clip) =>
+          clip.id === action.id && clip.status === 'failed'
+            ? {
+                ...clip,
+                status: 'queued' as const,
+                error: undefined,
+                retryCount: clip.retryCount + 1,
+              }
             : clip,
         ),
       }
@@ -134,9 +151,14 @@ export function useVideoQueue(generator: VideoGenerator = mockVideoGenerator) {
   const [state, dispatch] = useReducer(queueReducer, initialState)
   const videoRef = useRef<HTMLVideoElement>(null)
   const nextId = useRef(1)
+  const activeGenerationId = useRef<string | null>(null)
   const activeClip = state.clips[state.activeIndex]
   const queuedCount = useMemo(
-    () => state.clips.filter((clip) => clip.status === 'queued' || clip.status === 'generating').length,
+    () => state.clips.filter((clip) => clip.status === 'queued').length,
+    [state.clips],
+  )
+  const generatingCount = useMemo(
+    () => state.clips.filter((clip) => clip.status === 'generating').length,
     [state.clips],
   )
 
@@ -149,31 +171,46 @@ export function useVideoQueue(generator: VideoGenerator = mockVideoGenerator) {
     }
   }, [activeClip?.id, activeClip?.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const enqueue = (prompt: string, duration: number) => {
-    if (
-      !Number.isInteger(duration) ||
-      duration < MIN_VIDEO_DURATION ||
-      duration > MAX_VIDEO_DURATION
-    ) return
+  useEffect(() => {
+    if (activeGenerationId.current) return
+    if (state.clips.some((clip) => clip.status === 'generating')) return
 
-    const sequence = state.clips.length
-    const id = `clip-${nextId.current++}`
-    dispatch({ type: 'enqueue', clip: { id, prompt, duration, status: 'queued' } })
+    const nextClip = state.clips.find((clip) => clip.status === 'queued')
+    if (!nextClip) return
 
-    Promise.resolve().then(() => {
-      dispatch({ type: 'set-status', id, status: 'generating' })
-    })
+    const sequence = state.clips.findIndex((clip) => clip.id === nextClip.id)
+    activeGenerationId.current = nextClip.id
+    dispatch({ type: 'set-status', id: nextClip.id, status: 'generating' })
 
-    void generator
-      .generate(prompt, duration, sequence)
-      .then((result) => dispatch({ type: 'ready', id, result }))
+    void Promise.resolve()
+      .then(() => generator.generate(nextClip.prompt, nextClip.duration, sequence))
+      .then((result) => {
+        activeGenerationId.current = null
+        dispatch({ type: 'ready', id: nextClip.id, result })
+      })
       .catch((error: unknown) => {
+        activeGenerationId.current = null
         dispatch({
           type: 'failed',
-          id,
+          id: nextClip.id,
           error: error instanceof Error ? error.message : '视频生成失败',
         })
       })
+  }, [generator, state.clips])
+
+  const enqueueBatch = (prompts: string[]) => {
+    const clips = prompts
+      .map((prompt) => prompt.trim())
+      .filter(Boolean)
+      .map((prompt) => ({
+        id: `clip-${nextId.current++}`,
+        prompt,
+        duration: VIDEO_DURATION,
+        retryCount: 0,
+        status: 'queued' as const,
+      }))
+
+    if (clips.length) dispatch({ type: 'enqueue', clips })
   }
 
   const togglePlayback = () => {
@@ -195,10 +232,13 @@ export function useVideoQueue(generator: VideoGenerator = mockVideoGenerator) {
     activeClip,
     activeIndex: state.activeIndex,
     queuedCount,
+    generatingCount,
     videoRef,
     isUserPaused: state.isUserPaused,
     isWaitingForNext: state.isWaitingForNext,
-    enqueue,
+    enqueue: (prompt: string) => enqueueBatch([prompt]),
+    enqueueBatch,
+    retryClip: (id: string) => dispatch({ type: 'retry', id }),
     handleEnded: () => dispatch({ type: 'ended' }),
     handlePlay: () => dispatch({ type: 'play' }),
     handlePause: () => {

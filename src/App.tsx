@@ -9,6 +9,7 @@ import {
   Pause,
   Play,
   Plus,
+  RotateCcw,
   Settings2,
   Sparkles,
   X,
@@ -17,7 +18,16 @@ import { FormEvent, useMemo, useState } from 'react'
 import { useVideoQueue } from './hooks/useVideoQueue'
 import { createFalVideoGenerator } from './services/falVideoGenerator'
 import { mockVideoGenerator } from './services/mockVideoGenerator'
-import { MAX_VIDEO_DURATION, MIN_VIDEO_DURATION } from './types/video'
+import { VIDEO_DURATION } from './types/video'
+import {
+  MAX_PROMPT_LENGTH,
+  MAX_SERIAL_PROMPTS,
+  parseSerialPrompts,
+} from './utils/parseSerialPrompts'
+
+type PromptMode = 'single' | 'serial'
+
+const MAX_SERIAL_INPUT_LENGTH = 12000
 
 const formatTime = (seconds: number) => {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0
@@ -25,8 +35,9 @@ const formatTime = (seconds: number) => {
 }
 
 function App() {
+  const [promptMode, setPromptMode] = useState<PromptMode>('single')
   const [prompt, setPrompt] = useState('')
-  const [duration, setDuration] = useState(MIN_VIDEO_DURATION)
+  const [serialPrompt, setSerialPrompt] = useState('')
   const [isApiDialogOpen, setIsApiDialogOpen] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [savedApiKey, setSavedApiKey] = useState('')
@@ -44,10 +55,13 @@ function App() {
     activeClip,
     activeIndex,
     queuedCount,
+    generatingCount,
     videoRef,
     isUserPaused,
     isWaitingForNext,
     enqueue,
+    enqueueBatch,
+    retryClip,
     handleEnded,
     handlePlay,
     handlePause,
@@ -55,17 +69,30 @@ function App() {
     togglePlayback,
   } = useVideoQueue(videoGenerator)
 
+  const serialPromptResult = useMemo(
+    () => parseSerialPrompts(serialPrompt),
+    [serialPrompt],
+  )
+  const isSerialMode = promptMode === 'serial'
+  const canSubmitPrompt = isSerialMode
+    ? Boolean(serialPrompt.trim() && !serialPromptResult.error && serialPromptResult.prompts.length)
+    : Boolean(prompt.trim())
+
   const submitPrompt = (event: FormEvent) => {
     event.preventDefault()
-    const cleanPrompt = prompt.trim()
-    if (!cleanPrompt) return
+    if (!canSubmitPrompt) return
     if (!savedApiKey) {
       setIsApiDialogOpen(true)
       return
     }
 
-    enqueue(cleanPrompt, duration)
-    setPrompt('')
+    if (isSerialMode) {
+      enqueueBatch(serialPromptResult.prompts)
+      setSerialPrompt('')
+    } else {
+      enqueue(prompt.trim())
+      setPrompt('')
+    }
   }
 
   const saveApiKey = (event: FormEvent) => {
@@ -77,9 +104,9 @@ function App() {
   const hasPlayableActiveClip = Boolean(
     activeClip && ['ready', 'playing', 'completed'].includes(activeClip.status),
   )
-  const latestClip = clips[clips.length - 1]
-  const latestFailure = latestClip?.status === 'failed' ? latestClip : undefined
+  const activeFailure = activeClip?.status === 'failed' ? activeClip : undefined
   const nextPlayableClip = clips[activeIndex + 1]
+  const waitingFailure = isWaitingForNext && nextPlayableClip?.status === 'failed'
   const shouldPreloadNext = Boolean(
     nextPlayableClip && ['ready', 'playing', 'completed'].includes(nextPlayableClip.status),
   )
@@ -89,6 +116,10 @@ function App() {
   const progressPercent = activeProgress.duration
     ? Math.min(100, (activeProgress.currentTime / activeProgress.duration) * 100)
     : 0
+  const queueStatus = [
+    generatingCount ? `${generatingCount} 个生成中` : '',
+    queuedCount ? `${queuedCount} 个等待中` : '',
+  ].filter(Boolean).join(' · ')
 
   return (
     <div className="app-shell">
@@ -112,8 +143,8 @@ function App() {
               <p>片段生成后会自动加入播放队列</p>
             </div>
             <div className="status-line">
-              <span className={queuedCount ? 'status-dot status-dot-busy' : 'status-dot'} />
-              {queuedCount ? `${queuedCount} 个片段生成中` : clips.length ? '队列已同步' : '等待首个 Prompt'}
+              <span className={queueStatus ? 'status-dot status-dot-busy' : 'status-dot'} />
+              {queueStatus || (clips.length ? '队列已同步' : '等待首个 Prompt')}
             </div>
           </div>
 
@@ -181,18 +212,18 @@ function App() {
                 <span className="on-air"><span /> {isWaitingForNext ? 'WAITING' : isUserPaused ? 'PAUSED' : 'PLAYING'} · CLIP {activeIndex + 1}</span>
                 {isWaitingForNext && (
                   <div className="waiting-overlay">
-                    <LoaderCircle className="spin" size={20} />
-                    <strong>等待下一段</strong>
-                    <span>生成完成后将自动继续播放</span>
+                    {waitingFailure ? <X size={20} /> : <LoaderCircle className="spin" size={20} />}
+                    <strong>{waitingFailure ? `片段 ${activeIndex + 2} 生成失败` : '等待下一段'}</strong>
+                    <span>{waitingFailure ? '请在时间轴中重试' : '生成完成后将自动继续播放'}</span>
                   </div>
                 )}
               </>
-            ) : latestFailure ? (
+            ) : activeFailure ? (
               <div className="empty-player">
                 <span className="empty-player-icon"><X size={22} /></span>
                 <strong>视频生成失败</strong>
                 <span className="empty-player-error">
-                  {latestFailure.error ?? '请检查 API Key 后重试'}
+                  {activeFailure.error ?? '请在时间轴中重试'}
                 </span>
               </div>
             ) : clips.length > 0 ? (
@@ -222,19 +253,35 @@ function App() {
                 clips.map((clip, index) => (
                   <div className="timeline-item-wrap" key={clip.id}>
                     {index > 0 && <ChevronRight className="timeline-arrow" size={14} />}
-                    <button
-                      className={`timeline-item ${index === activeIndex && ['ready', 'playing', 'completed'].includes(clip.status) ? 'selected' : ''} ${clip.status}`}
-                      onClick={() => selectClip(index)}
-                      disabled={['queued', 'generating', 'failed'].includes(clip.status)}
-                      title={clip.error ?? clip.prompt}
-                    >
-                      {clip.status === 'queued' || clip.status === 'generating' ? (
+                    {clip.status === 'failed' ? (
+                      <div className="timeline-item failed" title={clip.error ?? clip.prompt}>
+                        <span className="failed-label">生成失败</span>
+                        <button
+                          className="retry-button"
+                          type="button"
+                          onClick={() => retryClip(clip.id)}
+                        >
+                          <RotateCcw size={12} />
+                          重试
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        className={`timeline-item ${index === activeIndex && ['ready', 'playing', 'completed'].includes(clip.status) ? 'selected' : ''} ${clip.status}`}
+                        onClick={() => selectClip(index)}
+                        disabled={['queued', 'generating'].includes(clip.status)}
+                        title={clip.prompt}
+                      >
+                        {clip.status === 'queued' || clip.status === 'generating' ? (
                         <>
                           <span className="skeleton" />
-                          <span className="timeline-meta"><LoaderCircle className="spin" size={12} /> 生成中</span>
+                          <span className="timeline-meta">
+                            {clip.status === 'generating' && <LoaderCircle className="spin" size={12} />}
+                            {clip.retryCount
+                              ? clip.status === 'generating' ? '重新生成中' : '等待重试'
+                              : clip.status === 'generating' ? '生成中' : '等待生成'}
+                          </span>
                         </>
-                      ) : clip.status === 'failed' ? (
-                        <span className="timeline-meta">生成失败</span>
                       ) : (
                         <>
                           {clip.thumbnailUrl ? (
@@ -248,7 +295,8 @@ function App() {
                           </span>
                         </>
                       )}
-                    </button>
+                      </button>
+                    )}
                   </div>
                 ))
               )}
@@ -269,43 +317,62 @@ function App() {
           <section className="card composer-card">
             <div className="card-heading">
               <div>
-                <h2>{clips.length ? '生成下一段' : '生成第一段'}</h2>
-                <p>描述接下来镜头中发生的内容</p>
+                <h2>创建视频片段</h2>
+                <p>每个片段固定生成 {VIDEO_DURATION} 秒</p>
               </div>
               <Sparkles size={17} />
             </div>
             <form onSubmit={submitPrompt}>
-              <div className="form-label-row">
-                <label htmlFor="prompt">Prompt</label>
-                <label className="duration-control" htmlFor="duration">
-                  <span>时长</span>
-                  <select
-                    id="duration"
-                    value={duration}
-                    onChange={(event) => setDuration(Number(event.target.value))}
-                  >
-                    {Array.from(
-                      { length: MAX_VIDEO_DURATION - MIN_VIDEO_DURATION + 1 },
-                      (_, index) => MIN_VIDEO_DURATION + index,
-                    ).map((seconds) => (
-                      <option key={seconds} value={seconds}>{seconds} 秒</option>
-                    ))}
-                  </select>
-                </label>
+              <div className="prompt-tabs" role="tablist" aria-label="Prompt 输入模式">
+                <button
+                  className={!isSerialMode ? 'active' : ''}
+                  type="button"
+                  role="tab"
+                  aria-selected={!isSerialMode}
+                  onClick={() => setPromptMode('single')}
+                >
+                  单个 Prompt
+                </button>
+                <button
+                  className={isSerialMode ? 'active' : ''}
+                  type="button"
+                  role="tab"
+                  aria-selected={isSerialMode}
+                  onClick={() => setPromptMode('serial')}
+                >
+                  串行 Prompt
+                </button>
               </div>
+              <label htmlFor="prompt">{isSerialMode ? '串行 Prompt' : 'Prompt'}</label>
               <textarea
                 id="prompt"
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="例如：镜头缓慢推进，穿过雾气，一座发光的城市出现在山谷中……"
-                maxLength={1000}
-                rows={7}
+                className={isSerialMode ? 'serial-prompt-input' : ''}
+                value={isSerialMode ? serialPrompt : prompt}
+                onChange={(event) => {
+                  if (isSerialMode) setSerialPrompt(event.target.value)
+                  else setPrompt(event.target.value)
+                }}
+                placeholder={isSerialMode
+                  ? 'Prompt 1: 镜头缓慢推进，穿过雾气……\n\nPrompt 2: 城市上空出现一艘飞船……'
+                  : '例如：镜头缓慢推进，穿过雾气，一座发光的城市出现在山谷中……'}
+                maxLength={isSerialMode ? MAX_SERIAL_INPUT_LENGTH : MAX_PROMPT_LENGTH}
+                rows={isSerialMode ? 9 : 7}
+                aria-describedby="prompt-feedback"
               />
               <div className="composer-footer">
-                <span>{prompt.length} / 1000</span>
-                <button className="button button-primary" type="submit" disabled={!prompt.trim()}>
+                <span
+                  id="prompt-feedback"
+                  className={isSerialMode && serialPromptResult.error ? 'prompt-error' : ''}
+                >
+                  {isSerialMode
+                    ? serialPromptResult.error ?? `已识别 ${serialPromptResult.prompts.length} / ${MAX_SERIAL_PROMPTS} 个 Prompt`
+                    : `${prompt.length} / ${MAX_PROMPT_LENGTH}`}
+                </span>
+                <button className="button button-primary" type="submit" disabled={!canSubmitPrompt}>
                   <Sparkles size={16} />
-                  加入生成队列
+                  {isSerialMode && serialPromptResult.prompts.length
+                    ? `将 ${serialPromptResult.prompts.length} 个 Prompt 加入队列`
+                    : '加入生成队列'}
                 </button>
               </div>
             </form>

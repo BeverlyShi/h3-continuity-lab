@@ -73,9 +73,15 @@ h1, h2, p { margin: 0; }
 .timeline-item.selected { border-color: #0f172a; box-shadow: 0 0 0 2px #0f172a; }
 .timeline-item img, .timeline-item video { width: 100%; height: 100%; display: block; object-fit: cover; }
 .timeline-meta { position: absolute; right: 4px; bottom: 4px; left: 4px; height: 19px; padding: 0 6px; display: flex; align-items: center; gap: 4px; border-radius: 4px; color: white; background: rgba(15,23,42,.75); backdrop-filter: blur(6px); font-size: 10px; font-weight: 550; }
-.timeline-item.generating { cursor: default; }
+.timeline-item.queued, .timeline-item.generating { cursor: default; }
 .skeleton { position: absolute; inset: 0; background: linear-gradient(100deg, #e2e8f0 20%, #f8fafc 40%, #e2e8f0 60%); background-size: 200% 100%; animation: shimmer 1.4s infinite linear; }
-.timeline-item.generating .timeline-meta { color: #64748b; background: rgba(248,250,252,.85); }
+.timeline-item.queued .timeline-meta, .timeline-item.generating .timeline-meta { color: #64748b; background: rgba(248,250,252,.85); }
+.timeline-item.failed { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border-color: #fecaca; background: #fef2f2; cursor: default; }
+.failed-label { color: #b91c1c; font-size: 10px; font-weight: 600; }
+.retry-button { height: 22px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #fca5a5; border-radius: 5px; color: #b91c1c; background: white; font-size: 10px; font-weight: 600; cursor: pointer; transition: background .15s, border .15s; }
+.retry-button:hover { border-color: #f87171; background: #fee2e2; }
+.retry-button:active { background: #fecaca; }
+.retry-button:focus-visible { outline: 2px solid rgba(185,28,28,.25); outline-offset: 1px; }
 
 .side-panel { padding-top: 54px; display: flex; flex-direction: column; gap: 12px; }
 .card { border: 1px solid #e2e8f0; border-radius: 8px; background: white; box-shadow: 0 1px 2px rgba(15,23,42,.03); }
@@ -89,18 +95,19 @@ h1, h2, p { margin: 0; }
 .card-heading h2, .dialog-heading h2 { font-size: 14px; line-height: 20px; font-weight: 650; }
 .card-heading > svg { color: #64748b; }
 form label { display: block; margin: 15px 0 6px; color: #334155; font-size: 12px; font-weight: 550; }
-.form-label-row { margin-top: 15px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.form-label-row > label { margin: 0; }
-.duration-control { display: flex; align-items: center; gap: 7px; color: #64748b; font-weight: 500; }
-.duration-control select { width: 78px; height: 32px; padding: 0 8px; outline: none; border: 1px solid #cbd5e1; border-radius: 7px; color: #0f172a; background: white; font-size: 12px; cursor: pointer; transition: border .15s, box-shadow .15s; }
-.duration-control select:hover { border-color: #94a3b8; }
-.duration-control select:focus { border-color: #64748b; box-shadow: 0 0 0 3px rgba(148,163,184,.2); }
+.prompt-tabs { margin-top: 15px; padding: 3px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; border-radius: 7px; background: #f1f5f9; }
+.prompt-tabs button { height: 28px; border: 1px solid transparent; border-radius: 5px; color: #64748b; background: transparent; font-size: 12px; font-weight: 550; cursor: pointer; transition: color .15s, background .15s, border .15s, box-shadow .15s; }
+.prompt-tabs button:hover { color: #334155; background: rgba(255,255,255,.55); }
+.prompt-tabs button.active { border-color: #e2e8f0; color: #0f172a; background: white; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+.prompt-tabs button:focus-visible { outline: 2px solid rgba(100,116,139,.3); outline-offset: 1px; }
 textarea, input { width: 100%; outline: none; border: 1px solid #cbd5e1; border-radius: 7px; color: #0f172a; background: white; transition: border .15s, box-shadow .15s; }
 textarea { min-height: 142px; padding: 10px 11px; resize: vertical; font-size: 13px; line-height: 20px; }
+textarea.serial-prompt-input { min-height: 190px; }
 textarea::placeholder, input::placeholder { color: #94a3b8; }
 textarea:focus, input:focus { border-color: #64748b; box-shadow: 0 0 0 3px rgba(148,163,184,.2); }
 .composer-footer { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .composer-footer > span { color: #94a3b8; font-size: 10px; }
+.composer-footer > span.prompt-error { color: #dc2626; font-size: 11px; line-height: 15px; }
 .button { height: 34px; padding: 0 11px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 7px; font-size: 12px; font-weight: 550; cursor: pointer; transition: background .15s, border .15s, opacity .15s; }
 .button:disabled { opacity: .45; cursor: not-allowed; }
 .button-primary { border: 1px solid #0f172a; color: white; background: #0f172a; }

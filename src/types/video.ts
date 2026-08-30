@@ -6,13 +6,13 @@ export type VideoClipStatus =
   | 'completed'
   | 'failed'
 
-export const MIN_VIDEO_DURATION = 5
-export const MAX_VIDEO_DURATION = 15
+export const VIDEO_DURATION = 5
 
 export type VideoClip = {
   id: string
   prompt: string
   duration: number
+  retryCount: number
   status: VideoClipStatus
   videoUrl?: string
   thumbnailUrl?: string
