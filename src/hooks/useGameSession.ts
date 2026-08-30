@@ -5,6 +5,7 @@ import { clearGameSession, loadGameSession, saveGameSession } from '../services/
 import { unregisteredCity } from '../stories/unregisteredCity'
 import type {
   DirectorResolutionInput,
+  DirectorTurnContext,
   GameEvent,
   GameScene,
   GameSession,
@@ -138,22 +139,12 @@ export function useGameSession() {
     return { ok: true, sceneId: scene.id, ending: scene.ending }
   }, [replaceSession])
 
-  const getTurnContext = useCallback(() => {
+  const getTurnContext = useCallback((): DirectorTurnContext | { ok: false; error: string } => {
     const current = sessionRef.current
     if (!current) return { ok: false, error: '游戏尚未开始。' }
     return {
       ok: true,
-      story: {
-        id: unregisteredCity.id,
-        title: unregisteredCity.title,
-        coreRules: unregisteredCity.coreRules,
-        maxTurns: unregisteredCity.maxTurns,
-        characters: unregisteredCity.characters,
-      },
       session: current,
-      directorInstruction: current.status === 'awaiting_director'
-        ? '裁决 pendingAction，然后依次调用 commit_resolution、publish_turn。'
-        : `当前阶段是 ${current.status}，不要提交新的裁决。`,
     }
   }, [])
 

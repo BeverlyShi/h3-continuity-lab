@@ -3,8 +3,11 @@ import type { TraceUsage } from '../src/types/director.ts'
 
 type AssistantAgentMessage = Extract<AgentMessage, { role: 'assistant' }>
 
+export const toDurableValue = <T>(value: T): T =>
+  JSON.parse(JSON.stringify(value)) as T
+
 export const toDurableMessage = (message: AgentMessage): AgentMessage =>
-  JSON.parse(JSON.stringify(message)) as AgentMessage
+  toDurableValue(message)
 
 export const summarizeAssistantUsage = (messages: AgentMessage[]): TraceUsage | undefined => {
   const assistants = messages.filter((message): message is AssistantAgentMessage =>

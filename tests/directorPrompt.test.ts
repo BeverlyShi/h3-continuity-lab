@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { unregisteredCity } from '../src/stories/unregisteredCity.ts'
+import { DIRECTOR_SYSTEM_PROMPT } from '../server/directorPrompt.ts'
+
+test('keeps the complete immutable story bible in the director system prompt', () => {
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /持久总导演/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, new RegExp(unregisteredCity.coreRules[0]))
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /燕七/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /拒绝射杀一队没有通行籍的难民/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /resolve_action/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /publish_turn/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /不调用任何视频生成工具/)
+})
+

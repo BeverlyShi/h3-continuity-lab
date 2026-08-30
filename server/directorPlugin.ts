@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Plugin } from 'vite'
 import { runDirectorAgent } from './directorAgent.ts'
 import type { DirectorStreamEvent } from '../src/types/director.ts'
+import type { DirectorTurnContext } from '../src/types/game.ts'
 
 const MAX_BODY_BYTES = 1_000_000
 
@@ -11,8 +12,14 @@ async function readJson(req: IncomingMessage) {
     body += chunk
     if (Buffer.byteLength(body) > MAX_BODY_BYTES) throw new Error('请求内容过大。')
   }
-  return JSON.parse(body) as { context?: unknown; traceId?: string }
+  return JSON.parse(body) as { context?: DirectorTurnContext; traceId?: string }
 }
+
+const isDirectorTurnContext = (context: DirectorTurnContext | undefined): context is DirectorTurnContext =>
+  context?.ok === true &&
+  typeof context.session?.id === 'string' &&
+  typeof context.session?.turn === 'number' &&
+  context.session.pendingAction !== undefined
 
 export function directorPlugin(): Plugin {
   return {
@@ -45,7 +52,7 @@ export function directorPlugin(): Plugin {
 
         try {
           const body = await readJson(req)
-          if (!body.context) throw new Error('缺少游戏上下文。')
+          if (!isDirectorTurnContext(body.context)) throw new Error('游戏上下文无效或没有待裁决行动。')
           if (!body.traceId) throw new Error('缺少 Trace ID。')
           await runDirectorAgent({
             apiKey: apiKey.trim(),

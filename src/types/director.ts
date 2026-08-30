@@ -1,5 +1,13 @@
 import type { DirectorResolutionInput } from './game'
 
+export type DirectorBoard = {
+  dramaticGoal?: string
+  nextBeat?: string
+  foreshadowing: string[]
+  revealedSecrets: string[]
+  characterIntentions: Record<string, string>
+}
+
 export type DirectorStatus = 'idle' | 'thinking' | 'publishing' | 'error'
 
 export type DirectorChatMessage = {

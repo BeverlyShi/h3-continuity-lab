@@ -119,3 +119,8 @@ export type GameSession = {
   pendingResolution?: ResolvedTurn
   events: GameEvent[]
 }
+
+export type DirectorTurnContext = {
+  ok: true
+  session: GameSession
+}

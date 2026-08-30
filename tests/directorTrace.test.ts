@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { assertJsonSerializable, type AgentMessage } from '@earendil-works/pi-agent-core/node'
-import { summarizeAssistantUsage, toDurableMessage } from '../server/directorTrace.ts'
+import { summarizeAssistantUsage, toDurableMessage, toDurableValue } from '../server/directorTrace.ts'
 
 test('removes undefined properties before persisting an agent message', () => {
   const message = {
@@ -29,6 +29,12 @@ test('removes undefined properties before persisting an agent message', () => {
     isError: false,
     timestamp: 1,
   })
+})
+
+test('removes undefined values from arbitrary durable session data', () => {
+  const durable = toDurableValue({ nextBeat: undefined, foreshadowing: ['missing seal'] })
+  assert.deepEqual(durable, { foreshadowing: ['missing seal'] })
+  assert.doesNotThrow(() => assertJsonSerializable(durable))
 })
 
 test('keeps real usage when a later synthetic error message has zero tokens', () => {

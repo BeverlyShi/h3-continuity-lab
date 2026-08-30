@@ -1,71 +1,30 @@
 import {
   Agent,
+  buildSessionContext,
+  compact as compactSession,
+  convertToLlm,
+  DEFAULT_COMPACTION_SETTINGS,
+  estimateContextTokens,
   InMemoryTelemetryContext,
   JsonlSessionRepo,
   NodeExecutionEnv,
-  type AgentTool,
+  prepareCompaction,
+  shouldCompact,
+  uuidv7,
+  type AgentMessage,
+  type CompactionEntry,
   type Entry,
+  type JsonlSessionMetadata,
+  type Session,
 } from '@earendil-works/pi-agent-core/node'
-import { createModels } from '@earendil-works/pi-ai'
+import { createModels, type Api, type Model, type Models } from '@earendil-works/pi-ai'
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { resolve } from 'node:path'
-import { Type } from 'typebox'
-import type { DirectorResolutionInput } from '../src/types/game.ts'
-import type {
-  AgentTraceEntry,
-  DirectorStreamEvent,
-  HarnessTraceSnapshot,
-} from '../src/types/director.ts'
-import { summarizeAssistantUsage, toDurableMessage } from './directorTrace.ts'
-
-const resolutionSchema = Type.Object({
-  outcome: Type.Union([
-    Type.Literal('impossible'),
-    Type.Literal('failed'),
-    Type.Literal('costly_success'),
-    Type.Literal('success'),
-    Type.Literal('major_success'),
-  ]),
-  narrative: Type.String({ minLength: 20, maxLength: 500 }),
-  reason: Type.String({ minLength: 10, maxLength: 300 }),
-  statChanges: Type.Optional(Type.Object({
-    innOrder: Type.Optional(Type.Number()),
-    officialSuspicion: Type.Optional(Type.Number()),
-    guestTrust: Type.Optional(Type.Number()),
-  })),
-  permitChanges: Type.Optional(Type.Array(Type.Object({
-    permitId: Type.Union([
-      Type.Literal('gatekeeper'),
-      Type.Literal('lamplighter'),
-      Type.Literal('scribe'),
-    ]),
-    holderId: Type.String(),
-    kind: Type.Union([
-      Type.Literal('initial_assignment'),
-      Type.Literal('voluntary_transfer'),
-    ]),
-    voluntary: Type.Optional(Type.Boolean()),
-    accepted: Type.Optional(Type.Boolean()),
-    witnessed: Type.Optional(Type.Boolean()),
-  }))),
-  nextOptions: Type.Tuple([
-    Type.String({ minLength: 4, maxLength: 100 }),
-    Type.String({ minLength: 4, maxLength: 100 }),
-  ]),
-  sceneDirection: Type.String({ minLength: 20, maxLength: 700 }),
-})
-
-const SYSTEM_PROMPT = `你是互动文字游戏《无籍之城》的世界导演。
-你的任务是读取完整世界状态和玩家本回合行动，给出公平、克制、可持续互动的裁决。
-
-必须遵守：
-1. coreRules 是不可变规则，不得为了迎合玩家而修改。
-2. 角色秘密只有在行动和既有事件合理揭示后，才能进入玩家可见叙事。
-3. 数值变化必须有明确因果，单项通常在 -15 到 +15；戏剧性后果也不得超过 -25 到 +25。
-4. 宿籍初次分配可由老板决定；已经分配后的流转只能由持有人自愿提出、双方接受且有人见证。
-5. narrative 是玩家立刻看到的本回合文字结果；sceneDirection 继续描述可见场面，供诊断连续性使用。
-6. nextOptions 必须是两个真实分叉，不得只是同一行动的换句话说。
-7. 你必须且只能调用一次 commit_turn 工具完成裁决。不要使用 Markdown，不要在工具调用后继续解释。`
+import type { DirectorBoard, AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
+import type { DirectorTurnContext } from '../src/types/game.ts'
+import { DIRECTOR_COMPACTION_INSTRUCTIONS, DIRECTOR_SYSTEM_PROMPT } from './directorPrompt.ts'
+import { createDirectorTools, EMPTY_DIRECTOR_BOARD } from './directorTools.ts'
+import { summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
 
 const MAX_DIRECTOR_OUTPUT_TOKENS = 2_500
 const DIRECTOR_TIMEOUT_MS = 45_000
@@ -74,6 +33,7 @@ const traceRepo = new JsonlSessionRepo({
   fs: traceEnvironment,
   sessionsRoot: resolve(process.cwd(), '.agent-traces'),
 })
+const activeGameSessions = new Set<string>()
 
 const entryId = (traceId: string, entry: Entry, suffix: string) => `${traceId}:${entry.id}:${suffix}`
 
@@ -89,6 +49,33 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
   const projected: AgentTraceEntry[] = []
 
   for (const entry of entries) {
+    if (entry.type === 'custom' && entry.customType === 'director_board') {
+      projected.push({
+        id: entryId(traceId, entry, 'director-board'),
+        kind: 'assistant',
+        title: '导演台账更新',
+        timestamp: entry.timestamp,
+        data: entry.data,
+      })
+      continue
+    }
+
+    if (entry.type === 'compaction') {
+      projected.push({
+        id: entryId(traceId, entry, 'compaction'),
+        kind: 'assistant',
+        title: 'Pi Context Compaction',
+        timestamp: entry.timestamp,
+        text: entry.summary,
+        data: {
+          tokensBefore: entry.tokensBefore,
+          retainedMessages: entry.retainedTail.length,
+          usage: entry.usage,
+        },
+      })
+      continue
+    }
+
     if (entry.type !== 'message') continue
     const message = entry.message
 
@@ -96,7 +83,7 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
       projected.push({
         id: entryId(traceId, entry, 'input'),
         kind: 'input',
-        title: '完整模型输入（包含导演上下文）',
+        title: '本回合模型输入',
         timestamp: message.timestamp,
         text: textFromContent(message.content),
       })
@@ -152,62 +139,159 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
   return projected
 }
 
+const getOrCreateSession = async (gameSessionId: string) => {
+  const existing = (await traceRepo.list({ cwd: process.cwd() }))
+    .find((metadata) => metadata.id === gameSessionId)
+  if (existing) return traceRepo.open(existing)
+
+  return traceRepo.create({
+    id: gameSessionId,
+    cwd: process.cwd(),
+    metadata: {
+      kind: 'unregistered-city-director',
+      storyId: 'unregistered-city-quick',
+    },
+  })
+}
+
+const readDirectorBoard = (entries: Entry[]): DirectorBoard => {
+  const boardEntry = [...entries].reverse().find((entry) =>
+    entry.type === 'custom' && entry.customType === 'director_board',
+  )
+  if (!boardEntry || boardEntry.type !== 'custom' || !boardEntry.data || typeof boardEntry.data !== 'object') {
+    return toDurableValue(EMPTY_DIRECTOR_BOARD)
+  }
+
+  const stored = boardEntry.data as Partial<DirectorBoard>
+  return {
+    ...(typeof stored.dramaticGoal === 'string' ? { dramaticGoal: stored.dramaticGoal } : {}),
+    ...(typeof stored.nextBeat === 'string' ? { nextBeat: stored.nextBeat } : {}),
+    foreshadowing: Array.isArray(stored.foreshadowing) ? stored.foreshadowing : [],
+    revealedSecrets: Array.isArray(stored.revealedSecrets) ? stored.revealedSecrets : [],
+    characterIntentions: stored.characterIntentions && typeof stored.characterIntentions === 'object'
+      ? stored.characterIntentions
+      : {},
+  }
+}
+
+const lastSequence = (entries: Entry[]) => entries.reduce((latest, entry) => Math.max(latest, entry.seq), 0)
+
+const maybeCompact = async ({
+  session,
+  entries,
+  models,
+  model,
+  signal,
+}: {
+  session: Session<JsonlSessionMetadata>
+  entries: Entry[]
+  models: Models
+  model: Model<Api>
+  signal?: AbortSignal
+}) => {
+  const contextMessages = buildSessionContext(entries).messages
+  const contextTokens = estimateContextTokens(contextMessages).tokens
+  if (!shouldCompact(contextTokens, model.contextWindow, DEFAULT_COMPACTION_SETTINGS)) return false
+
+  const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS)
+  if (!preparation.ok) throw preparation.error
+  if (!preparation.value) return false
+
+  const result = await compactSession(
+    preparation.value,
+    models,
+    model,
+    DIRECTOR_COMPACTION_INSTRUCTIONS,
+    signal,
+    'off',
+  )
+  if (!result.ok) throw result.error
+
+  const compacted = result.value
+  const entry: Omit<CompactionEntry, 'parentId' | 'seq' | 'timestamp'> = {
+    type: 'compaction',
+    id: uuidv7(),
+    summary: compacted.summary,
+    retainedTail: toDurableValue(compacted.retainedTail),
+    tokensBefore: compacted.tokensBefore,
+    ...(compacted.details === undefined ? {} : { details: toDurableValue(compacted.details) }),
+    ...(compacted.usage === undefined ? {} : { usage: toDurableValue(compacted.usage) }),
+  }
+  await session.appendEntry(entry, 'main')
+  return true
+}
+
 export type DirectorAgentRequest = {
   apiKey: string
-  context: unknown
+  context: DirectorTurnContext
   traceId: string
   signal?: AbortSignal
   send: (event: DirectorStreamEvent) => void
 }
 
-export async function runDirectorAgent({
+export async function runDirectorAgent(request: DirectorAgentRequest) {
+  const gameSessionId = request.context.session.id
+  if (!request.context.session.pendingAction) throw new Error('当前没有等待导演裁决的玩家行动。')
+  if (activeGameSessions.has(gameSessionId)) throw new Error('导演正在处理这个游戏会话的上一项行动。')
+
+  activeGameSessions.add(gameSessionId)
+  try {
+    return await runPersistentDirector(request)
+  } finally {
+    activeGameSessions.delete(gameSessionId)
+  }
+}
+
+async function runPersistentDirector({
   apiKey,
   context,
   traceId,
   signal,
   send,
 }: DirectorAgentRequest) {
-  let resolution: DirectorResolutionInput | undefined
   const persistenceErrors: Array<{ message: string; timestamp: number }> = []
   const startedAt = Date.now()
-  const session = await traceRepo.create({
-    id: traceId,
-    cwd: process.cwd(),
-    metadata: { kind: 'unregistered-city-director-turn' },
-  })
+  const session = await getOrCreateSession(context.session.id)
   const metadata = await session.getMetadata()
+  let persistedEntries = await session.findEntries({ order: 'oldestFirst' })
+  const startSeq = lastSequence(persistedEntries)
   const telemetry = new InMemoryTelemetryContext()
-
-  const commitTool: AgentTool<typeof resolutionSchema, DirectorResolutionInput> = {
-    name: 'commit_turn',
-    label: '提交本回合裁决',
-    description: '提交唯一的结构化回合裁决。字段将继续经过游戏确定性规则引擎校验。',
-    parameters: resolutionSchema,
-    executionMode: 'sequential',
-    execute: async (_toolCallId, params) => {
-      resolution = params
-      send({ type: 'tool', name: 'commit_turn', text: '导演完成推演，正在提交裁决。' })
-      send({ type: 'resolution', resolution: params })
-      return {
-        content: [{ type: 'text', text: '裁决已记录并交给确定性规则引擎。' }],
-        details: params,
-        terminate: true,
-      }
-    },
-  }
 
   const models = createModels()
   models.setProvider(deepseekProvider())
   const model = models.getModel('deepseek', 'deepseek-v4-flash')
   if (!model) throw new Error('Pi 未找到 deepseek-v4-flash 模型。')
 
+  const completeSimple = models.completeSimple.bind(models)
+  models.completeSimple = (compactModel, compactContext, options) => completeSimple(
+    compactModel,
+    compactContext,
+    { ...options, apiKey },
+  )
+
+  try {
+    if (await maybeCompact({ session, entries: persistedEntries, models, model, signal })) {
+      persistedEntries = await session.findEntries({ order: 'oldestFirst' })
+    }
+  } catch (error) {
+    persistenceErrors.push({
+      message: `Pi Compaction 预检查失败：${error instanceof Error ? error.message : String(error)}`,
+      timestamp: Date.now(),
+    })
+  }
+
+  const sessionContext = buildSessionContext(persistedEntries)
+  const initialBoard = readDirectorBoard(persistedEntries)
+  const toolRuntime = createDirectorTools({ context, session, initialBoard, send })
   const agent = new Agent({
     initialState: {
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: DIRECTOR_SYSTEM_PROMPT,
       model,
-      tools: [commitTool],
+      tools: toolRuntime.tools,
+      messages: sessionContext.messages,
       thinkingLevel: 'low',
     },
+    convertToLlm,
     streamFn: (streamModel, streamContext, options) => models.streamSimple(
       streamModel,
       streamContext,
@@ -220,9 +304,10 @@ export async function runDirectorAgent({
         telemetryContext: telemetry,
       },
     ),
+    sessionId: metadata.id,
     maxRetryDelayMs: 5_000,
     toolExecution: 'sequential',
-    shouldStopAfterTurn: ({ toolResults }) => toolResults.length > 0,
+    shouldStopAfterTurn: () => toolRuntime.isPublished(),
   })
 
   signal?.addEventListener('abort', () => agent.abort(), { once: true })
@@ -242,19 +327,32 @@ export async function runDirectorAgent({
   })
 
   send({ type: 'trace_started', traceId, harnessSessionId: metadata.id, startedAt })
-  send({ type: 'status', text: 'Pi Agent 正在读取行动与世界状态。' })
+  send({ type: 'status', text: '持久导演正在规划本回合并自主调用工具。' })
 
   const sendTrace = async (outcome: HarnessTraceSnapshot['outcome']) => {
     let entries: Entry[] = []
     try {
-      entries = await session.findEntries({ order: 'oldestFirst' })
+      entries = await session.findEntries({
+        order: 'oldestFirst',
+        cursor: { afterSeq: startSeq },
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       persistenceErrors.push({ message, timestamp: Date.now() })
       console.error('Agent trace read failed:', message)
     }
     const endedAt = Date.now()
-    const finalMessage = [...agent.state.messages].reverse().find((message) => message.role === 'assistant')
+    const currentRunMessages = entries.flatMap((entry): AgentMessage[] =>
+      entry.type === 'message' ? [entry.message] : [],
+    )
+    const finalMessage = [...currentRunMessages].reverse().find((message) => message.role === 'assistant')
+    const traceEntries: AgentTraceEntry[] = [{
+      id: `${traceId}:system-prompt`,
+      kind: 'input',
+      title: '主 Agent System Prompt（完整世界观）',
+      timestamp: startedAt,
+      text: DIRECTOR_SYSTEM_PROMPT,
+    }, ...projectTraceEntries(traceId, entries)]
     const trace: HarnessTraceSnapshot = {
       traceId,
       harnessSessionId: metadata.id,
@@ -263,14 +361,14 @@ export async function runDirectorAgent({
       durationMs: endedAt - startedAt,
       outcome,
       stopReason: finalMessage?.role === 'assistant' ? finalMessage.stopReason : undefined,
-      usage: summarizeAssistantUsage(agent.state.messages),
-      entries: projectTraceEntries(traceId, entries),
+      usage: summarizeAssistantUsage(currentRunMessages),
+      entries: traceEntries,
     }
     persistenceErrors.forEach((error, index) => {
       trace.entries.push({
         id: `${traceId}:persistence-error-${index}`,
         kind: 'error',
-        title: 'Trace 持久化警告',
+        title: 'Pi Session 警告',
         timestamp: error.timestamp,
         text: error.message,
         isError: true,
@@ -290,9 +388,32 @@ export async function runDirectorAgent({
   }
 
   try {
-    await agent.prompt(`请裁决以下游戏状态：\n${JSON.stringify(context)}`)
+    const action = context.session.pendingAction
+    if (!action) throw new Error('当前没有等待导演裁决的玩家行动。')
+    await agent.prompt(
+      `第 ${context.session.turn} 回合，玩家行动：${action.text}\n` +
+      '请继续导演工作。根据需要自由调用工具，并以 publish_turn 成功结束本回合。',
+    )
     if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
-    if (!resolution) throw new Error('导演没有提交结构化裁决，请重试。')
+    if (!toolRuntime.isPublished()) {
+      await agent.prompt(
+        '本回合尚未发布。请继续使用工具完成必要校验，并以 publish_turn 成功结束；不要只输出说明。',
+      )
+    }
+    if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
+    const resolution = toolRuntime.getResolution()
+    if (!resolution || !toolRuntime.isPublished()) throw new Error('导演没有成功发布本回合裁决，请重试。')
+
+    try {
+      const allEntries = await session.findEntries({ order: 'oldestFirst' })
+      await maybeCompact({ session, entries: allEntries, models, model, signal })
+    } catch (error) {
+      persistenceErrors.push({
+        message: `Pi Compaction 后处理失败：${error instanceof Error ? error.message : String(error)}`,
+        timestamp: Date.now(),
+      })
+    }
+
     await sendTrace('completed')
     send({ type: 'done' })
     return resolution

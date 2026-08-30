@@ -108,6 +108,7 @@ export function TracePage({ traces }: { traces: AgentTraceRun[] }) {
                 <div><Clock3 size={14} /><span>总耗时</span><strong>{selectedTrace.endedAt ? `${selectedTrace.endedAt - selectedTrace.startedAt} ms` : '—'}</strong></div>
                 <div><Activity size={14} /><span>停止原因</span><strong>{selectedTrace.stopReason ?? '—'}</strong></div>
                 <div><BrainCircuit size={14} /><span>推理 Tokens</span><strong>{selectedTrace.usage?.reasoning ?? '—'}</strong></div>
+                <div><Database size={14} /><span>缓存命中 Tokens</span><strong>{selectedTrace.usage?.cacheRead ?? '—'}</strong></div>
                 <div><Database size={14} /><span>总 Tokens</span><strong>{selectedTrace.usage?.totalTokens ?? '—'}</strong></div>
               </div>
 
