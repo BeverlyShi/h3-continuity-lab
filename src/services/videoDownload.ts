@@ -68,34 +68,37 @@ export const exportProject = async (
 
   const ffmpeg = new FFmpeg()
   ffmpeg.on('progress', ({ progress }) => onProgress(Math.round(progress * 100)))
-  onProgress(1)
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${FFMPEG_CORE_BASE}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${FFMPEG_CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
-  })
+  try {
+    onProgress(1)
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${FFMPEG_CORE_BASE}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${FFMPEG_CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+    })
 
-  const inputs: string[] = []
-  for (let index = 0; index < project.clips.length; index += 1) {
-    const inputName = `input-${index}.mp4`
-    inputs.push(inputName)
-    await ffmpeg.writeFile(inputName, await fetchFile(project.clips[index].videoUrl!))
-    onProgress(Math.max(2, Math.round(((index + 1) / project.clips.length) * 20)))
+    const inputs: string[] = []
+    for (let index = 0; index < project.clips.length; index += 1) {
+      const inputName = `input-${index}.mp4`
+      inputs.push(inputName)
+      await ffmpeg.writeFile(inputName, await fetchFile(project.clips[index].videoUrl!))
+      onProgress(Math.max(2, Math.round(((index + 1) / project.clips.length) * 20)))
+    }
+
+    const concatFile = inputs.map((name) => `file '${name}'`).join('\n')
+    await ffmpeg.writeFile('concat.txt', new TextEncoder().encode(concatFile))
+    const exitCode = await ffmpeg.exec([
+      '-f', 'concat', '-safe', '0', '-i', 'concat.txt',
+      '-c', 'copy', '-movflags', '+faststart', 'output.mp4',
+    ])
+    if (exitCode !== 0) throw new Error('视频合并失败，请确认所有片段格式一致后重试。')
+
+    const output = await ffmpeg.readFile('output.mp4')
+    if (typeof output === 'string') throw new Error('视频合并结果格式异常，请重试。')
+    const blob = new Blob([new Uint8Array(output).buffer], { type: 'video/mp4' })
+    const blobUrl = URL.createObjectURL(blob)
+    triggerDownload(blobUrl, `${safeFileName(project.name)}.mp4`)
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
+    onProgress(100)
+  } finally {
+    ffmpeg.terminate()
   }
-
-  const concatFile = inputs.map((name) => `file '${name}'`).join('\n')
-  await ffmpeg.writeFile('concat.txt', new TextEncoder().encode(concatFile))
-  const exitCode = await ffmpeg.exec([
-    '-f', 'concat', '-safe', '0', '-i', 'concat.txt',
-    '-c', 'copy', '-movflags', '+faststart', 'output.mp4',
-  ])
-  if (exitCode !== 0) throw new Error('视频合并失败，请确认所有片段格式一致后重试。')
-
-  const output = await ffmpeg.readFile('output.mp4')
-  if (typeof output === 'string') throw new Error('视频合并结果格式异常，请重试。')
-  const blob = new Blob([new Uint8Array(output).buffer], { type: 'video/mp4' })
-  const blobUrl = URL.createObjectURL(blob)
-  triggerDownload(blobUrl, `${safeFileName(project.name)}.mp4`)
-  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
-  ffmpeg.terminate()
-  onProgress(100)
 }

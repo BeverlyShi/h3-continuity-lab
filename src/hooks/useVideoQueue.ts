@@ -94,8 +94,12 @@ export function useVideoQueue({
   const handleEnded = () => {
     if (!projectId || !activeClip) return
     updateClip(projectId, activeClip.id, { status: 'completed' })
+    setIsUserPaused(false)
     const nextClip = clips[activeIndex + 1]
     if (isPlayable(nextClip)) {
+      if (nextClip.status !== 'ready') {
+        updateClip(projectId, nextClip.id, { status: 'ready' })
+      }
       setActiveIndex((index) => index + 1)
       setIsWaitingForNext(false)
     } else {
