@@ -19,6 +19,14 @@ export type VideoClip = {
   error?: string
 }
 
+export type VideoProject = {
+  id: string
+  name: string
+  clips: VideoClip[]
+  createdAt: number
+  updatedAt: number
+}
+
 export type GeneratedVideo = {
   videoUrl: string
   thumbnailUrl?: string

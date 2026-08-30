@@ -2,7 +2,10 @@ import {
   Check,
   ChevronRight,
   Clock3,
+  Download,
   Film,
+  FolderOpen,
+  FolderPlus,
   KeyRound,
   LoaderCircle,
   LockKeyhole,
@@ -14,9 +17,17 @@ import {
   X,
 } from 'lucide-react'
 import { FormEvent, useMemo, useState } from 'react'
+import { useProjects } from './hooks/useProjects'
 import { useVideoQueue } from './hooks/useVideoQueue'
 import { createFalVideoGenerator } from './services/falVideoGenerator'
 import { mockVideoGenerator } from './services/mockVideoGenerator'
+import { loadApiKey, saveApiKey as persistApiKey } from './services/localStorage'
+import {
+  canExportProject,
+  downloadClip,
+  exportProject,
+  getProjectExportDisabledReason,
+} from './services/videoDownload'
 import { MAX_VIDEO_DURATION, MIN_VIDEO_DURATION } from './types/video'
 
 const formatTime = (seconds: number) => {
@@ -28,8 +39,13 @@ function App() {
   const [prompt, setPrompt] = useState('')
   const [duration, setDuration] = useState(MIN_VIDEO_DURATION)
   const [isApiDialogOpen, setIsApiDialogOpen] = useState(false)
-  const [apiKey, setApiKey] = useState('')
-  const [savedApiKey, setSavedApiKey] = useState('')
+  const [savedApiKey, setSavedApiKey] = useState(loadApiKey)
+  const [apiKey, setApiKey] = useState(loadApiKey)
+  const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false)
+  const [projectName, setProjectName] = useState('')
+  const [exportingProjectId, setExportingProjectId] = useState('')
+  const [exportProgress, setExportProgress] = useState(0)
+  const [notice, setNotice] = useState('')
   const [playbackProgress, setPlaybackProgress] = useState({
     clipId: '',
     currentTime: 0,
@@ -39,6 +55,15 @@ function App() {
     () => savedApiKey ? createFalVideoGenerator(savedApiKey) : mockVideoGenerator,
     [savedApiKey],
   )
+  const {
+    projects,
+    activeProject,
+    activeProjectId,
+    createProject,
+    selectProject,
+    addClip,
+    updateClip,
+  } = useProjects()
   const {
     clips,
     activeClip,
@@ -53,12 +78,22 @@ function App() {
     handlePause,
     selectClip,
     togglePlayback,
-  } = useVideoQueue(videoGenerator)
+  } = useVideoQueue({
+    projectId: activeProjectId,
+    clips: activeProject?.clips ?? [],
+    generator: videoGenerator,
+    addClip,
+    updateClip,
+  })
 
   const submitPrompt = (event: FormEvent) => {
     event.preventDefault()
     const cleanPrompt = prompt.trim()
     if (!cleanPrompt) return
+    if (!activeProject) {
+      setIsProjectDialogOpen(true)
+      return
+    }
     if (!savedApiKey) {
       setIsApiDialogOpen(true)
       return
@@ -70,8 +105,54 @@ function App() {
 
   const saveApiKey = (event: FormEvent) => {
     event.preventDefault()
-    setSavedApiKey(apiKey.trim())
+    const cleanApiKey = apiKey.trim()
+    setSavedApiKey(cleanApiKey)
+    persistApiKey(cleanApiKey)
     setIsApiDialogOpen(false)
+  }
+
+  const clearApiKey = () => {
+    setApiKey('')
+    setSavedApiKey('')
+    persistApiKey('')
+    setIsApiDialogOpen(false)
+  }
+
+  const submitProject = (event: FormEvent) => {
+    event.preventDefault()
+    createProject(projectName)
+    setProjectName('')
+    setIsProjectDialogOpen(false)
+  }
+
+  const handleProjectExport = async (projectId: string) => {
+    const project = projects.find((item) => item.id === projectId)
+    if (!project || exportingProjectId) return
+    const disabledReason = getProjectExportDisabledReason(project)
+    if (disabledReason) {
+      setNotice(disabledReason)
+      return
+    }
+
+    setNotice('')
+    setExportingProjectId(projectId)
+    setExportProgress(0)
+    try {
+      await exportProject(project, setExportProgress)
+      setNotice(`“${project.name}”已合并并开始下载。`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '项目导出失败，请重试。')
+    } finally {
+      setExportingProjectId('')
+      setExportProgress(0)
+    }
+  }
+
+  const handleClipDownload = async (index: number) => {
+    const clip = clips[index]
+    if (!clip) return
+    const usedFallback = await downloadClip(clip, index)
+    if (usedFallback) setNotice('浏览器阻止了跨域下载，已在新窗口打开视频，可从那里保存。')
   }
 
   const hasPlayableActiveClip = Boolean(
@@ -104,7 +185,64 @@ function App() {
         </button>
       </header>
 
-      <main className="workspace">
+      <div className="app-body">
+        <aside className="project-sidebar" aria-label="项目列表">
+          <div className="project-sidebar-header">
+            <span>项目</span>
+            <button
+              className="project-create-button"
+              onClick={() => setIsProjectDialogOpen(true)}
+            >
+              <FolderPlus size={16} />
+              创建项目
+            </button>
+          </div>
+          <div className="project-list">
+            {projects.length === 0 ? (
+              <div className="project-empty">
+                <FolderOpen size={22} />
+                <span>还没有项目</span>
+                <small>创建项目后开始生成视频</small>
+              </div>
+            ) : projects.map((project) => {
+              const isExporting = exportingProjectId === project.id
+              const exportReason = getProjectExportDisabledReason(project)
+              return (
+                <div
+                  className={`project-item ${project.id === activeProjectId ? 'active' : ''}`}
+                  key={project.id}
+                >
+                  <button
+                    className="project-select-button"
+                    onClick={() => selectProject(project.id)}
+                    title={project.name}
+                  >
+                    <FolderOpen size={15} />
+                    <span>{project.name}</span>
+                  </button>
+                  <button
+                    className="project-download-button"
+                    aria-label={`下载项目 ${project.name}`}
+                    title={isExporting ? `正在导出 ${exportProgress}%` : exportReason || '下载整个项目'}
+                    disabled={Boolean(exportingProjectId) || !canExportProject(project)}
+                    onClick={() => void handleProjectExport(project.id)}
+                  >
+                    {isExporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+          {notice && <div className="workspace-notice" role="status">{notice}</div>}
+          {exportingProjectId && (
+            <div className="export-progress" role="status">
+              <div><span>正在合并项目</span><strong>{exportProgress}%</strong></div>
+              <progress value={exportProgress} max="100" />
+            </div>
+          )}
+        </aside>
+
+        <main className="workspace">
         <section className="stage-column">
           <div className="section-heading">
             <div>
@@ -203,9 +341,9 @@ function App() {
               </div>
             ) : (
               <div className="empty-player">
-                <span className="empty-player-icon"><Play size={22} /></span>
-                <strong>创建你的第一个片段</strong>
-                <span>在右侧输入 Prompt，开始连续视频测试</span>
+                <span className="empty-player-icon">{activeProject ? <Play size={22} /> : <FolderPlus size={22} />}</span>
+                <strong>{activeProject ? '创建你的第一个片段' : '先创建一个项目'}</strong>
+                <span>{activeProject ? '在右侧输入 Prompt，开始连续视频测试' : '视频与 Prompt 会保存在对应项目中'}</span>
               </div>
             )}
           </div>
@@ -249,6 +387,16 @@ function App() {
                         </>
                       )}
                     </button>
+                    {['ready', 'completed'].includes(clip.status) && clip.videoUrl && (
+                      <button
+                        className="clip-download-button"
+                        aria-label={`下载片段 ${index + 1}`}
+                        title={`下载片段 ${index + 1}`}
+                        onClick={() => void handleClipDownload(index)}
+                      >
+                        <Download size={13} />
+                      </button>
+                    )}
                   </div>
                 ))
               )}
@@ -305,7 +453,7 @@ function App() {
                 <span>{prompt.length} / 1000</span>
                 <button className="button button-primary" type="submit" disabled={!prompt.trim()}>
                   <Sparkles size={16} />
-                  加入生成队列
+                  {activeProject ? '加入生成队列' : '先创建项目'}
                 </button>
               </div>
             </form>
@@ -319,14 +467,42 @@ function App() {
             </div>
           </div>
         </aside>
-      </main>
+        </main>
+      </div>
+
+      {isProjectDialogOpen && (
+        <div className="dialog-backdrop" role="presentation" onMouseDown={() => setIsProjectDialogOpen(false)}>
+          <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="project-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="dialog-heading">
+              <div className="dialog-icon"><FolderPlus size={18} /></div>
+              <div><h2 id="project-title">创建项目</h2><p>为这组连续视频建立独立工作空间</p></div>
+              <button className="icon-button" aria-label="关闭" onClick={() => setIsProjectDialogOpen(false)}><X size={17} /></button>
+            </div>
+            <form onSubmit={submitProject}>
+              <label htmlFor="project-name">项目名称</label>
+              <input
+                id="project-name"
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                placeholder={`未命名项目 ${projects.length + 1}`}
+                maxLength={60}
+                autoFocus
+              />
+              <div className="dialog-actions">
+                <button className="button button-ghost" type="button" onClick={() => setIsProjectDialogOpen(false)}>取消</button>
+                <button className="button button-primary" type="submit">创建并进入</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {isApiDialogOpen && (
         <div className="dialog-backdrop" role="presentation" onMouseDown={() => setIsApiDialogOpen(false)}>
           <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="api-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className="dialog-heading">
               <div className="dialog-icon"><KeyRound size={18} /></div>
-              <div><h2 id="api-title">连接 fal API</h2><p>API Key 仅保留在当前浏览器会话中</p></div>
+              <div><h2 id="api-title">连接 fal API</h2><p>API Key 将保存在当前浏览器和设备</p></div>
               <button className="icon-button" aria-label="关闭" onClick={() => setIsApiDialogOpen(false)}><X size={17} /></button>
             </div>
             <form onSubmit={saveApiKey}>
@@ -343,8 +519,9 @@ function App() {
                   autoFocus
                 />
               </div>
-              <div className="security-note">原型不会把 Key 写入代码或永久存储。正式接入时应通过服务端代理调用。</div>
+              <div className="security-note">Key 会明文保存在浏览器 localStorage 中，不会写入源码。共享设备上请及时清除；正式产品应通过服务端代理调用。</div>
               <div className="dialog-actions">
+                {savedApiKey && <button className="button button-danger" type="button" onClick={clearApiKey}>清除 Key</button>}
                 <button className="button button-ghost" type="button" onClick={() => setIsApiDialogOpen(false)}>取消</button>
                 <button className="button button-primary" type="submit" disabled={!apiKey.trim()}>保存设置</button>
               </div>
