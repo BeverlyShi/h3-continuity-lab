@@ -49,6 +49,7 @@ export type GameScene = {
   title: string
   narrative: string
   prompt: string
+  videoUrl: string
   options: [string, string]
   ending?: GameEnding
 }
@@ -87,6 +88,8 @@ export type ResolvedTurn = {
   appliedPermits: LodgingPermit[]
   compiledPrompt: string
   ending?: GameEnding
+  videoUrl?: string
+  videoError?: string
 }
 
 export type GameEvent = {
@@ -98,13 +101,18 @@ export type GameEvent = {
 }
 
 export type GameSessionStatus =
+  | 'generating_opening'
+  | 'playing'
   | 'awaiting_action'
   | 'awaiting_director'
   | 'resolved'
+  | 'generating_video'
+  | 'ready_to_publish'
+  | 'failed'
   | 'ended'
 
 export type GameSession = {
-  schemaVersion: 3
+  schemaVersion: 2
   id: string
   storyId: string
   status: GameSessionStatus
@@ -118,4 +126,6 @@ export type GameSession = {
   pendingAction?: PlayerAction
   pendingResolution?: ResolvedTurn
   events: GameEvent[]
+  failureStep?: 'opening' | 'next_scene'
+  error?: string
 }

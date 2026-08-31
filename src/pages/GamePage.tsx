@@ -8,17 +8,16 @@ import { useDirectorAgent } from '../hooks/useDirectorAgent'
 import { useGameSession } from '../hooks/useGameSession'
 import { unregisteredCity } from '../stories/unregisteredCity'
 import type { PlayerAction } from '../types/game'
-import type { AgentTraceUpdate } from '../types/director'
 
 type GamePageProps = {
+  savedFalApiKey: string
   savedDeepSeekApiKey: string
-  onTraceUpdate: (update: AgentTraceUpdate) => void
   onRequestApiKey: () => void
 }
 
-export function GamePage({ savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }: GamePageProps) {
-  const game = useGameSession()
-  const director = useDirectorAgent(game, savedDeepSeekApiKey, onTraceUpdate)
+export function GamePage({ savedFalApiKey, savedDeepSeekApiKey, onRequestApiKey }: GamePageProps) {
+  const game = useGameSession(savedFalApiKey)
+  const director = useDirectorAgent(game, savedDeepSeekApiKey)
 
   const submitAction = (text: string, source: PlayerAction['source']) => {
     if (!savedDeepSeekApiKey) {
@@ -29,11 +28,20 @@ export function GamePage({ savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }
   }
 
   const startGame = () => {
-    if (!savedDeepSeekApiKey) {
+    if (!savedFalApiKey || !savedDeepSeekApiKey) {
       onRequestApiKey()
       return
     }
-    game.generateOpening()
+    void game.generateOpening()
+  }
+
+  const retryGeneration = () => {
+    if (!savedFalApiKey) {
+      onRequestApiKey()
+      return
+    }
+    if (game.session?.failureStep === 'next_scene') void director.retry()
+    else void game.generateOpening()
   }
 
   return (
@@ -46,12 +54,12 @@ export function GamePage({ savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }
           <div className="game-role"><ShieldCheck size={16} /> 你的身份：边境驿站老板</div>
         </div>
         <div className="game-intro-actions">
-          {!savedDeepSeekApiKey && (
+          {(!savedFalApiKey || !savedDeepSeekApiKey) && (
             <button className="button button-secondary" onClick={onRequestApiKey}>
               <KeyRound size={15} />设置 API Key
             </button>
           )}
-          {game.session && (
+          {game.session?.status === 'ended' && (
             <button className="button button-secondary" onClick={game.restart}>
               <RotateCcw size={15} />重新开始第一夜
             </button>
@@ -64,17 +72,16 @@ export function GamePage({ savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }
           <GameStage
             key={game.session?.currentScene?.id ?? 'empty-stage'}
             session={game.session}
-            hasApiKey={Boolean(savedDeepSeekApiKey)}
-            directorStatus={director.status}
+            hasApiKey={Boolean(savedFalApiKey && savedDeepSeekApiKey)}
             onStart={startGame}
+            onRetry={retryGeneration}
+            onEnded={game.completeScenePlayback}
           />
           {game.session && (
             <GameInteraction
               key={`${game.session.id}:${game.session.turn}`}
               session={game.session}
-              directorStatus={director.status}
               onSubmit={submitAction}
-              onRetry={() => { void director.retry() }}
             />
           )}
           <GameEventLog events={game.session?.events ?? []} />

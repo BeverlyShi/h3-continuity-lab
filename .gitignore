@@ -1,6 +1,5 @@
 node_modules
 dist
-.agent-traces
 .playwright-mcp
 *.local
 .DS_Store

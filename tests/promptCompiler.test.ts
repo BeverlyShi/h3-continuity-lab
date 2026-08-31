@@ -7,7 +7,7 @@ import type { DirectorResolutionInput, GameSession } from '../src/types/game.ts'
 
 test('compiles confirmed state and action into the next H3 prompt', () => {
   const session: GameSession = {
-    schemaVersion: 3,
+    schemaVersion: 2,
     id: 'session-1',
     storyId: unregisteredCity.id,
     status: 'resolved',

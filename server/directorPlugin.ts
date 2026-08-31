@@ -11,7 +11,7 @@ async function readJson(req: IncomingMessage) {
     body += chunk
     if (Buffer.byteLength(body) > MAX_BODY_BYTES) throw new Error('请求内容过大。')
   }
-  return JSON.parse(body) as { context?: unknown; traceId?: string }
+  return JSON.parse(body) as { context?: unknown }
 }
 
 export function directorPlugin(): Plugin {
@@ -46,14 +46,7 @@ export function directorPlugin(): Plugin {
         try {
           const body = await readJson(req)
           if (!body.context) throw new Error('缺少游戏上下文。')
-          if (!body.traceId) throw new Error('缺少 Trace ID。')
-          await runDirectorAgent({
-            apiKey: apiKey.trim(),
-            context: body.context,
-            traceId: body.traceId,
-            signal: controller.signal,
-            send,
-          })
+          await runDirectorAgent({ apiKey: apiKey.trim(), context: body.context, signal: controller.signal, send })
         } catch (error) {
           const message = error instanceof Error ? error.message : '导演请求失败。'
           send({ type: 'error', error: message })

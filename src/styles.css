@@ -198,19 +198,6 @@ textarea:focus, input:focus { border-color: #64748b; box-shadow: 0 0 0 3px rgba(
 .game-player-state.error { color: #fca5a5; }
 .game-player-state.error span { max-width: 520px; color: #fecaca; }
 .game-player-icon { width: 50px; height: 50px; margin-bottom: 2px; display: grid; place-items: center; border: 1px solid #475569; border-radius: 50%; color: #e2e8f0; background: rgba(255,255,255,.05); }
-.game-story-page { min-height: 300px; padding: 36px 42px; display: flex; flex-direction: column; justify-content: center; border: 1px solid #dbe4ee; border-radius: 8px; background: linear-gradient(145deg, #fff 0%, #f8fafc 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 8px 24px rgba(15,23,42,.05); }
-.game-story-kicker { margin-bottom: 16px; display: flex; align-items: center; gap: 7px; color: #64748b; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
-.game-story-page > p { max-width: 760px; color: #1e293b; font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif; font-size: 18px; line-height: 32px; white-space: pre-wrap; }
-.game-story-page footer { margin-top: 22px; padding-top: 18px; display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #e2e8f0; }
-.game-story-page footer strong { color: #0f172a; font-size: 14px; }
-.game-story-page footer span { color: #64748b; font-size: 12px; line-height: 19px; }
-.game-story-page.ending.safe { border-color: #bbf7d0; background: #f0fdf4; }
-.game-story-page.ending.costly { border-color: #fde68a; background: #fffbeb; }
-.game-story-page.ending.failed { border-color: #fecaca; background: #fef2f2; }
-.game-story-empty { min-height: 226px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #64748b; text-align: center; }
-.game-story-empty .game-player-icon { border-color: #cbd5e1; color: #475569; background: white; }
-.game-story-empty strong { color: #334155; font-size: 14px; }
-.game-story-empty > span:last-child { color: #94a3b8; font-size: 12px; }
 .game-start-actions { margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .game-start-actions > div { display: flex; flex-direction: column; align-items: center; gap: 7px; }
 .game-start-button { min-width: 132px; height: 38px; }
@@ -278,7 +265,5 @@ textarea:focus, input:focus { border-color: #64748b; box-shadow: 0 0 0 3px rgba(
   .game-intro h1 { font-size: 20px; line-height: 28px; }
   .game-layout { gap: 14px; }
   .game-stage-card, .game-rules-card { padding: 12px; }
-  .game-story-page { min-height: 250px; padding: 26px 22px; }
-  .game-story-page > p { font-size: 16px; line-height: 28px; }
   .game-section-heading { align-items: flex-start; }
 }

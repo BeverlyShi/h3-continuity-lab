@@ -5,7 +5,7 @@ import { unregisteredCity } from '../src/stories/unregisteredCity.ts'
 import type { DirectorResolutionInput, GameSession } from '../src/types/game.ts'
 
 const makeSession = (turn = 1): GameSession => ({
-  schemaVersion: 3,
+  schemaVersion: 2,
   id: 'session-1',
   storyId: unregisteredCity.id,
   status: 'awaiting_director',

@@ -29,7 +29,7 @@ export function ApiKeyDialog({
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="api-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="dialog-heading">
           <div className="dialog-icon"><KeyRound size={18} /></div>
-          <div><h2 id="api-title">API 连接设置</h2><p>fal 用于视频工作区，DeepSeek 用于文字游戏导演</p></div>
+          <div><h2 id="api-title">API 连接设置</h2><p>H3 负责视频，DeepSeek 负责世界导演</p></div>
           <button className="icon-button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
         </div>
         <form onSubmit={submit}>

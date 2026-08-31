@@ -1,6 +1,6 @@
 import type { DirectorResolutionInput } from './game'
 
-export type DirectorStatus = 'idle' | 'thinking' | 'publishing' | 'error'
+export type DirectorStatus = 'idle' | 'thinking' | 'generating' | 'error'
 
 export type DirectorChatMessage = {
   id: string
@@ -9,76 +9,10 @@ export type DirectorChatMessage = {
   createdAt: number
 }
 
-export type TraceEntryKind =
-  | 'input'
-  | 'thinking'
-  | 'assistant'
-  | 'tool_call'
-  | 'tool_result'
-  | 'rule_check'
-  | 'state_diff'
-  | 'published'
-  | 'error'
-
-export type AgentTraceEntry = {
-  id: string
-  kind: TraceEntryKind
-  title: string
-  timestamp: number
-  text?: string
-  data?: unknown
-  isError?: boolean
-}
-
-export type TraceUsage = {
-  input: number
-  output: number
-  reasoning?: number
-  cacheRead: number
-  totalTokens: number
-  cost: number
-}
-
-export type HarnessTraceSnapshot = {
-  traceId: string
-  harnessSessionId: string
-  startedAt: number
-  endedAt: number
-  durationMs: number
-  outcome: 'completed' | 'aborted' | 'failed' | 'suspended'
-  stopReason?: string
-  usage?: TraceUsage
-  entries: AgentTraceEntry[]
-}
-
-export type AgentTraceRun = {
-  id: string
-  gameSessionId: string
-  turn: number
-  action: string
-  startedAt: number
-  endedAt?: number
-  status: 'running' | 'completed' | 'error'
-  harnessSessionId?: string
-  outcome?: HarnessTraceSnapshot['outcome']
-  stopReason?: string
-  usage?: TraceUsage
-  entries: AgentTraceEntry[]
-}
-
-export type AgentTraceUpdate =
-  | { type: 'start'; run: AgentTraceRun }
-  | { type: 'harness'; traceId: string; snapshot: HarnessTraceSnapshot }
-  | { type: 'append'; traceId: string; entry: AgentTraceEntry }
-  | { type: 'complete'; traceId: string; endedAt: number }
-  | { type: 'error'; traceId: string; endedAt: number; message: string }
-
 export type DirectorStreamEvent =
   | { type: 'status'; text: string }
   | { type: 'delta'; text: string }
   | { type: 'tool'; name: string; text: string }
-  | { type: 'trace_started'; traceId: string; harnessSessionId: string; startedAt: number }
-  | { type: 'harness_trace'; trace: HarnessTraceSnapshot }
   | { type: 'resolution'; resolution: DirectorResolutionInput }
   | { type: 'done' }
   | { type: 'error'; error: string }

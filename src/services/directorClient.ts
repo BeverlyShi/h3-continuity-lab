@@ -12,7 +12,6 @@ export function parseDirectorEvent(line: string): DirectorStreamEvent {
 type StreamDirectorTurnOptions = {
   apiKey: string
   context: unknown
-  traceId: string
   signal?: AbortSignal
   onEvent: (event: DirectorStreamEvent) => void
 }
@@ -20,7 +19,6 @@ type StreamDirectorTurnOptions = {
 export async function streamDirectorTurn({
   apiKey,
   context,
-  traceId,
   signal,
   onEvent,
 }: StreamDirectorTurnOptions): Promise<DirectorResolutionInput> {
@@ -30,7 +28,7 @@ export async function streamDirectorTurn({
       'Content-Type': 'application/json',
       'X-DeepSeek-Key': apiKey,
     },
-    body: JSON.stringify({ context, traceId }),
+    body: JSON.stringify({ context }),
     signal,
   })
 

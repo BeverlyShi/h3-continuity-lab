@@ -1,10 +1,8 @@
-import { Activity, Check, Film, Gamepad2, KeyRound, Video } from 'lucide-react'
+import { Check, Film, Gamepad2, KeyRound, Video } from 'lucide-react'
 import { useState } from 'react'
 import { ApiKeyDialog } from './components/ApiKeyDialog'
 import { GamePage } from './pages/GamePage'
-import { TracePage } from './pages/TracePage'
 import { VideoGenerationPage } from './pages/VideoGenerationPage'
-import { useAgentTraces } from './hooks/useAgentTraces'
 import {
   loadApiKey,
   loadDeepSeekApiKey,
@@ -12,14 +10,13 @@ import {
   saveDeepSeekApiKey,
 } from './services/localStorage'
 
-type Workspace = 'video' | 'game' | 'trace'
+type Workspace = 'video' | 'game'
 
 function App() {
   const [workspace, setWorkspace] = useState<Workspace>('video')
   const [savedApiKey, setSavedApiKey] = useState(loadApiKey)
   const [savedDeepSeekApiKey, setSavedDeepSeekApiKey] = useState(loadDeepSeekApiKey)
   const [isApiDialogOpen, setIsApiDialogOpen] = useState(false)
-  const { traces, updateTrace } = useAgentTraces()
 
   const updateApiKeys = (falApiKey: string, deepSeekApiKey: string) => {
     setSavedApiKey(falApiKey)
@@ -59,15 +56,6 @@ function App() {
               <Gamepad2 size={15} />
               <span>游戏互动</span>
             </button>
-            <button
-              className={workspace === 'trace' ? 'active' : ''}
-              aria-label="Trace"
-              aria-pressed={workspace === 'trace'}
-              onClick={() => setWorkspace('trace')}
-            >
-              <Activity size={15} />
-              <span>Trace</span>
-            </button>
           </nav>
         </div>
         <button
@@ -88,13 +76,10 @@ function App() {
       </div>
       <div hidden={workspace !== 'game'}>
         <GamePage
+          savedFalApiKey={savedApiKey}
           savedDeepSeekApiKey={savedDeepSeekApiKey}
-          onTraceUpdate={updateTrace}
           onRequestApiKey={() => setIsApiDialogOpen(true)}
         />
-      </div>
-      <div hidden={workspace !== 'trace'}>
-        <TracePage traces={traces} />
       </div>
 
       {isApiDialogOpen && (

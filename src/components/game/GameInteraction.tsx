@@ -1,23 +1,21 @@
 import { FormEvent, useState } from 'react'
-import { Bot, CheckCircle2, LoaderCircle, RotateCcw, Send } from 'lucide-react'
-import { isDirectorActive } from '../../services/directorStatus'
+import { Bot, CheckCircle2, LoaderCircle, Send, Sparkles } from 'lucide-react'
 import { unregisteredCity } from '../../stories/unregisteredCity'
-import type { DirectorStatus } from '../../types/director'
 import type { GameSession, PlayerAction } from '../../types/game'
 
 type GameInteractionProps = {
   session: GameSession
-  directorStatus: DirectorStatus
   onSubmit: (text: string, source: PlayerAction['source']) => boolean
-  onRetry: () => void
 }
 
 const waitingCopy: Partial<Record<GameSession['status'], string>> = {
   awaiting_director: '玩家行动已锁定，Pi 导演正在自动读取并裁决。',
-  resolved: '规则校验已通过，正在发布文字结果。',
+  resolved: '规则校验已通过，正在自动请求下一段视频。',
+  generating_video: 'H3 Max 正在生成导演确认的下一幕。',
+  ready_to_publish: '下一幕已经生成，正在自动发布给玩家。',
 }
 
-export function GameInteraction({ session, directorStatus, onSubmit, onRetry }: GameInteractionProps) {
+export function GameInteraction({ session, onSubmit }: GameInteractionProps) {
   const [text, setText] = useState('')
   const [source, setSource] = useState<PlayerAction['source']>('freeform')
   const options = session.currentScene?.options ?? ['', '']
@@ -38,26 +36,16 @@ export function GameInteraction({ session, directorStatus, onSubmit, onRetry }: 
   }
 
   if (session.status !== 'awaiting_action') {
-    if (session.status === 'awaiting_director' && !isDirectorActive(directorStatus)) {
-      return (
-        <section className="game-interaction-card waiting recoverable" aria-live="polite">
-          <RotateCcw size={20} />
-          <div>
-            <h2>上次裁决已中断</h2>
-            <p>行动仍已保存，可以重试当前步骤，或从页面顶部重新开始第一夜。</p>
-          </div>
-          <button className="button button-secondary" onClick={onRetry}>重试当前步骤</button>
-        </section>
-      )
-    }
     const copy = waitingCopy[session.status]
     if (!copy) return null
     return (
       <section className="game-interaction-card waiting" aria-live="polite">
-        <LoaderCircle className="spin" size={20} />
+        {session.status === 'ready_to_publish'
+          ? <Sparkles size={20} />
+          : <LoaderCircle className={session.status === 'generating_video' ? 'spin' : ''} size={20} />}
         <div>
           <h2>{copy}</h2>
-          <p>无需外部操作，完成后会立即进入下一回合。</p>
+          <p>无需外部操作，完成后会自动播放下一幕。</p>
         </div>
       </section>
     )

@@ -16,7 +16,7 @@ type AgentChatProps = {
 const statusLabel: Record<DirectorStatus, string> = {
   idle: '待命',
   thinking: '裁决中',
-  publishing: '发布文字',
+  generating: '生成视频',
   error: '需要处理',
 }
 
@@ -32,8 +32,10 @@ export function AgentChat({
   const [text, setText] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
   const canAct = session?.status === 'awaiting_action' && status === 'idle'
-  const canRetry = hasApiKey && !['thinking', 'publishing'].includes(status)
-    && session?.status === 'awaiting_director'
+  const canRetry = hasApiKey && !['thinking', 'generating'].includes(status) && (
+    session?.status === 'awaiting_director'
+    || (session?.status === 'failed' && session.failureStep === 'next_scene')
+  )
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -50,7 +52,7 @@ export function AgentChat({
       <header className="agent-chat-heading">
         <div><span className="agent-avatar"><Bot size={15} /></span><div><h2>Pi 世界导演</h2><p>DeepSeek V4 Flash</p></div></div>
         <span className={`agent-status ${status}`}>
-          {status === 'thinking' || status === 'publishing' ? <LoaderCircle className="spin" size={11} /> : null}
+          {status === 'thinking' || status === 'generating' ? <LoaderCircle className="spin" size={11} /> : null}
           {statusLabel[status]}
         </span>
       </header>
@@ -60,7 +62,7 @@ export function AgentChat({
           <div className="agent-empty">
             <Bot size={19} />
             <p>{hasApiKey
-              ? '我会自动接收你的选择、裁决世界状态，并直接发布下一幕文字。'
+              ? '我会自动接收你的选择、裁决世界状态，并把下一幕交给 H3。'
               : '配置 DeepSeek API Key 后，我会自动推进每个回合。'}</p>
           </div>
         )}

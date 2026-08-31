@@ -1,12 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { streamDirectorTurn } from '../services/directorClient'
-import type {
-  AgentTraceEntry,
-  AgentTraceUpdate,
-  DirectorChatMessage,
-  DirectorStatus,
-  DirectorStreamEvent,
-} from '../types/director'
+import type { DirectorChatMessage, DirectorStatus, DirectorStreamEvent } from '../types/director'
 import type { PlayerAction } from '../types/game'
 import type { useGameSession } from './useGameSession'
 
@@ -17,18 +11,7 @@ const makeMessage = (
   text: string,
 ): DirectorChatMessage => ({ id: crypto.randomUUID(), role, text, createdAt: Date.now() })
 
-const makeTraceEntry = (
-  kind: AgentTraceEntry['kind'],
-  title: string,
-  data?: unknown,
-  text?: string,
-): AgentTraceEntry => ({ id: crypto.randomUUID(), kind, title, data, text, timestamp: Date.now() })
-
-export function useDirectorAgent(
-  game: GameController,
-  apiKey: string,
-  onTraceUpdate: (update: AgentTraceUpdate) => void,
-) {
+export function useDirectorAgent(game: GameController, apiKey: string) {
   const [messages, setMessages] = useState<DirectorChatMessage[]>([])
   const [status, setStatus] = useState<DirectorStatus>('idle')
   const runningRef = useRef(false)
@@ -52,26 +35,6 @@ export function useDirectorAgent(
       return false
     }
 
-    const traceId = crypto.randomUUID()
-    const traceSession = context.session
-    if (!traceSession) {
-      setStatus('error')
-      append('error', '无法建立当前游戏的 Trace。')
-      return false
-    }
-    onTraceUpdate({
-      type: 'start',
-      run: {
-        id: traceId,
-        gameSessionId: traceSession.id,
-        turn: traceSession.turn,
-        action: traceSession.pendingAction?.text ?? '未知行动',
-        startedAt: Date.now(),
-        status: 'running',
-        entries: [],
-      },
-    })
-
     runningRef.current = true
     setStatus('thinking')
     let assistantId = ''
@@ -93,59 +56,33 @@ export function useDirectorAgent(
           ))
         }
       }
-      if (event.type === 'harness_trace') {
-        onTraceUpdate({ type: 'harness', traceId, snapshot: event.trace })
-      }
     }
 
     try {
-      const resolution = await streamDirectorTurn({ apiKey, context, traceId, onEvent: handleEvent })
+      const resolution = await streamDirectorTurn({ apiKey, context, onEvent: handleEvent })
       const committed = game.commitResolution(resolution)
       if (!committed.ok) throw new Error(`规则校验拒绝裁决：${committed.errors?.join('；') ?? '未知规则冲突'}`)
 
-      onTraceUpdate({
-        type: 'append',
-        traceId,
-        entry: makeTraceEntry('rule_check', '确定性规则校验通过', {
-          outcome: resolution.outcome,
-          reason: resolution.reason,
-          appliedStats: committed.appliedStats,
-          ending: committed.ending,
-        }),
-      })
-      onTraceUpdate({
-        type: 'append',
-        traceId,
-        entry: makeTraceEntry('state_diff', '世界状态 Diff', committed.trace),
-      })
-
-      setStatus('publishing')
+      setStatus('generating')
       append('agent', resolution.narrative)
-      append('status', '规则校验通过，正在发布下一幕文字。')
+      append('status', '规则校验通过，H3 Max 正在生成下一幕。')
+      const generated = await game.requestVideo()
+      if (!generated.ok) throw new Error(generated.error)
+
       const published = game.publishTurn()
       if (!published.ok) throw new Error(published.error)
-      onTraceUpdate({
-        type: 'append',
-        traceId,
-        entry: makeTraceEntry('published', '文字场景已发布', {
-          sceneId: published.sceneId,
-          ending: published.ending,
-        }, resolution.narrative),
-      })
-      onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
       setStatus('idle')
-      append('status', '下一幕文字已发布，可以继续行动。')
+      append('status', '下一幕已发布，视频播放结束后可继续行动。')
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : '导演执行失败。'
       setStatus('error')
       append('error', message)
-      onTraceUpdate({ type: 'error', traceId, endedAt: Date.now(), message })
       return false
     } finally {
       runningRef.current = false
     }
-  }, [apiKey, append, game, onTraceUpdate])
+  }, [apiKey, append, game])
 
   const submitAction = useCallback((text: string, source: PlayerAction['source']) => {
     if (runningRef.current || !game.submitAction(text, source)) return false
@@ -156,8 +93,27 @@ export function useDirectorAgent(
 
   const retry = useCallback(async () => {
     if (game.session?.status === 'awaiting_director') return runPendingTurn()
-    return false
-  }, [game, runPendingTurn])
+    if (game.session?.status !== 'failed' || game.session.failureStep !== 'next_scene') return false
+
+    runningRef.current = true
+    setStatus('generating')
+    append('status', '正在重新生成上一份裁决对应的视频。')
+    try {
+      const generated = await game.requestVideo()
+      if (!generated.ok) throw new Error(generated.error)
+      const published = game.publishTurn()
+      if (!published.ok) throw new Error(published.error)
+      setStatus('idle')
+      append('status', '下一幕已重新生成并发布。')
+      return true
+    } catch (error) {
+      setStatus('error')
+      append('error', error instanceof Error ? error.message : '重试失败。')
+      return false
+    } finally {
+      runningRef.current = false
+    }
+  }, [append, game, runPendingTurn])
 
   return { messages, status, submitAction, retry }
 }

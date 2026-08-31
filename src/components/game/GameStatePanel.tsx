@@ -69,7 +69,7 @@ export function GameStatePanel({ session, agentReady }: GameStatePanelProps) {
           <span className={`status-dot ${agentReady ? '' : 'disconnected'}`} />
           <div>
             <strong>{agentReady ? 'Pi Director 已就绪' : 'DeepSeek 尚未配置'}</strong>
-            <p>{agentReady ? '玩家行动会自动触发裁决、规则校验和文字发布' : '打开 API 设置即可启用自动导演'}</p>
+            <p>{agentReady ? '玩家行动会自动触发裁决、视频生成和发布' : '打开 API 设置即可启用自动导演'}</p>
           </div>
         </div>
       </section>
