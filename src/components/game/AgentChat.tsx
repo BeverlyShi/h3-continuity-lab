@@ -2,9 +2,17 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 import { Bot, LoaderCircle, RotateCcw, Send } from 'lucide-react'
 import type { DirectorChatMessage, DirectorStatus } from '../../types/director'
 import type { GameSession } from '../../types/game'
+import type { DirectorAgentKind } from '../../services/directorClient'
+
+const agentOptions: Array<{ value: DirectorAgentKind; label: string; caption: string }> = [
+  { value: 'pi', label: 'Pi 故事导演', caption: 'Pi Agent · DeepSeek · thinking off' },
+  { value: 'simple', label: '极简导演', caption: '裸 DeepSeek API · 单次调用' },
+]
 
 type AgentChatProps = {
   session: GameSession | null
+  agentKind: DirectorAgentKind
+  onAgentKindChange: (kind: DirectorAgentKind) => void
   messages: DirectorChatMessage[]
   status: DirectorStatus
   hasApiKey: boolean
@@ -15,13 +23,15 @@ type AgentChatProps = {
 
 const statusLabel: Record<DirectorStatus, string> = {
   idle: '待命',
-  thinking: '裁决中',
-  publishing: '发布文字',
+  thinking: '构思中',
+  publishing: '发布场景',
   error: '需要处理',
 }
 
 export function AgentChat({
   session,
+  agentKind,
+  onAgentKindChange,
   messages,
   status,
   hasApiKey,
@@ -33,7 +43,7 @@ export function AgentChat({
   const endRef = useRef<HTMLDivElement>(null)
   const canAct = session?.status === 'awaiting_action' && status === 'idle'
   const canRetry = hasApiKey && !['thinking', 'publishing'].includes(status)
-    && session?.status === 'awaiting_director'
+    && session?.status === 'awaiting_agent'
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -48,7 +58,23 @@ export function AgentChat({
   return (
     <section className="agent-chat-card">
       <header className="agent-chat-heading">
-        <div><span className="agent-avatar"><Bot size={15} /></span><div><h2>Pi 世界导演</h2><p>DeepSeek V4 Flash</p></div></div>
+        <div>
+          <span className="agent-avatar"><Bot size={15} /></span>
+          <div>
+            <select
+              className="agent-kind-select"
+              aria-label="切换导演 Agent"
+              value={agentKind}
+              disabled={['thinking', 'publishing'].includes(status)}
+              onChange={(event) => onAgentKindChange(event.target.value as DirectorAgentKind)}
+            >
+              {agentOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <p>{agentOptions.find((option) => option.value === agentKind)?.caption}</p>
+          </div>
+        </div>
         <span className={`agent-status ${status}`}>
           {status === 'thinking' || status === 'publishing' ? <LoaderCircle className="spin" size={11} /> : null}
           {statusLabel[status]}
@@ -60,8 +86,8 @@ export function AgentChat({
           <div className="agent-empty">
             <Bot size={19} />
             <p>{hasApiKey
-              ? '我会自动接收你的选择、裁决世界状态，并直接发布下一幕文字。'
-              : '配置 DeepSeek API Key 后，我会自动推进每个回合。'}</p>
+              ? '我会主动展开故事，并在每回合通过 publish_scene 给出新的场景与选择。'
+              : '配置 DeepSeek API Key 后，我会接管每一幕的推进。'}</p>
           </div>
         )}
         {messages.map((message) => (
@@ -77,7 +103,7 @@ export function AgentChat({
         <button className="button button-secondary agent-key-button" onClick={onRequestApiKey}>配置 DeepSeek Key</button>
       ) : canRetry ? (
         <button className="button button-secondary agent-key-button" onClick={onRetry}>
-          <RotateCcw size={14} />重试当前步骤
+          <RotateCcw size={14} />重试当前回合
         </button>
       ) : (
         <form className="agent-chat-form" onSubmit={submit}>
@@ -85,7 +111,7 @@ export function AgentChat({
             value={text}
             maxLength={500}
             disabled={!canAct}
-            placeholder={canAct ? '也可以在这里输入自由行动…' : '等待当前场景播放或生成完成'}
+            placeholder={canAct ? '也可以在这里输入自由行动…' : '等待 Pi 导演发布场景'}
             onChange={(event) => setText(event.target.value)}
           />
           <button aria-label="发送行动" disabled={!canAct || !text.trim()} type="submit"><Send size={14} /></button>

@@ -1,43 +1,29 @@
 import { useCallback, useRef, useState } from 'react'
-import { applyDirectorResolution, INITIAL_PERMITS } from '../engine/gameRules'
-import { compileScenePrompt } from '../engine/promptCompiler'
 import { clearGameSession, loadGameSession, saveGameSession } from '../services/gameStorage'
-import { unregisteredCity } from '../stories/unregisteredCity'
-import type {
-  DirectorResolutionInput,
-  DirectorTurnContext,
-  GameEvent,
-  GameScene,
-  GameSession,
-  PlayerAction,
-} from '../types/game'
+import { palaceStory } from '../stories/palace'
+import type { DirectorTurnContext, GameScene, GameSession } from '../types/game'
+import type { StoryChoice, StoryInput, StoryScene } from '../types/story'
 
 const now = () => Date.now()
-const makeEvent = (turn: number, type: GameEvent['type'], text: string): GameEvent => ({
-  id: crypto.randomUUID(), turn, type, text, createdAt: now(),
-})
 
-const makeNewSession = (): GameSession => ({
-  schemaVersion: 3,
-  id: crypto.randomUUID(),
-  storyId: unregisteredCity.id,
-  status: 'awaiting_action',
-  turn: 1,
-  createdAt: now(),
-  updatedAt: now(),
-  stats: { ...unregisteredCity.initialStats },
-  permits: INITIAL_PERMITS.map((permit) => ({ ...permit })),
-  currentScene: {
+const toTurnContext = (session: GameSession): DirectorTurnContext | null => session.pendingInput
+  ? { ok: true, sessionId: session.id, turn: session.turn, input: session.pendingInput }
+  : null
+
+const makeNewSession = (): GameSession => {
+  const createdAt = now()
+  return {
+    schemaVersion: 4,
     id: crypto.randomUUID(),
-    turn: 0,
-    title: unregisteredCity.openingTitle,
-    narrative: unregisteredCity.openingNarrative,
-    prompt: unregisteredCity.openingPrompt,
-    options: unregisteredCity.initialOptions,
-  },
-  sceneHistory: [],
-  events: [],
-})
+    storyId: palaceStory.id,
+    status: 'awaiting_agent',
+    turn: 1,
+    createdAt,
+    updatedAt: createdAt,
+    sceneHistory: [],
+    pendingInput: { type: 'start' },
+  }
+}
 
 export function useGameSession() {
   const [session, setSession] = useState<GameSession | null>(loadGameSession)
@@ -50,124 +36,97 @@ export function useGameSession() {
     else clearGameSession()
   }, [])
 
-  const generateOpening = useCallback(() => {
-    const openingSession = makeNewSession()
-    openingSession.sceneHistory = [openingSession.currentScene!]
-    replaceSession(openingSession)
-    return { ok: true }
+  const startStory = useCallback(() => {
+    if (sessionRef.current) return null
+    const next = makeNewSession()
+    replaceSession(next)
+    return toTurnContext(next)
   }, [replaceSession])
 
-  const submitAction = useCallback((text: string, source: PlayerAction['source']) => {
+  const queueInput = useCallback((input: StoryInput) => {
     const current = sessionRef.current
+    if (!current || current.status !== 'awaiting_action') return null
+    const next: GameSession = {
+      ...current,
+      status: 'awaiting_agent',
+      updatedAt: now(),
+      pendingInput: input,
+    }
+    replaceSession(next)
+    return toTurnContext(next)
+  }, [replaceSession])
+
+  const submitChoice = useCallback((choice: StoryChoice) => {
+    const current = sessionRef.current
+    const isCurrentChoice = current?.currentScene?.choices.some((candidate) =>
+      candidate.id === choice.id,
+    )
+    if (!isCurrentChoice) return null
+    return queueInput({ type: 'choice', choice })
+  }, [queueInput])
+
+  const submitFreeform = useCallback((text: string) => {
     const cleanText = text.trim()
-    if (!current || current.status !== 'awaiting_action' || !cleanText) return false
-    const action: PlayerAction = { text: cleanText, source, submittedAt: now() }
-    replaceSession({
-      ...current,
-      status: 'awaiting_director',
-      updatedAt: now(),
-      pendingAction: action,
-      events: [...current.events, makeEvent(current.turn, 'player_action', cleanText)],
-    })
-    return true
-  }, [replaceSession])
+    if (!cleanText) return null
+    return queueInput({ type: 'freeform', text: cleanText })
+  }, [queueInput])
 
-  const commitResolution = useCallback((input: DirectorResolutionInput) => {
+  const publishScene = useCallback((published: StoryScene) => {
     const current = sessionRef.current
-    if (!current) return { ok: false, errors: ['游戏尚未开始。'] }
-    const decision = applyDirectorResolution(current, unregisteredCity, input)
-    if (!decision.ok) return decision
-    const resolution = {
-      id: crypto.randomUUID(),
-      input,
-      appliedStats: decision.appliedStats,
-      appliedPermits: decision.permits,
-      compiledPrompt: compileScenePrompt(
-        unregisteredCity, current, input, decision.permits, decision.ending,
-      ),
-      ending: decision.ending,
-    }
-    replaceSession({
-      ...current,
-      status: 'resolved',
-      updatedAt: now(),
-      stats: decision.stats,
-      permits: decision.permits,
-      pendingResolution: resolution,
-      events: [...current.events, makeEvent(current.turn, 'resolution', input.narrative)],
-    })
-    return {
-      ok: true,
-      resolutionId: resolution.id,
-      appliedStats: decision.appliedStats,
-      ending: decision.ending,
-      trace: {
-        statsBefore: current.stats,
-        statsAfter: decision.stats,
-        permitsBefore: current.permits,
-        permitsAfter: decision.permits,
-      },
-    }
-  }, [replaceSession])
-
-  const publishTurn = useCallback(() => {
-    const current = sessionRef.current
-    const resolution = current?.pendingResolution
-    if (!current || current.status !== 'resolved' || !resolution) {
-      return { ok: false, error: '当前没有可发布的文字裁决。' }
-    }
-    const scene: GameScene = {
+    if (!current || current.status !== 'awaiting_agent' || !current.pendingInput) return null
+    const scene = {
+      ...published,
       id: crypto.randomUUID(),
       turn: current.turn,
-      title: resolution.ending?.title ?? `第 ${current.turn + 1} 幕`,
-      narrative: resolution.input.narrative,
-      prompt: resolution.compiledPrompt,
-      options: resolution.input.nextOptions,
-      ending: resolution.ending,
     }
     replaceSession({
       ...current,
-      status: resolution.ending ? 'ended' : 'awaiting_action',
-      turn: resolution.ending ? current.turn : current.turn + 1,
+      status: 'awaiting_action',
+      turn: current.turn + 1,
       updatedAt: now(),
       currentScene: scene,
       sceneHistory: [...current.sceneHistory, scene],
-      pendingAction: undefined,
-      pendingResolution: undefined,
-      events: [...current.events, makeEvent(current.turn, 'scene_published', scene.title)],
+      pendingInput: undefined,
     })
-    return { ok: true, sceneId: scene.id, ending: scene.ending }
+    return scene.id
   }, [replaceSession])
 
-  const getTurnContext = useCallback((): DirectorTurnContext | { ok: false; error: string } => {
+  const attachSceneVideo = useCallback((
+    sceneId: string,
+    patch: {
+      videoStatus: GameScene['videoStatus']
+      videoUrl?: string
+      videoError?: string
+      videoRequest?: GameScene['videoRequest']
+    },
+  ) => {
     const current = sessionRef.current
-    if (!current) return { ok: false, error: '游戏尚未开始。' }
-    return {
-      ok: true,
-      session: current,
-    }
-  }, [])
+    if (!current) return
+    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
+      ? { ...scene, ...patch }
+      : scene
+    replaceSession({
+      ...current,
+      currentScene: current.currentScene ? applyPatch(current.currentScene) : current.currentScene,
+      sceneHistory: current.sceneHistory.map(applyPatch),
+    })
+  }, [replaceSession])
 
-  const getGenerationStatus = useCallback(() => {
+  const getPendingContext = useCallback(() => {
     const current = sessionRef.current
-    return {
-      ok: Boolean(current),
-      status: current?.status ?? 'not_started',
-      turn: current?.turn ?? 0,
-      hasResolution: Boolean(current?.pendingResolution),
-    }
+    return current ? toTurnContext(current) : null
   }, [])
 
   const restart = useCallback(() => replaceSession(null), [replaceSession])
 
   return {
     session,
-    generateOpening,
-    submitAction,
-    commitResolution,
-    getTurnContext,
-    getGenerationStatus,
-    publishTurn,
+    startStory,
+    submitChoice,
+    submitFreeform,
+    publishScene,
+    attachSceneVideo,
+    getPendingContext,
     restart,
   }
 }

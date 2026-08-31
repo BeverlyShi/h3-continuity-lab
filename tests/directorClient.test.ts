@@ -2,20 +2,21 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { parseDirectorEvent } from '../src/services/directorClient.ts'
 
-test('parses a streamed director resolution event', () => {
+test('parses a streamed story scene event', () => {
   const event = parseDirectorEvent(JSON.stringify({
-    type: 'resolution',
-    resolution: {
-      outcome: 'success',
-      narrative: '守门人接过木牌，站到风沙里的门槛前。',
-      reason: '玩家的分配符合身份能力，也没有触发流转限制。',
-      nextOptions: ['询问书吏的来历', '检查灯夫的包袱'],
-      sceneDirection: '黄昏近景，守门人握紧刻字木牌，驿站灯火在身后点亮。',
+    type: 'scene',
+    scene: {
+      title: '宫门初雪',
+      narrative: '宫门在身后缓缓合拢，沈清禾第一次听见深宫里的晨钟。',
+      choices: [
+        { id: 'A', text: '跟上教引嬷嬷' },
+        { id: 'B', text: '回头看一眼宫门' },
+      ],
     },
   }))
 
-  assert.equal(event.type, 'resolution')
-  if (event.type === 'resolution') assert.equal(event.resolution.outcome, 'success')
+  assert.equal(event.type, 'scene')
+  if (event.type === 'scene') assert.equal(event.scene.choices.length, 2)
 })
 
 test('rejects a malformed director stream value', () => {

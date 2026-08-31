@@ -1,11 +1,9 @@
 import {
   Activity,
   AlertCircle,
-  BookOpenText,
   BrainCircuit,
   Clock3,
   Database,
-  GitCompareArrows,
   ShieldCheck,
   TerminalSquare,
   Wrench,
@@ -19,9 +17,6 @@ const entryIcon: Record<AgentTraceEntry['kind'], typeof Activity> = {
   assistant: Activity,
   tool_call: Wrench,
   tool_result: Database,
-  rule_check: ShieldCheck,
-  state_diff: GitCompareArrows,
-  published: BookOpenText,
   error: AlertCircle,
 }
 
@@ -41,7 +36,7 @@ function TraceEntry({ entry }: { entry: AgentTraceEntry }) {
       <details open={!collapsedByDefault}>
         <summary>
           <div><strong>{entry.title}</strong><small>{formatClock(entry.timestamp)}</small></div>
-          {collapsedByDefault && <span>{entry.kind === 'input' ? '含导演秘密' : '点击展开'}</span>}
+          {collapsedByDefault && <span>点击展开</span>}
         </summary>
         {entry.text && <p>{entry.text}</p>}
         {entry.data !== undefined && <pre>{stringify(entry.data)}</pre>}
@@ -76,9 +71,9 @@ export function TracePage({ traces }: { traces: AgentTraceRun[] }) {
         <div>
           <div className="game-eyebrow"><Activity size={14} /> Agent 诊断</div>
           <h1>Trace</h1>
-          <p>Pi Agent 运行轨迹、持久化 Session、规则校验与最终状态变更。</p>
+          <p>Pi Agent 输入、publish_scene 工具调用、持久化 Session 与上下文压缩轨迹。</p>
         </div>
-        <div className="trace-security-note"><ShieldCheck size={14} />开发视图 · 输入可能包含角色秘密</div>
+        <div className="trace-security-note"><ShieldCheck size={14} />开发视图 · Pi Agent 运行详情</div>
       </header>
 
       <div className="trace-layout">

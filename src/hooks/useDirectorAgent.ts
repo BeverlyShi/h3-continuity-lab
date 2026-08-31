@@ -1,33 +1,31 @@
 import { useCallback, useRef, useState } from 'react'
-import { streamDirectorTurn } from '../services/directorClient'
+import { streamDirectorTurn, type DirectorAgentKind } from '../services/directorClient'
+import { describeStoryInput } from '../stories/palace'
 import type {
-  AgentTraceEntry,
   AgentTraceUpdate,
   DirectorChatMessage,
   DirectorStatus,
   DirectorStreamEvent,
 } from '../types/director'
-import type { PlayerAction } from '../types/game'
+import type { DirectorTurnContext } from '../types/game'
+import type { StoryChoice, VideoGenerationRequest } from '../types/story'
 import type { useGameSession } from './useGameSession'
 
 type GameController = ReturnType<typeof useGameSession>
+
+type SubmitSceneVideo = (sceneId: string, request: VideoGenerationRequest) => void
 
 const makeMessage = (
   role: DirectorChatMessage['role'],
   text: string,
 ): DirectorChatMessage => ({ id: crypto.randomUUID(), role, text, createdAt: Date.now() })
 
-const makeTraceEntry = (
-  kind: AgentTraceEntry['kind'],
-  title: string,
-  data?: unknown,
-  text?: string,
-): AgentTraceEntry => ({ id: crypto.randomUUID(), kind, title, data, text, timestamp: Date.now() })
-
 export function useDirectorAgent(
   game: GameController,
   apiKey: string,
   onTraceUpdate: (update: AgentTraceUpdate) => void,
+  agentKind: DirectorAgentKind = 'pi',
+  submitSceneVideo?: SubmitSceneVideo,
 ) {
   const [messages, setMessages] = useState<DirectorChatMessage[]>([])
   const [status, setStatus] = useState<DirectorStatus>('idle')
@@ -37,7 +35,7 @@ export function useDirectorAgent(
     setMessages((current) => [...current, makeMessage(role, text)])
   }, [])
 
-  const runPendingTurn = useCallback(async () => {
+  const runTurn = useCallback(async (context: DirectorTurnContext) => {
     if (runningRef.current) return false
     if (!apiKey) {
       setStatus('error')
@@ -45,27 +43,14 @@ export function useDirectorAgent(
       return false
     }
 
-    const context = game.getTurnContext()
-    if (!context.ok) {
-      setStatus('error')
-      append('error', context.error ?? '无法读取当前游戏状态。')
-      return false
-    }
-
     const traceId = crypto.randomUUID()
-    const traceSession = context.session
-    if (!traceSession) {
-      setStatus('error')
-      append('error', '无法建立当前游戏的 Trace。')
-      return false
-    }
     onTraceUpdate({
       type: 'start',
       run: {
         id: traceId,
-        gameSessionId: traceSession.id,
-        turn: traceSession.turn,
-        action: traceSession.pendingAction?.text ?? '未知行动',
+        gameSessionId: context.sessionId,
+        turn: context.turn,
+        action: describeStoryInput(context.input),
         startedAt: Date.now(),
         status: 'running',
         entries: [],
@@ -74,24 +59,25 @@ export function useDirectorAgent(
 
     runningRef.current = true
     setStatus('thinking')
-    let assistantId = ''
+    let publishedSceneId: string | null = null
+    let videoRequest: VideoGenerationRequest | undefined
+
+    const submitVideo = () => {
+      if (!publishedSceneId || !videoRequest) return
+      submitSceneVideo?.(publishedSceneId, videoRequest)
+    }
 
     const handleEvent = (event: DirectorStreamEvent) => {
-      if (event.type === 'status' || event.type === 'tool') append('status', event.text)
-      if (event.type === 'delta') {
-        if (!assistantId) {
-          assistantId = crypto.randomUUID()
-          setMessages((current) => [...current, {
-            id: assistantId,
-            role: 'agent',
-            text: event.text,
-            createdAt: Date.now(),
-          }])
-        } else {
-          setMessages((current) => current.map((message) =>
-            message.id === assistantId ? { ...message, text: message.text + event.text } : message,
-          ))
-        }
+      if (event.type === 'status') append('status', event.text)
+      if (event.type === 'video_request') {
+        videoRequest = event.request
+        submitVideo()
+      }
+      if (event.type === 'scene') {
+        setStatus('publishing')
+        publishedSceneId = game.publishScene(event.scene)
+        if (publishedSceneId) append('agent', event.scene.narrative)
+        submitVideo()
       }
       if (event.type === 'harness_trace') {
         onTraceUpdate({ type: 'harness', traceId, snapshot: event.trace })
@@ -99,42 +85,18 @@ export function useDirectorAgent(
     }
 
     try {
-      const resolution = await streamDirectorTurn({ apiKey, context, traceId, onEvent: handleEvent })
-      const committed = game.commitResolution(resolution)
-      if (!committed.ok) throw new Error(`规则校验拒绝裁决：${committed.errors?.join('；') ?? '未知规则冲突'}`)
-
-      onTraceUpdate({
-        type: 'append',
-        traceId,
-        entry: makeTraceEntry('rule_check', '确定性规则校验通过', {
-          outcome: resolution.outcome,
-          reason: resolution.reason,
-          appliedStats: committed.appliedStats,
-          ending: committed.ending,
-        }),
-      })
-      onTraceUpdate({
-        type: 'append',
-        traceId,
-        entry: makeTraceEntry('state_diff', '世界状态 Diff', committed.trace),
-      })
-
-      setStatus('publishing')
-      append('agent', resolution.narrative)
-      append('status', '规则校验通过，正在发布下一幕文字。')
-      const published = game.publishTurn()
-      if (!published.ok) throw new Error(published.error)
-      onTraceUpdate({
-        type: 'append',
-        traceId,
-        entry: makeTraceEntry('published', '文字场景已发布', {
-          sceneId: published.sceneId,
-          ending: published.ending,
-        }, resolution.narrative),
-      })
+      const scene = await streamDirectorTurn({ apiKey, context, traceId, agent: agentKind, onEvent: handleEvent })
+      if (!publishedSceneId) {
+        publishedSceneId = game.publishScene(scene)
+        if (publishedSceneId) {
+          append('agent', scene.narrative)
+          submitVideo()
+        }
+      }
+      if (!publishedSceneId) throw new Error('当前回合已经变化，无法发布这个场景。')
+      append('status', '下一幕已经发布，请作出选择。')
       onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
       setStatus('idle')
-      append('status', '下一幕文字已发布，可以继续行动。')
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : '导演执行失败。'
@@ -145,19 +107,46 @@ export function useDirectorAgent(
     } finally {
       runningRef.current = false
     }
-  }, [apiKey, append, game, onTraceUpdate])
+  }, [apiKey, agentKind, append, game, onTraceUpdate, submitSceneVideo])
 
-  const submitAction = useCallback((text: string, source: PlayerAction['source']) => {
-    if (runningRef.current || !game.submitAction(text, source)) return false
-    append('player', text.trim())
-    void runPendingTurn()
+  const startStory = useCallback(() => {
+    if (runningRef.current) return false
+    const context = game.startStory()
+    if (!context) return false
+    append('player', '请开始故事')
+    void runTurn(context)
     return true
-  }, [append, game, runPendingTurn])
+  }, [append, game, runTurn])
+
+  const submitChoice = useCallback((choice: StoryChoice) => {
+    if (runningRef.current) return false
+    const context = game.submitChoice(choice)
+    if (!context) return false
+    append('player', choice.text)
+    void runTurn(context)
+    return true
+  }, [append, game, runTurn])
+
+  const submitFreeform = useCallback((text: string) => {
+    if (runningRef.current) return false
+    const context = game.submitFreeform(text)
+    if (!context) return false
+    append('player', text.trim())
+    void runTurn(context)
+    return true
+  }, [append, game, runTurn])
 
   const retry = useCallback(async () => {
-    if (game.session?.status === 'awaiting_director') return runPendingTurn()
-    return false
-  }, [game, runPendingTurn])
+    const context = game.getPendingContext()
+    return context ? runTurn(context) : false
+  }, [game, runTurn])
 
-  return { messages, status, submitAction, retry }
+  const reset = useCallback(() => {
+    if (runningRef.current) return false
+    setMessages([])
+    setStatus('idle')
+    return true
+  }, [])
+
+  return { messages, status, startStory, submitChoice, submitFreeform, retry, reset }
 }

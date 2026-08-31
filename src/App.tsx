@@ -88,6 +88,7 @@ function App() {
       </div>
       <div hidden={workspace !== 'game'}>
         <GamePage
+          savedFalApiKey={savedApiKey}
           savedDeepSeekApiKey={savedDeepSeekApiKey}
           onTraceUpdate={updateTrace}
           onRequestApiKey={() => setIsApiDialogOpen(true)}

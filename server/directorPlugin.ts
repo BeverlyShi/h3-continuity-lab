@@ -1,8 +1,11 @@
 import type { IncomingMessage } from 'node:http'
 import type { Plugin } from 'vite'
-import { runDirectorAgent } from './directorAgent.ts'
+import { Check } from 'typebox/value'
 import type { DirectorStreamEvent } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
+import { storyInputSchema } from '../src/types/story.ts'
+import { runDirectorAgent } from './directorAgent.ts'
+import { runSimpleDirector } from './simpleDirector.ts'
 
 const MAX_BODY_BYTES = 1_000_000
 
@@ -12,14 +15,16 @@ async function readJson(req: IncomingMessage) {
     body += chunk
     if (Buffer.byteLength(body) > MAX_BODY_BYTES) throw new Error('请求内容过大。')
   }
-  return JSON.parse(body) as { context?: DirectorTurnContext; traceId?: string }
+  return JSON.parse(body) as { context?: DirectorTurnContext; traceId?: string; agent?: string }
 }
 
 const isDirectorTurnContext = (context: DirectorTurnContext | undefined): context is DirectorTurnContext =>
   context?.ok === true &&
-  typeof context.session?.id === 'string' &&
-  typeof context.session?.turn === 'number' &&
-  context.session.pendingAction !== undefined
+  typeof context.sessionId === 'string' &&
+  Boolean(context.sessionId.trim()) &&
+  Number.isInteger(context.turn) &&
+  context.turn > 0 &&
+  Check(storyInputSchema, context.input)
 
 export function directorPlugin(): Plugin {
   return {
@@ -52,9 +57,10 @@ export function directorPlugin(): Plugin {
 
         try {
           const body = await readJson(req)
-          if (!isDirectorTurnContext(body.context)) throw new Error('游戏上下文无效或没有待裁决行动。')
+          if (!isDirectorTurnContext(body.context)) throw new Error('故事输入无效。')
           if (!body.traceId) throw new Error('缺少 Trace ID。')
-          await runDirectorAgent({
+          const runTurn = body.agent === 'simple' ? runSimpleDirector : runDirectorAgent
+          await runTurn({
             apiKey: apiKey.trim(),
             context: body.context,
             traceId: body.traceId,

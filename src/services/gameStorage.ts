@@ -7,7 +7,7 @@ export const loadGameSession = (): GameSession | null => {
     const raw = localStorage.getItem(GAME_SESSION_STORAGE_KEY)
     if (!raw) return null
     const session = JSON.parse(raw) as GameSession
-    if (session.schemaVersion !== 3 || !session.id || !session.storyId || !session.status) return null
+    if (session.schemaVersion !== 4 || !session.id || session.storyId !== 'palace-validation' || !session.status) return null
     return session
   } catch {
     return null

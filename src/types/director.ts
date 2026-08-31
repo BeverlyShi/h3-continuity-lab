@@ -1,12 +1,4 @@
-import type { DirectorResolutionInput } from './game'
-
-export type DirectorBoard = {
-  dramaticGoal?: string
-  nextBeat?: string
-  foreshadowing: string[]
-  revealedSecrets: string[]
-  characterIntentions: Record<string, string>
-}
+import type { StoryScene, VideoGenerationRequest } from './story'
 
 export type DirectorStatus = 'idle' | 'thinking' | 'publishing' | 'error'
 
@@ -23,9 +15,6 @@ export type TraceEntryKind =
   | 'assistant'
   | 'tool_call'
   | 'tool_result'
-  | 'rule_check'
-  | 'state_diff'
-  | 'published'
   | 'error'
 
 export type AgentTraceEntry = {
@@ -83,10 +72,9 @@ export type AgentTraceUpdate =
 
 export type DirectorStreamEvent =
   | { type: 'status'; text: string }
-  | { type: 'delta'; text: string }
-  | { type: 'tool'; name: string; text: string }
   | { type: 'trace_started'; traceId: string; harnessSessionId: string; startedAt: number }
   | { type: 'harness_trace'; trace: HarnessTraceSnapshot }
-  | { type: 'resolution'; resolution: DirectorResolutionInput }
+  | { type: 'scene'; scene: StoryScene }
+  | { type: 'video_request'; request: VideoGenerationRequest }
   | { type: 'done' }
   | { type: 'error'; error: string }

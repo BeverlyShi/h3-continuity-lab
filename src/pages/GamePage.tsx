@@ -1,49 +1,108 @@
-import { KeyRound, RotateCcw, ScrollText, ShieldCheck } from 'lucide-react'
+import { useCallback, useRef, useState } from 'react'
+import { KeyRound, RotateCcw, ScrollText, UserRound } from 'lucide-react'
 import { AgentChat } from '../components/game/AgentChat'
-import { GameEventLog } from '../components/game/GameEventLog'
+import type { DirectorAgentKind } from '../services/directorClient'
 import { GameInteraction } from '../components/game/GameInteraction'
 import { GameStage } from '../components/game/GameStage'
-import { GameStatePanel } from '../components/game/GameStatePanel'
 import { useDirectorAgent } from '../hooks/useDirectorAgent'
 import { useGameSession } from '../hooks/useGameSession'
-import { unregisteredCity } from '../stories/unregisteredCity'
-import type { PlayerAction } from '../types/game'
+import { useSceneVideo } from '../hooks/useSceneVideo'
+import { palaceStory } from '../stories/palace'
+import { isDirectorActive } from '../services/directorStatus'
 import type { AgentTraceUpdate } from '../types/director'
+import type { VideoGenerationRequest } from '../types/story'
 
 type GamePageProps = {
+  savedFalApiKey: string
   savedDeepSeekApiKey: string
   onTraceUpdate: (update: AgentTraceUpdate) => void
   onRequestApiKey: () => void
 }
 
-export function GamePage({ savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }: GamePageProps) {
-  const game = useGameSession()
-  const director = useDirectorAgent(game, savedDeepSeekApiKey, onTraceUpdate)
+const AGENT_KIND_STORAGE_KEY = 'palace-director-agent-kind'
+const VIDEO_GENERATION_STORAGE_KEY = 'palace-video-generation-enabled'
 
-  const submitAction = (text: string, source: PlayerAction['source']) => {
-    if (!savedDeepSeekApiKey) {
-      onRequestApiKey()
-      return false
+const loadAgentKind = (): DirectorAgentKind => {
+  try {
+    return localStorage.getItem(AGENT_KIND_STORAGE_KEY) === 'simple' ? 'simple' : 'pi'
+  } catch {
+    return 'pi'
+  }
+}
+
+const loadVideoGenerationEnabled = (): boolean => {
+  try {
+    return localStorage.getItem(VIDEO_GENERATION_STORAGE_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
+
+export function GamePage({ savedFalApiKey, savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }: GamePageProps) {
+  const game = useGameSession()
+  const [agentKind, setAgentKind] = useState<DirectorAgentKind>(loadAgentKind)
+  const [videoGenerationEnabled, setVideoGenerationEnabled] = useState(loadVideoGenerationEnabled)
+  // 开关随时可切，提交回调走 ref 读最新值，避免 agent 回合里拿到过期闭包。
+  const videoGenerationEnabledRef = useRef(videoGenerationEnabled)
+  const { submitSceneVideo, retrySceneVideo } = useSceneVideo({
+    apiKey: savedFalApiKey,
+    onVideoUpdate: game.attachSceneVideo,
+  })
+  const attachSceneVideo = game.attachSceneVideo
+  const submitSceneVideoIfEnabled = useCallback((sceneId: string, request: VideoGenerationRequest) => {
+    if (!videoGenerationEnabledRef.current) {
+      attachSceneVideo(sceneId, { videoStatus: 'skipped', videoRequest: request })
+      return
     }
-    return director.submitAction(text, source)
+    submitSceneVideo(sceneId, request)
+  }, [attachSceneVideo, submitSceneVideo])
+  const director = useDirectorAgent(game, savedDeepSeekApiKey, onTraceUpdate, agentKind, submitSceneVideoIfEnabled)
+
+  const retryVideo = (sceneId: string) => {
+    const scene = game.session?.sceneHistory.find((item) => item.id === sceneId)
+    if (scene?.videoRequest) retrySceneVideo(sceneId, scene.videoRequest)
   }
 
-  const startGame = () => {
+  const toggleVideoGeneration = (next: boolean) => {
+    videoGenerationEnabledRef.current = next
+    setVideoGenerationEnabled(next)
+    try {
+      localStorage.setItem(VIDEO_GENERATION_STORAGE_KEY, next ? 'on' : 'off')
+    } catch {
+      // 存不进 localStorage 时仅影响刷新后的默认值
+    }
+  }
+
+  const switchAgentKind = (next: DirectorAgentKind) => {
+    setAgentKind(next)
+    try {
+      localStorage.setItem(AGENT_KIND_STORAGE_KEY, next)
+    } catch {
+      // 存不进 localStorage 时仅影响刷新后的默认值
+    }
+  }
+
+  const startStory = () => {
     if (!savedDeepSeekApiKey) {
       onRequestApiKey()
       return
     }
-    game.generateOpening()
+    director.startStory()
+  }
+
+  const restartStory = () => {
+    if (!director.reset()) return
+    game.restart()
   }
 
   return (
     <main className="game-workspace">
       <section className="game-intro">
         <div className="game-intro-copy">
-          <div className="game-eyebrow"><ScrollText size={14} /> 互动故事实验</div>
-          <h1>《{unregisteredCity.title}》</h1>
-          <p>{unregisteredCity.summary}</p>
-          <div className="game-role"><ShieldCheck size={16} /> 你的身份：边境驿站老板</div>
+          <div className="game-eyebrow"><ScrollText size={14} /> 互动文字游戏验证版</div>
+          <h1>《{palaceStory.title}》</h1>
+          <p>{palaceStory.summary}</p>
+          <div className="game-role"><UserRound size={16} /> 你的身份：{palaceStory.role}</div>
         </div>
         <div className="game-intro-actions">
           {!savedDeepSeekApiKey && (
@@ -52,8 +111,12 @@ export function GamePage({ savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }
             </button>
           )}
           {game.session && (
-            <button className="button button-secondary" onClick={game.restart}>
-              <RotateCcw size={15} />重新开始第一夜
+            <button
+              className="button button-secondary"
+              disabled={isDirectorActive(director.status)}
+              onClick={restartStory}
+            >
+              <RotateCcw size={15} />重新开始
             </button>
           )}
         </div>
@@ -66,30 +129,34 @@ export function GamePage({ savedDeepSeekApiKey, onTraceUpdate, onRequestApiKey }
             session={game.session}
             hasApiKey={Boolean(savedDeepSeekApiKey)}
             directorStatus={director.status}
-            onStart={startGame}
+            videoGenerationEnabled={videoGenerationEnabled}
+            onStart={startStory}
+            onToggleVideoGeneration={toggleVideoGeneration}
+            onRetryVideo={retryVideo}
           />
           {game.session && (
             <GameInteraction
               key={`${game.session.id}:${game.session.turn}`}
               session={game.session}
               directorStatus={director.status}
-              onSubmit={submitAction}
+              onChoose={director.submitChoice}
+              onSubmitFreeform={director.submitFreeform}
               onRetry={() => { void director.retry() }}
             />
           )}
-          <GameEventLog events={game.session?.events ?? []} />
         </div>
         <aside className="game-sidebar">
           <AgentChat
             session={game.session}
+            agentKind={agentKind}
+            onAgentKindChange={switchAgentKind}
             messages={director.messages}
             status={director.status}
             hasApiKey={Boolean(savedDeepSeekApiKey)}
-            onSubmit={(text) => submitAction(text, 'freeform')}
+            onSubmit={director.submitFreeform}
             onRetry={() => { void director.retry() }}
             onRequestApiKey={onRequestApiKey}
           />
-          <GameStatePanel session={game.session} agentReady={Boolean(savedDeepSeekApiKey)} />
         </aside>
       </div>
     </main>

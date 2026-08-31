@@ -1,5 +1,6 @@
 import type { DirectorStreamEvent } from '../types/director'
-import type { DirectorResolutionInput } from '../types/game'
+import type { DirectorTurnContext } from '../types/game'
+import type { StoryScene } from '../types/story'
 
 export function parseDirectorEvent(line: string): DirectorStreamEvent {
   const event = JSON.parse(line) as DirectorStreamEvent
@@ -9,10 +10,13 @@ export function parseDirectorEvent(line: string): DirectorStreamEvent {
   return event
 }
 
+export type DirectorAgentKind = 'pi' | 'simple'
+
 type StreamDirectorTurnOptions = {
   apiKey: string
-  context: unknown
+  context: DirectorTurnContext
   traceId: string
+  agent?: DirectorAgentKind
   signal?: AbortSignal
   onEvent: (event: DirectorStreamEvent) => void
 }
@@ -21,16 +25,17 @@ export async function streamDirectorTurn({
   apiKey,
   context,
   traceId,
+  agent = 'pi',
   signal,
   onEvent,
-}: StreamDirectorTurnOptions): Promise<DirectorResolutionInput> {
+}: StreamDirectorTurnOptions): Promise<StoryScene> {
   const response = await fetch('/api/director/turn', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-DeepSeek-Key': apiKey,
     },
-    body: JSON.stringify({ context, traceId }),
+    body: JSON.stringify({ context, traceId, agent }),
     signal,
   })
 
@@ -43,14 +48,14 @@ export async function streamDirectorTurn({
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let resolution: DirectorResolutionInput | undefined
+  let scene: StoryScene | undefined
   let streamError = ''
 
   const consumeLine = (line: string) => {
     if (!line.trim()) return
     const event = parseDirectorEvent(line)
     onEvent(event)
-    if (event.type === 'resolution') resolution = event.resolution
+    if (event.type === 'scene') scene = event.scene
     if (event.type === 'error') streamError = event.error
   }
 
@@ -65,6 +70,6 @@ export async function streamDirectorTurn({
   consumeLine(buffer)
 
   if (streamError) throw new Error(streamError)
-  if (!resolution) throw new Error('导演没有返回可执行的裁决。')
-  return resolution
+  if (!scene) throw new Error('Pi Agent 没有发布故事场景。')
+  return scene
 }

@@ -7,7 +7,7 @@ test('removes undefined properties before persisting an agent message', () => {
   const message = {
     role: 'toolResult',
     toolCallId: 'tool-1',
-    toolName: 'commit_turn',
+    toolName: 'publish_scene',
     content: [{ type: 'text', text: 'ok' }],
     details: { outcome: 'success' },
     usage: undefined,
@@ -23,7 +23,7 @@ test('removes undefined properties before persisting an agent message', () => {
   assert.deepEqual(durable, {
     role: 'toolResult',
     toolCallId: 'tool-1',
-    toolName: 'commit_turn',
+    toolName: 'publish_scene',
     content: [{ type: 'text', text: 'ok' }],
     details: { outcome: 'success' },
     isError: false,

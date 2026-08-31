@@ -20,20 +20,23 @@ import {
 import { createModels, type Api, type Model, type Models } from '@earendil-works/pi-ai'
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { resolve } from 'node:path'
-import type { DirectorBoard, AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
+import type { AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
+import type { StoryScene, VideoGenerationRequest } from '../src/types/story.ts'
 import {
-  buildDirectorTurnPrompt,
-  EMPTY_DIRECTOR_BOARD,
-  persistDirectorBoardPatch,
-  validateDirectorDecision,
-} from './directorDecision.ts'
-import { DIRECTOR_COMPACTION_INSTRUCTIONS, DIRECTOR_SYSTEM_PROMPT } from './directorPrompt.ts'
+  buildStoryInputMessage,
+  DIRECTOR_COMPACTION_INSTRUCTIONS,
+  DIRECTOR_SYSTEM_PROMPT,
+  DIRECTOR_VIDEO_TOOL_INSTRUCTIONS,
+} from './directorPrompt.ts'
+import { createGenerateVideoTool } from './generateVideoTool.ts'
+import { createPublishSceneTool } from './publishSceneTool.ts'
 import { summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
 
+const DIRECTOR_AGENT_SYSTEM_PROMPT = `${DIRECTOR_SYSTEM_PROMPT}\n\n${DIRECTOR_VIDEO_TOOL_INSTRUCTIONS}`
 const MAX_DIRECTOR_OUTPUT_TOKENS = 2_500
 const DIRECTOR_TIMEOUT_MS = 45_000
-const MAX_DECISION_ATTEMPTS = 2
+const MAX_PUBLISH_ATTEMPTS = 2
 const traceEnvironment = new NodeExecutionEnv({ cwd: process.cwd() })
 const traceRepo = new JsonlSessionRepo({
   fs: traceEnvironment,
@@ -51,26 +54,10 @@ const textFromContent = (content: unknown) => Array.isArray(content)
   }).join('\n')
   : typeof content === 'string' ? content : ''
 
-const latestAssistantText = (messages: AgentMessage[]) => {
-  const message = [...messages].reverse().find((candidate) => candidate.role === 'assistant')
-  return message?.role === 'assistant' ? textFromContent(message.content) : ''
-}
-
 const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry[] => {
   const projected: AgentTraceEntry[] = []
 
   for (const entry of entries) {
-    if (entry.type === 'custom' && entry.customType === 'director_board') {
-      projected.push({
-        id: entryId(traceId, entry, 'director-board'),
-        kind: 'assistant',
-        title: '导演台账更新',
-        timestamp: entry.timestamp,
-        data: entry.data,
-      })
-      continue
-    }
-
     if (entry.type === 'compaction') {
       projected.push({
         id: entryId(traceId, entry, 'compaction'),
@@ -94,7 +81,7 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
       projected.push({
         id: entryId(traceId, entry, 'input'),
         kind: 'input',
-        title: '本回合模型输入',
+        title: '玩家输入',
         timestamp: message.timestamp,
         text: textFromContent(message.content),
       })
@@ -112,7 +99,7 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
             text: content.redacted ? '提供方返回了已脱敏的推理内容。' : content.thinking,
           })
         }
-        if (content.type === 'text') {
+        if (content.type === 'text' && content.text.trim()) {
           projected.push({
             id: entryId(traceId, entry, `assistant-${index}`),
             kind: 'assistant',
@@ -159,30 +146,10 @@ const getOrCreateSession = async (gameSessionId: string) => {
     id: gameSessionId,
     cwd: process.cwd(),
     metadata: {
-      kind: 'unregistered-city-director',
-      storyId: 'unregistered-city-quick',
+      kind: 'palace-story-director',
+      storyId: 'palace-validation',
     },
   })
-}
-
-const readDirectorBoard = (entries: Entry[]): DirectorBoard => {
-  const boardEntry = [...entries].reverse().find((entry) =>
-    entry.type === 'custom' && entry.customType === 'director_board',
-  )
-  if (!boardEntry || boardEntry.type !== 'custom' || !boardEntry.data || typeof boardEntry.data !== 'object') {
-    return toDurableValue(EMPTY_DIRECTOR_BOARD)
-  }
-
-  const stored = boardEntry.data as Partial<DirectorBoard>
-  return {
-    ...(typeof stored.dramaticGoal === 'string' ? { dramaticGoal: stored.dramaticGoal } : {}),
-    ...(typeof stored.nextBeat === 'string' ? { nextBeat: stored.nextBeat } : {}),
-    foreshadowing: Array.isArray(stored.foreshadowing) ? stored.foreshadowing : [],
-    revealedSecrets: Array.isArray(stored.revealedSecrets) ? stored.revealedSecrets : [],
-    characterIntentions: stored.characterIntentions && typeof stored.characterIntentions === 'object'
-      ? stored.characterIntentions
-      : {},
-  }
 }
 
 const lastSequence = (entries: Entry[]) => entries.reduce((latest, entry) => Math.max(latest, entry.seq), 0)
@@ -241,9 +208,8 @@ export type DirectorAgentRequest = {
 }
 
 export async function runDirectorAgent(request: DirectorAgentRequest) {
-  const gameSessionId = request.context.session.id
-  if (!request.context.session.pendingAction) throw new Error('当前没有等待导演裁决的玩家行动。')
-  if (activeGameSessions.has(gameSessionId)) throw new Error('导演正在处理这个游戏会话的上一项行动。')
+  const gameSessionId = request.context.sessionId
+  if (activeGameSessions.has(gameSessionId)) throw new Error('故事导演正在处理这个会话的上一项行动。')
 
   activeGameSessions.add(gameSessionId)
   try {
@@ -262,7 +228,7 @@ async function runPersistentDirector({
 }: DirectorAgentRequest) {
   const persistenceErrors: Array<{ message: string; timestamp: number }> = []
   const startedAt = Date.now()
-  const session = await getOrCreateSession(context.session.id)
+  const session = await getOrCreateSession(context.sessionId)
   const metadata = await session.getMetadata()
   let persistedEntries = await session.findEntries({ order: 'oldestFirst' })
   const startSeq = lastSequence(persistedEntries)
@@ -291,14 +257,20 @@ async function runPersistentDirector({
     })
   }
 
-  const sessionContext = buildSessionContext(persistedEntries)
-  const initialBoard = readDirectorBoard(persistedEntries)
+  let publishedScene: StoryScene | undefined
+  let videoRequest: VideoGenerationRequest | undefined
+  const publishSceneTool = createPublishSceneTool((scene) => {
+    publishedScene = toDurableValue(scene)
+  })
+  const generateVideoTool = createGenerateVideoTool((request) => {
+    videoRequest = toDurableValue(request)
+  })
   const agent = new Agent({
     initialState: {
-      systemPrompt: DIRECTOR_SYSTEM_PROMPT,
+      systemPrompt: DIRECTOR_AGENT_SYSTEM_PROMPT,
       model,
-      tools: [],
-      messages: sessionContext.messages,
+      tools: [generateVideoTool, publishSceneTool],
+      messages: buildSessionContext(persistedEntries).messages,
       thinkingLevel: 'off',
     },
     convertToLlm,
@@ -320,19 +292,18 @@ async function runPersistentDirector({
 
   signal?.addEventListener('abort', () => agent.abort(), { once: true })
   agent.subscribe(async (event) => {
-    if (event.type === 'message_end') {
-      try {
-        await session.appendMessage(toDurableMessage(event.message))
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        persistenceErrors.push({ message, timestamp: Date.now() })
-        console.error('Agent trace persistence failed:', message)
-      }
+    if (event.type !== 'message_end') return
+    try {
+      await session.appendMessage(toDurableMessage(event.message))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      persistenceErrors.push({ message, timestamp: Date.now() })
+      console.error('Agent trace persistence failed:', message)
     }
   })
 
   send({ type: 'trace_started', traceId, harnessSessionId: metadata.id, startedAt })
-  send({ type: 'status', text: '持久导演正在根据当前场景规划本回合。' })
+  send({ type: 'status', text: 'Pi 故事导演正在构思下一幕。' })
 
   const sendTrace = async (outcome: HarnessTraceSnapshot['outcome']) => {
     let entries: Entry[] = []
@@ -351,13 +322,6 @@ async function runPersistentDirector({
       entry.type === 'message' ? [entry.message] : [],
     )
     const finalMessage = [...currentRunMessages].reverse().find((message) => message.role === 'assistant')
-    const traceEntries: AgentTraceEntry[] = [{
-      id: `${traceId}:system-prompt`,
-      kind: 'input',
-      title: '主 Agent System Prompt（完整世界观）',
-      timestamp: startedAt,
-      text: DIRECTOR_SYSTEM_PROMPT,
-    }, ...projectTraceEntries(traceId, entries)]
     const trace: HarnessTraceSnapshot = {
       traceId,
       harnessSessionId: metadata.id,
@@ -367,7 +331,13 @@ async function runPersistentDirector({
       outcome,
       stopReason: finalMessage?.role === 'assistant' ? finalMessage.stopReason : undefined,
       usage: summarizeAssistantUsage(currentRunMessages),
-      entries: traceEntries,
+      entries: [{
+        id: `${traceId}:system-prompt`,
+        kind: 'input',
+        title: 'Pi Agent System Prompt',
+        timestamp: startedAt,
+        text: DIRECTOR_AGENT_SYSTEM_PROMPT,
+      }, ...projectTraceEntries(traceId, entries)],
     }
     persistenceErrors.forEach((error, index) => {
       trace.entries.push({
@@ -393,32 +363,21 @@ async function runPersistentDirector({
   }
 
   try {
-    const action = context.session.pendingAction
-    if (!action) throw new Error('当前没有等待导演裁决的玩家行动。')
-    let validated: ReturnType<typeof validateDirectorDecision> = {
-      ok: false,
-      errors: ['导演尚未产出候选裁决。'],
-    }
-    for (let attempt = 0; attempt < MAX_DECISION_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < MAX_PUBLISH_ATTEMPTS && !publishedScene; attempt += 1) {
       const prompt = attempt === 0
-        ? buildDirectorTurnPrompt(context, initialBoard)
-        : '上一份候选裁决未通过确定性校验。请根据以下错误修正，并重新只输出完整 JSON：\n' +
-          validated.errors.map((error) => `- ${error}`).join('\n')
+        ? buildStoryInputMessage(context.input)
+        : '你还没有发布场景。请立即调用 publish_scene，完整发布当前回合，不要只回复普通文字。'
       await agent.prompt(prompt)
       if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
-
-      validated = validateDirectorDecision(latestAssistantText(agent.state.messages), context)
-      if (validated.ok) break
-      if (attempt + 1 < MAX_DECISION_ATTEMPTS) {
-        send({ type: 'status', text: '确定性规则拒绝了候选裁决，导演正在针对错误修正。' })
+      if (!publishedScene && attempt + 1 < MAX_PUBLISH_ATTEMPTS) {
+        send({ type: 'status', text: '导演尚未发布场景，Pi Agent 正在继续执行。' })
       }
     }
-    if (!validated.ok) throw new Error(`导演裁决未通过校验：${validated.errors.join('；')}`)
+    if (!publishedScene) throw new Error('Pi Agent 没有调用 publish_scene 发布场景。')
 
-    await persistDirectorBoardPatch(session, initialBoard, validated.boardPatch)
-    const resolution = validated.resolution
-    send({ type: 'status', text: '确定性规则校验通过，正在直接发布下一幕文字。' })
-    send({ type: 'resolution', resolution })
+    send({ type: 'status', text: 'publish_scene 已完成，正在展示下一幕。' })
+    if (videoRequest) send({ type: 'video_request', request: videoRequest })
+    send({ type: 'scene', scene: publishedScene })
 
     try {
       const allEntries = await session.findEntries({ order: 'oldestFirst' })
@@ -432,7 +391,7 @@ async function runPersistentDirector({
 
     await sendTrace('completed')
     send({ type: 'done' })
-    return resolution
+    return publishedScene
   } catch (error) {
     await sendTrace(signal?.aborted ? 'aborted' : 'failed')
     throw error
