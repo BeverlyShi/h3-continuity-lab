@@ -299,7 +299,7 @@ async function runPersistentDirector({
       model,
       tools: [],
       messages: sessionContext.messages,
-      thinkingLevel: 'low',
+      thinkingLevel: 'off',
     },
     convertToLlm,
     streamFn: (streamModel, streamContext, options) => models.streamSimple(
