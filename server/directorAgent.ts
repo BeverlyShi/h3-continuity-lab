@@ -22,12 +22,18 @@ import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { resolve } from 'node:path'
 import type { DirectorBoard, AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
+import {
+  buildDirectorTurnPrompt,
+  EMPTY_DIRECTOR_BOARD,
+  persistDirectorBoardPatch,
+  validateDirectorDecision,
+} from './directorDecision.ts'
 import { DIRECTOR_COMPACTION_INSTRUCTIONS, DIRECTOR_SYSTEM_PROMPT } from './directorPrompt.ts'
-import { createDirectorTools, EMPTY_DIRECTOR_BOARD } from './directorTools.ts'
 import { summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
 
 const MAX_DIRECTOR_OUTPUT_TOKENS = 2_500
 const DIRECTOR_TIMEOUT_MS = 45_000
+const MAX_DECISION_ATTEMPTS = 2
 const traceEnvironment = new NodeExecutionEnv({ cwd: process.cwd() })
 const traceRepo = new JsonlSessionRepo({
   fs: traceEnvironment,
@@ -44,6 +50,11 @@ const textFromContent = (content: unknown) => Array.isArray(content)
     return []
   }).join('\n')
   : typeof content === 'string' ? content : ''
+
+const latestAssistantText = (messages: AgentMessage[]) => {
+  const message = [...messages].reverse().find((candidate) => candidate.role === 'assistant')
+  return message?.role === 'assistant' ? textFromContent(message.content) : ''
+}
 
 const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry[] => {
   const projected: AgentTraceEntry[] = []
@@ -282,12 +293,11 @@ async function runPersistentDirector({
 
   const sessionContext = buildSessionContext(persistedEntries)
   const initialBoard = readDirectorBoard(persistedEntries)
-  const toolRuntime = createDirectorTools({ context, session, initialBoard, send })
   const agent = new Agent({
     initialState: {
       systemPrompt: DIRECTOR_SYSTEM_PROMPT,
       model,
-      tools: toolRuntime.tools,
+      tools: [],
       messages: sessionContext.messages,
       thinkingLevel: 'low',
     },
@@ -306,15 +316,10 @@ async function runPersistentDirector({
     ),
     sessionId: metadata.id,
     maxRetryDelayMs: 5_000,
-    toolExecution: 'sequential',
-    shouldStopAfterTurn: () => toolRuntime.isPublished(),
   })
 
   signal?.addEventListener('abort', () => agent.abort(), { once: true })
   agent.subscribe(async (event) => {
-    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
-      send({ type: 'delta', text: event.assistantMessageEvent.delta })
-    }
     if (event.type === 'message_end') {
       try {
         await session.appendMessage(toDurableMessage(event.message))
@@ -327,7 +332,7 @@ async function runPersistentDirector({
   })
 
   send({ type: 'trace_started', traceId, harnessSessionId: metadata.id, startedAt })
-  send({ type: 'status', text: '持久导演正在规划本回合并自主调用工具。' })
+  send({ type: 'status', text: '持久导演正在根据当前场景规划本回合。' })
 
   const sendTrace = async (outcome: HarnessTraceSnapshot['outcome']) => {
     let entries: Entry[] = []
@@ -390,19 +395,30 @@ async function runPersistentDirector({
   try {
     const action = context.session.pendingAction
     if (!action) throw new Error('当前没有等待导演裁决的玩家行动。')
-    await agent.prompt(
-      `第 ${context.session.turn} 回合，玩家行动：${action.text}\n` +
-      '请继续导演工作。根据需要自由调用工具，并以 publish_turn 成功结束本回合。',
-    )
-    if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
-    if (!toolRuntime.isPublished()) {
-      await agent.prompt(
-        '本回合尚未发布。请继续使用工具完成必要校验，并以 publish_turn 成功结束；不要只输出说明。',
-      )
+    let validated: ReturnType<typeof validateDirectorDecision> = {
+      ok: false,
+      errors: ['导演尚未产出候选裁决。'],
     }
-    if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
-    const resolution = toolRuntime.getResolution()
-    if (!resolution || !toolRuntime.isPublished()) throw new Error('导演没有成功发布本回合裁决，请重试。')
+    for (let attempt = 0; attempt < MAX_DECISION_ATTEMPTS; attempt += 1) {
+      const prompt = attempt === 0
+        ? buildDirectorTurnPrompt(context, initialBoard)
+        : '上一份候选裁决未通过确定性校验。请根据以下错误修正，并重新只输出完整 JSON：\n' +
+          validated.errors.map((error) => `- ${error}`).join('\n')
+      await agent.prompt(prompt)
+      if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
+
+      validated = validateDirectorDecision(latestAssistantText(agent.state.messages), context)
+      if (validated.ok) break
+      if (attempt + 1 < MAX_DECISION_ATTEMPTS) {
+        send({ type: 'status', text: '确定性规则拒绝了候选裁决，导演正在针对错误修正。' })
+      }
+    }
+    if (!validated.ok) throw new Error(`导演裁决未通过校验：${validated.errors.join('；')}`)
+
+    await persistDirectorBoardPatch(session, initialBoard, validated.boardPatch)
+    const resolution = validated.resolution
+    send({ type: 'status', text: '确定性规则校验通过，正在直接发布下一幕文字。' })
+    send({ type: 'resolution', resolution })
 
     try {
       const allEntries = await session.findEntries({ order: 'oldestFirst' })

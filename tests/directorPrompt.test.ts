@@ -8,8 +8,9 @@ test('keeps the complete immutable story bible in the director system prompt', (
   assert.match(DIRECTOR_SYSTEM_PROMPT, new RegExp(unregisteredCity.coreRules[0]))
   assert.match(DIRECTOR_SYSTEM_PROMPT, /燕七/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /拒绝射杀一队没有通行籍的难民/)
-  assert.match(DIRECTOR_SYSTEM_PROMPT, /resolve_action/)
-  assert.match(DIRECTOR_SYSTEM_PROMPT, /publish_turn/)
-  assert.match(DIRECTOR_SYSTEM_PROMPT, /不调用任何视频生成工具/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /decision_schema/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /directorBoardPatch/)
+  assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /read_game_state/)
+  assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /publish_turn/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /不调用任何视频生成/)
 })
-
