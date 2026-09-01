@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { streamDirectorTurn, type DirectorAgentKind } from '../services/directorClient'
+import { getDirectorModelProvider, type DirectorModelId } from '../config/directorModels'
 import { describeStoryInput } from '../stories/palace'
 import type {
   AgentTraceUpdate,
@@ -9,11 +10,17 @@ import type {
 } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
 import type { StoryChoice, VideoGenerationRequest } from '../types/story'
+import type { Actor } from '../types/actor'
+import type { VideoCharacterReference } from '../types/video'
 import type { useGameSession } from './useGameSession'
 
 type GameController = ReturnType<typeof useGameSession>
 
-type SubmitSceneVideo = (sceneId: string, request: VideoGenerationRequest) => void
+type SubmitSceneVideo = (
+  sceneId: string,
+  request: VideoGenerationRequest,
+  characterReferences: Record<string, VideoCharacterReference>,
+) => void
 
 const makeMessage = (
   role: DirectorChatMessage['role'],
@@ -22,9 +29,12 @@ const makeMessage = (
 
 export function useDirectorAgent(
   game: GameController,
-  apiKey: string,
+  openRouterApiKey: string,
+  deepseekApiKey: string,
   onTraceUpdate: (update: AgentTraceUpdate) => void,
-  agentKind: DirectorAgentKind = 'pi',
+  agentKind: DirectorAgentKind,
+  modelId: DirectorModelId,
+  actors: Actor[],
   submitSceneVideo?: SubmitSceneVideo,
 ) {
   const [messages, setMessages] = useState<DirectorChatMessage[]>([])
@@ -37,9 +47,11 @@ export function useDirectorAgent(
 
   const runTurn = useCallback(async (context: DirectorTurnContext) => {
     if (runningRef.current) return false
-    if (!apiKey) {
+    const provider = getDirectorModelProvider(modelId)
+    const requiredApiKey = provider === 'deepseek' ? deepseekApiKey : openRouterApiKey
+    if (!requiredApiKey) {
       setStatus('error')
-      append('error', '缺少 DeepSeek API Key，请先打开 API 设置。')
+      append('error', provider === 'deepseek' ? '缺少 DeepSeek API Key，请先打开 API 设置。' : '缺少 OpenRouter API Key，请先打开 API 设置。')
       return false
     }
 
@@ -60,24 +72,28 @@ export function useDirectorAgent(
     runningRef.current = true
     setStatus('thinking')
     let publishedSceneId: string | null = null
-    let videoRequest: VideoGenerationRequest | undefined
-
-    const submitVideo = () => {
-      if (!publishedSceneId || !videoRequest) return
-      submitSceneVideo?.(publishedSceneId, videoRequest)
-    }
+    let publishedCharacterReferences: Record<string, VideoCharacterReference> = {}
+    let scenePublished = false
 
     const handleEvent = (event: DirectorStreamEvent) => {
       if (event.type === 'status') append('status', event.text)
-      if (event.type === 'video_request') {
-        videoRequest = event.request
-        submitVideo()
-      }
       if (event.type === 'scene') {
         setStatus('publishing')
-        publishedSceneId = game.publishScene(event.scene)
-        if (publishedSceneId) append('agent', event.scene.narrative)
-        submitVideo()
+        const published = game.publishTurn({ scene: event.scene, characters: event.characters }, actors)
+        publishedSceneId = published?.sceneId ?? null
+        publishedCharacterReferences = published?.characterReferences ?? {}
+        if (published) {
+          scenePublished = true
+          append('agent', event.scene.narrative)
+          append('status', '下一幕已经发布，请作出选择。')
+          setStatus('idle')
+        }
+      }
+      if (event.type === 'video_plan' && publishedSceneId) {
+        submitSceneVideo?.(publishedSceneId, event.video, publishedCharacterReferences)
+      }
+      if (event.type === 'video_plan_error') {
+        append('error', `视频计划生成失败：${event.message}`)
       }
       if (event.type === 'harness_trace') {
         onTraceUpdate({ type: 'harness', traceId, snapshot: event.trace })
@@ -85,18 +101,9 @@ export function useDirectorAgent(
     }
 
     try {
-      const scene = await streamDirectorTurn({ apiKey, context, traceId, agent: agentKind, onEvent: handleEvent })
-      if (!publishedSceneId) {
-        publishedSceneId = game.publishScene(scene)
-        if (publishedSceneId) {
-          append('agent', scene.narrative)
-          submitVideo()
-        }
-      }
-      if (!publishedSceneId) throw new Error('当前回合已经变化，无法发布这个场景。')
-      append('status', '下一幕已经发布，请作出选择。')
+      await streamDirectorTurn({ openRouterApiKey, deepseekApiKey, context, traceId, agent: agentKind, model: modelId, onEvent: handleEvent })
+      if (!scenePublished) throw new Error('当前回合已经变化，无法发布这个场景。')
       onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
-      setStatus('idle')
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : '导演执行失败。'
@@ -107,7 +114,7 @@ export function useDirectorAgent(
     } finally {
       runningRef.current = false
     }
-  }, [apiKey, agentKind, append, game, onTraceUpdate, submitSceneVideo])
+  }, [actors, openRouterApiKey, deepseekApiKey, agentKind, append, game, modelId, onTraceUpdate, submitSceneVideo])
 
   const startStory = useCallback(() => {
     if (runningRef.current) return false

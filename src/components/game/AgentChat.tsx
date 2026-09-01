@@ -1,22 +1,26 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
-import { Bot, LoaderCircle, RotateCcw, Send } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import { Bot, LoaderCircle, RotateCcw } from 'lucide-react'
 import type { DirectorChatMessage, DirectorStatus } from '../../types/director'
 import type { GameSession } from '../../types/game'
 import type { DirectorAgentKind } from '../../services/directorClient'
+import { directorModelOptions, type DirectorModelId } from '../../config/directorModels'
+import { isDirectorActive } from '../../services/directorStatus'
 
 const agentOptions: Array<{ value: DirectorAgentKind; label: string; caption: string }> = [
-  { value: 'pi', label: 'Pi 故事导演', caption: 'Pi Agent · DeepSeek · thinking off' },
-  { value: 'simple', label: '极简导演', caption: '裸 DeepSeek API · 单次调用' },
+  { value: 'pi', label: 'Pi 故事导演', caption: 'Pi Agent · OpenRouter · thinking off' },
+  { value: 'simple', label: '极简导演', caption: 'OpenRouter · 单次调用' },
 ]
 
 type AgentChatProps = {
   session: GameSession | null
   agentKind: DirectorAgentKind
   onAgentKindChange: (kind: DirectorAgentKind) => void
+  modelId: DirectorModelId
+  onModelChange: (modelId: DirectorModelId) => void
   messages: DirectorChatMessage[]
   status: DirectorStatus
   hasApiKey: boolean
-  onSubmit: (text: string) => boolean
+  apiKeyLabel?: string
   onRetry: () => void
   onRequestApiKey: () => void
 }
@@ -32,16 +36,16 @@ export function AgentChat({
   session,
   agentKind,
   onAgentKindChange,
+  modelId,
+  onModelChange,
   messages,
   status,
   hasApiKey,
-  onSubmit,
+  apiKeyLabel = 'OpenRouter',
   onRetry,
   onRequestApiKey,
 }: AgentChatProps) {
-  const [text, setText] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
-  const canAct = session?.status === 'awaiting_action' && status === 'idle'
   const canRetry = hasApiKey && !['thinking', 'publishing'].includes(status)
     && session?.status === 'awaiting_agent'
 
@@ -49,18 +53,12 @@ export function AgentChat({
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    if (!text.trim() || !canAct) return
-    if (onSubmit(text.trim())) setText('')
-  }
-
   return (
     <section className="agent-chat-card">
       <header className="agent-chat-heading">
         <div>
           <span className="agent-avatar"><Bot size={15} /></span>
-          <div>
+          <div className="agent-selects">
             <select
               className="agent-kind-select"
               aria-label="切换导演 Agent"
@@ -72,11 +70,22 @@ export function AgentChat({
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
+            <select
+              className="agent-model-select"
+              aria-label="选择导演模型"
+              value={modelId}
+              disabled={['thinking', 'publishing'].includes(status)}
+              onChange={(event) => onModelChange(event.target.value as DirectorModelId)}
+            >
+              {directorModelOptions.map((option) => (
+                <option key={option.id} value={option.id}>{option.label}</option>
+              ))}
+            </select>
             <p>{agentOptions.find((option) => option.value === agentKind)?.caption}</p>
           </div>
         </div>
         <span className={`agent-status ${status}`}>
-          {status === 'thinking' || status === 'publishing' ? <LoaderCircle className="spin" size={11} /> : null}
+          {isDirectorActive(status) ? <LoaderCircle className="spin" size={11} /> : null}
           {statusLabel[status]}
         </span>
       </header>
@@ -86,8 +95,8 @@ export function AgentChat({
           <div className="agent-empty">
             <Bot size={19} />
             <p>{hasApiKey
-              ? '我会主动展开故事，并在每回合通过 publish_scene 给出新的场景与选择。'
-              : '配置 DeepSeek API Key 后，我会接管每一幕的推进。'}</p>
+              ? '我会通过 publish_scene 一次提交剧情、选择和完整视频计划。'
+              : `配置 ${apiKeyLabel} API Key 后，我会接管每一幕的推进。`}</p>
           </div>
         )}
         {messages.map((message) => (
@@ -100,23 +109,12 @@ export function AgentChat({
       </div>
 
       {!hasApiKey ? (
-        <button className="button button-secondary agent-key-button" onClick={onRequestApiKey}>配置 DeepSeek Key</button>
+        <button className="button button-secondary agent-key-button" onClick={onRequestApiKey}>配置 {apiKeyLabel} Key</button>
       ) : canRetry ? (
         <button className="button button-secondary agent-key-button" onClick={onRetry}>
           <RotateCcw size={14} />重试当前回合
         </button>
-      ) : (
-        <form className="agent-chat-form" onSubmit={submit}>
-          <textarea
-            value={text}
-            maxLength={500}
-            disabled={!canAct}
-            placeholder={canAct ? '也可以在这里输入自由行动…' : '等待 Pi 导演发布场景'}
-            onChange={(event) => setText(event.target.value)}
-          />
-          <button aria-label="发送行动" disabled={!canAct || !text.trim()} type="submit"><Send size={14} /></button>
-        </form>
-      )}
+      ) : null}
     </section>
   )
 }

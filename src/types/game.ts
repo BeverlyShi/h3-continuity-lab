@@ -1,18 +1,25 @@
-import type { StoryInput, StoryScene, VideoGenerationRequest } from './story'
+import type { CharacterCasting } from './actor'
+import type { SceneCharacter, StoryInput, StoryScene, VideoGenerationRequest, VideoPromptSegment } from './story'
+
+export type SceneVideoClip = VideoPromptSegment & {
+  status: 'waiting' | 'generating' | 'extracting' | 'ready' | 'failed' | 'skipped'
+  videoUrl?: string
+  startImageUrl?: string
+  tailFrameUrl?: string
+  error?: string
+}
 
 export type GameScene = StoryScene & {
   id: string
   turn: number
-  videoStatus?: 'generating' | 'ready' | 'failed' | 'skipped'
-  videoUrl?: string
-  videoError?: string
   videoRequest?: VideoGenerationRequest
+  videoClips?: SceneVideoClip[]
 }
 
 export type GameSessionStatus = 'awaiting_agent' | 'awaiting_action'
 
 export type GameSession = {
-  schemaVersion: 4
+  schemaVersion: 7
   id: string
   storyId: 'palace-validation'
   status: GameSessionStatus
@@ -21,6 +28,8 @@ export type GameSession = {
   updatedAt: number
   currentScene?: GameScene
   sceneHistory: GameScene[]
+  characters: SceneCharacter[]
+  castings: CharacterCasting[]
   pendingInput?: StoryInput
 }
 

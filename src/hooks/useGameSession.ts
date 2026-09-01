@@ -1,8 +1,15 @@
 import { useCallback, useRef, useState } from 'react'
 import { clearGameSession, loadGameSession, saveGameSession } from '../services/gameStorage'
 import { palaceStory } from '../stories/palace'
-import type { DirectorTurnContext, GameScene, GameSession } from '../types/game'
-import type { StoryChoice, StoryInput, StoryScene } from '../types/story'
+import type { DirectorTurnContext, GameScene, GameSession, SceneVideoClip } from '../types/game'
+import type {
+  ScenePublish,
+  StoryChoice,
+  StoryInput,
+  VideoGenerationRequest,
+} from '../types/story'
+import type { Actor } from '../types/actor'
+import { buildCharacterReferences, resolveCharacterCastings } from '../services/casting'
 
 const now = () => Date.now()
 
@@ -13,7 +20,7 @@ const toTurnContext = (session: GameSession): DirectorTurnContext | null => sess
 const makeNewSession = (): GameSession => {
   const createdAt = now()
   return {
-    schemaVersion: 4,
+    schemaVersion: 7,
     id: crypto.randomUUID(),
     storyId: palaceStory.id,
     status: 'awaiting_agent',
@@ -21,6 +28,8 @@ const makeNewSession = (): GameSession => {
     createdAt,
     updatedAt: createdAt,
     sceneHistory: [],
+    characters: [],
+    castings: [],
     pendingInput: { type: 'start' },
   }
 }
@@ -71,11 +80,15 @@ export function useGameSession() {
     return queueInput({ type: 'freeform', text: cleanText })
   }, [queueInput])
 
-  const publishScene = useCallback((published: StoryScene) => {
+  const publishTurn = useCallback((published: ScenePublish, actors: Actor[]) => {
     const current = sessionRef.current
     if (!current || current.status !== 'awaiting_agent' || !current.pendingInput) return null
+    const charactersById = new Map(current.characters.map((character) => [character.id, character]))
+    published.characters.forEach((character) => charactersById.set(character.id, character))
+    const characters = [...charactersById.values()]
+    const castings = resolveCharacterCastings(characters, actors, current.castings)
     const scene = {
-      ...published,
+      ...published.scene,
       id: crypto.randomUUID(),
       turn: current.turn,
     }
@@ -86,24 +99,84 @@ export function useGameSession() {
       updatedAt: now(),
       currentScene: scene,
       sceneHistory: [...current.sceneHistory, scene],
+      characters,
+      castings,
       pendingInput: undefined,
     })
-    return scene.id
+    return {
+      sceneId: scene.id,
+      characterReferences: buildCharacterReferences(characters, actors, castings),
+    }
   }, [replaceSession])
 
-  const attachSceneVideo = useCallback((
+  const getCharacterReferences = useCallback((actors: Actor[]) => {
+    const current = sessionRef.current
+    return current ? buildCharacterReferences(current.characters, actors, current.castings) : {}
+  }, [])
+
+  const setSceneVideoPlan = useCallback((
     sceneId: string,
-    patch: {
-      videoStatus: GameScene['videoStatus']
-      videoUrl?: string
-      videoError?: string
-      videoRequest?: GameScene['videoRequest']
-    },
+    request: VideoGenerationRequest,
+    status: SceneVideoClip['status'],
+  ) => {
+    const current = sessionRef.current
+    if (!current) return
+    const videoClips: SceneVideoClip[] = request.videoPrompts.map((segment) => ({
+      ...segment,
+      status: status === 'generating' && segment.sequence > 1 ? 'waiting' : status,
+    }))
+    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
+      ? { ...scene, videoRequest: request, videoClips }
+      : scene
+    replaceSession({
+      ...current,
+      currentScene: current.currentScene ? applyPatch(current.currentScene) : current.currentScene,
+      sceneHistory: current.sceneHistory.map(applyPatch),
+    })
+  }, [replaceSession])
+
+  const updateSceneVideoClip = useCallback((
+    sceneId: string,
+    sequence: number,
+    patch: Partial<Pick<
+      SceneVideoClip,
+      'status' | 'videoUrl' | 'startImageUrl' | 'tailFrameUrl' | 'error'
+    >>,
   ) => {
     const current = sessionRef.current
     if (!current) return
     const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
-      ? { ...scene, ...patch }
+      ? {
+          ...scene,
+          videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
+            ? { ...clip, ...patch }
+            : clip),
+        }
+      : scene
+    replaceSession({
+      ...current,
+      currentScene: current.currentScene ? applyPatch(current.currentScene) : current.currentScene,
+      sceneHistory: current.sceneHistory.map(applyPatch),
+    })
+  }, [replaceSession])
+
+  const resetSceneVideoFrom = useCallback((sceneId: string, startSequence: number, endSequence = Number.POSITIVE_INFINITY) => {
+    const current = sessionRef.current
+    if (!current) return
+    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
+      ? {
+          ...scene,
+          videoClips: scene.videoClips?.map((clip) => clip.sequence < startSequence || clip.sequence > endSequence
+            ? clip
+            : {
+                ...clip,
+                status: clip.sequence === startSequence ? 'generating' : 'waiting',
+                videoUrl: undefined,
+                startImageUrl: undefined,
+                tailFrameUrl: undefined,
+                error: undefined,
+              }),
+        }
       : scene
     replaceSession({
       ...current,
@@ -124,8 +197,11 @@ export function useGameSession() {
     startStory,
     submitChoice,
     submitFreeform,
-    publishScene,
-    attachSceneVideo,
+    publishTurn,
+    getCharacterReferences,
+    setSceneVideoPlan,
+    updateSceneVideoClip,
+    resetSceneVideoFrom,
     getPendingContext,
     restart,
   }

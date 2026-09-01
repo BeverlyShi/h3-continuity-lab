@@ -1,19 +1,32 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core/node'
-import { storySceneSchema, type StoryScene } from '../src/types/story.ts'
+import {
+  scenePublishSchema,
+  type ScenePublish,
+} from '../src/types/story.ts'
+
+export const assertValidScenePublish = (turn: ScenePublish) => {
+  const characterIds = new Set<string>()
+  for (const character of turn.characters) {
+    if (characterIds.has(character.id)) throw new Error(`人物 ID ${character.id} 重复。`)
+    if (character.minAge > character.maxAge) throw new Error(`人物 ${character.name} 的年龄区间无效。`)
+    characterIds.add(character.id)
+  }
+}
 
 export const createPublishSceneTool = (
-  onPublish?: (scene: StoryScene) => void | Promise<void>,
-): AgentTool<typeof storySceneSchema, StoryScene> => ({
+  onPublish?: (turn: ScenePublish) => void | Promise<void>,
+): AgentTool<typeof scenePublishSchema, ScenePublish> => ({
   name: 'publish_scene',
   label: '发布故事场景',
-  description: '向玩家发布当前回合的场景标题、叙事和 2–3 个选择。每回合必须调用一次。',
-  parameters: storySceneSchema,
+  description: '提交当前回合的场景和主要人物。本工具会本地发布场景，每回合只调用一次。',
+  parameters: scenePublishSchema,
   executionMode: 'sequential',
-  execute: async (_toolCallId, scene) => {
-    await onPublish?.(scene)
+  execute: async (_toolCallId, turn) => {
+    assertValidScenePublish(turn)
+    await onPublish?.(turn)
     return {
-      content: [{ type: 'text', text: '场景已成功发布给玩家。' }],
-      details: scene,
+      content: [{ type: 'text', text: '场景已发布。' }],
+      details: turn,
       terminate: true,
     }
   },

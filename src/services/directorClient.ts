@@ -1,6 +1,7 @@
+import type { DirectorModelId } from '../config/directorModels'
 import type { DirectorStreamEvent } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
-import type { StoryScene } from '../types/story'
+import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../types/story'
 
 export function parseDirectorEvent(line: string): DirectorStreamEvent {
   const event = JSON.parse(line) as DirectorStreamEvent
@@ -10,32 +11,43 @@ export function parseDirectorEvent(line: string): DirectorStreamEvent {
   return event
 }
 
+export type StreamedDirectorTurn = {
+  scene: StoryScene
+  characters: SceneCharacter[]
+  video?: VideoGenerationRequest
+}
+
 export type DirectorAgentKind = 'pi' | 'simple'
 
 type StreamDirectorTurnOptions = {
-  apiKey: string
+  openRouterApiKey?: string
+  deepseekApiKey?: string
   context: DirectorTurnContext
   traceId: string
   agent?: DirectorAgentKind
+  model: DirectorModelId
   signal?: AbortSignal
   onEvent: (event: DirectorStreamEvent) => void
 }
 
 export async function streamDirectorTurn({
-  apiKey,
+  openRouterApiKey,
+  deepseekApiKey,
   context,
   traceId,
   agent = 'pi',
+  model,
   signal,
   onEvent,
-}: StreamDirectorTurnOptions): Promise<StoryScene> {
+}: StreamDirectorTurnOptions): Promise<StreamedDirectorTurn> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (openRouterApiKey) headers['X-OpenRouter-Key'] = openRouterApiKey
+  if (deepseekApiKey) headers['X-DeepSeek-Key'] = deepseekApiKey
+
   const response = await fetch('/api/director/turn', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-DeepSeek-Key': apiKey,
-    },
-    body: JSON.stringify({ context, traceId, agent }),
+    headers,
+    body: JSON.stringify({ context, traceId, agent, model }),
     signal,
   })
 
@@ -49,13 +61,19 @@ export async function streamDirectorTurn({
   const decoder = new TextDecoder()
   let buffer = ''
   let scene: StoryScene | undefined
+  let characters: SceneCharacter[] | undefined
+  let video: VideoGenerationRequest | undefined
   let streamError = ''
 
   const consumeLine = (line: string) => {
     if (!line.trim()) return
     const event = parseDirectorEvent(line)
     onEvent(event)
-    if (event.type === 'scene') scene = event.scene
+    if (event.type === 'scene') {
+      scene = event.scene
+      characters = event.characters
+    }
+    if (event.type === 'video_plan') video = event.video
     if (event.type === 'error') streamError = event.error
   }
 
@@ -70,6 +88,6 @@ export async function streamDirectorTurn({
   consumeLine(buffer)
 
   if (streamError) throw new Error(streamError)
-  if (!scene) throw new Error('Pi Agent 没有发布故事场景。')
-  return scene
+  if (!scene || !characters) throw new Error('Pi Agent 没有发布故事场景。')
+  return { scene, characters, video }
 }
