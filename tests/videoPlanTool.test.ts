@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createVideoPlanTool } from '../server/videoPlanTool.ts'
+import { createVideoPlanTool, normalizeVideoPlan } from '../server/videoPlanTool.ts'
 import type { SceneCharacter, VideoPlan } from '../src/types/story.ts'
 
 const characters: SceneCharacter[] = [
@@ -72,6 +72,68 @@ test('rejects sequences outside the 5–10 second range', async () => {
       videoPrompts: plan.video.videoPrompts.map((segment, index) => index === 0
         ? { ...segment, endTime: 11 }
         : { ...segment, startTime: 11 }),
+    },
+  }), /每段为 5–10 秒/)
+})
+
+test('normalizeVideoPlan renumbers out-of-order and duplicate sequences', () => {
+  const shuffled = {
+    ...plan.video,
+    videoPrompts: [
+      { ...plan.video.videoPrompts[1], sequence: 1 },
+      { ...plan.video.videoPrompts[0], sequence: 1 },
+    ],
+  }
+
+  const normalized = normalizeVideoPlan(shuffled)
+
+  assert.deepEqual(normalized.videoPrompts.map((segment) => segment.sequence), [1, 2])
+  assert.equal(normalized.videoPrompts[0].startTime, 0)
+  assert.equal(normalized.videoPrompts[0].transitionFromPrevious, undefined)
+  assert.equal(normalized.videoPrompts[1].transitionFromPrevious, 'continuous')
+})
+
+test('normalizeVideoPlan drops a stray transition on the first segment', () => {
+  const withLeadingTransition = {
+    ...plan.video,
+    videoPrompts: plan.video.videoPrompts.map((segment, index) => index === 0
+      ? { ...segment, transitionFromPrevious: 'cut' as const }
+      : segment),
+  }
+
+  const normalized = normalizeVideoPlan(withLeadingTransition)
+
+  assert.equal(normalized.videoPrompts[0].transitionFromPrevious, undefined)
+})
+
+test('tool execution recovers from a shuffled/duplicated sequence submitted by the model', async () => {
+  let published: VideoPlan | undefined
+  const tool = createVideoPlanTool(characters, (value) => { published = value })
+
+  const result = await tool.execute('tool-shuffled', {
+    video: {
+      ...plan.video,
+      videoPrompts: [
+        { ...plan.video.videoPrompts[1], sequence: 1 },
+        { ...plan.video.videoPrompts[0], sequence: 1 },
+      ],
+    },
+  })
+
+  assert.equal(result.terminate, true)
+  assert.deepEqual(published, plan)
+})
+
+test('normalization cannot rescue a segment with an out-of-range duration', async () => {
+  const tool = createVideoPlanTool(characters)
+
+  await assert.rejects(() => tool.execute('tool-shuffled-bad-duration', {
+    video: {
+      ...plan.video,
+      videoPrompts: [
+        { ...plan.video.videoPrompts[1], sequence: 1, startTime: 5, endTime: 8 },
+        { ...plan.video.videoPrompts[0], sequence: 1, startTime: 0, endTime: 3 },
+      ],
     },
   }), /每段为 5–10 秒/)
 })

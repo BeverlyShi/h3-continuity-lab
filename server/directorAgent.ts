@@ -315,18 +315,32 @@ async function runPersistentDirector({
     { ...options, apiKey },
   )
 
-  const streamDirectorModel = (streamModel: Model<Api>, streamContext: Parameters<Models['streamSimple']>[1], options?: SimpleStreamOptions) => models.streamSimple(
-    streamModel,
-    streamContext,
-    {
-      ...options,
-      ...getDirectorStreamPolicy(modelId),
-      apiKey,
-      maxRetries: 2,
-      timeoutMs: DIRECTOR_TIMEOUT_MS,
-      telemetryContext: telemetry,
-    },
-  )
+  // pi-ai 的 ToolChoice 类型只声明了 auto/none，但底层 OpenAI 兼容适配器会把
+  // samplingParams 原样合并进请求体，因此用它强制模型直接调用指定工具，
+  // 避免在工具调用之前输出闲聊文字（观测到的延迟大头）。
+  const createDirectorStreamFn = (forcedToolName: string) => (
+    streamModel: Model<Api>,
+    streamContext: Parameters<Models['streamSimple']>[1],
+    options?: SimpleStreamOptions,
+  ) => {
+    const policy = getDirectorStreamPolicy(modelId)
+    return models.streamSimple(
+      streamModel,
+      streamContext,
+      {
+        ...options,
+        ...policy,
+        samplingParams: {
+          ...policy.samplingParams,
+          tool_choice: { type: 'function', function: { name: forcedToolName } },
+        },
+        apiKey,
+        maxRetries: 2,
+        timeoutMs: DIRECTOR_TIMEOUT_MS,
+        telemetryContext: telemetry,
+      },
+    )
+  }
 
   try {
     if (await maybeCompact({ session, entries: persistedEntries, models, model, signal })) {
@@ -434,7 +448,7 @@ async function runPersistentDirector({
       thinkingLevel: 'off',
     },
     convertToLlm,
-    streamFn: streamDirectorModel,
+    streamFn: createDirectorStreamFn('publish_scene'),
     sessionId: metadata.id,
     maxRetryDelayMs: 5_000,
     shouldStopAfterTurn: createRetryingStopCondition(MAX_TOOL_ATTEMPTS),
@@ -467,7 +481,7 @@ async function runPersistentDirector({
           thinkingLevel: 'off',
         },
         convertToLlm,
-        streamFn: streamDirectorModel,
+        streamFn: createDirectorStreamFn('submit_video_plan'),
         sessionId: metadata.id,
         maxRetryDelayMs: 5_000,
         shouldStopAfterTurn: createRetryingStopCondition(MAX_TOOL_ATTEMPTS),
