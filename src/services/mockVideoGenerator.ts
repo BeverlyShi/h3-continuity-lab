@@ -26,4 +26,7 @@ export const mockVideoGenerator: VideoGenerator = {
     await wait(1800 + (((sequence + 1) * 673) % 1800))
     return DEMO_MEDIA[sequence % DEMO_MEDIA.length]
   },
+  async createTailFrameUrl(videoUrl: string) {
+    return `${videoUrl}#tail-frame`
+  },
 }

@@ -7,7 +7,7 @@ test('does not treat a restored idle director as an active request', () => {
   assert.equal(isDirectorActive('error'), false)
 })
 
-test('only treats thinking and publishing as active director work', () => {
+test('treats director generation stages as active work', () => {
   assert.equal(isDirectorActive('thinking'), true)
   assert.equal(isDirectorActive('publishing'), true)
 })

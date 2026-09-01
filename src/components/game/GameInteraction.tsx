@@ -46,7 +46,7 @@ export function GameInteraction({
         <LoaderCircle className="spin" size={20} />
         <div>
           <h2>Pi 导演正在续写故事</h2>
-          <p>模型会通过 publish_scene 发布下一幕和新的选择。</p>
+          <p>模型会通过 publish_scene 发布下一幕、选择和视频计划。</p>
         </div>
       </section>
     )

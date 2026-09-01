@@ -32,6 +32,22 @@ export type GeneratedVideo = {
   thumbnailUrl?: string
 }
 
+export type VideoCharacterReference = {
+  characterName: string
+  imageUrl: string
+}
+
+export type VideoGenerationConditioning = {
+  startImageUrl?: string
+  characterReferences?: VideoCharacterReference[]
+}
+
 export interface VideoGenerator {
-  generate(prompt: string, duration: number, sequence: number): Promise<GeneratedVideo>
+  generate(
+    prompt: string,
+    duration: number,
+    sequence: number,
+    conditioning?: VideoGenerationConditioning,
+  ): Promise<GeneratedVideo>
+  createTailFrameUrl(videoUrl: string): Promise<string>
 }

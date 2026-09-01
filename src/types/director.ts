@@ -1,4 +1,4 @@
-import type { StoryScene, VideoGenerationRequest } from './story'
+import type { SceneCharacter, StoryScene, VideoGenerationRequest } from './story'
 
 export type DirectorStatus = 'idle' | 'thinking' | 'publishing' | 'error'
 
@@ -74,7 +74,8 @@ export type DirectorStreamEvent =
   | { type: 'status'; text: string }
   | { type: 'trace_started'; traceId: string; harnessSessionId: string; startedAt: number }
   | { type: 'harness_trace'; trace: HarnessTraceSnapshot }
-  | { type: 'scene'; scene: StoryScene }
-  | { type: 'video_request'; request: VideoGenerationRequest }
+  | { type: 'scene'; scene: StoryScene; characters: SceneCharacter[] }
+  | { type: 'video_plan'; video: VideoGenerationRequest }
+  | { type: 'video_plan_error'; message: string }
   | { type: 'done' }
   | { type: 'error'; error: string }

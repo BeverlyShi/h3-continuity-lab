@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Check } from 'typebox/value'
-import { storySceneSchema, videoGenerationRequestSchema } from '../src/types/story.ts'
+import {
+  scenePublishSchema,
+  storySceneSchema,
+  videoGenerationRequestSchema,
+  videoPlanSchema,
+} from '../src/types/story.ts'
 
 const makeScene = (choiceCount: number) => ({
   title: '宫门初雪',
@@ -38,8 +43,24 @@ test('rejects narrative longer than 600 characters', () => {
 })
 
 const makeVideoRequest = () => ({
-  duration: 6,
-  prompt: '0-2秒，宫墙暮色场景，镜头缓慢推进朱红宫墙，宫灯次第亮起；2-6秒，偏院室内场景，少女坐在木椅上攥紧袖口，烛光摇曳',
+  totalDuration: 15,
+  videoPrompts: [
+    {
+      sequence: 1,
+      startTime: 0,
+      endTime: 5,
+      characterIds: ['heroine'],
+      prompt: '宫墙暮色场景，镜头缓慢推进朱红宫墙，宫灯在少女身后次第亮起。',
+    },
+    {
+      sequence: 2,
+      startTime: 5,
+      endTime: 15,
+      transitionFromPrevious: 'cut' as const,
+      characterIds: ['heroine'],
+      prompt: '偏院室内场景，少女坐在木椅上攥紧袖口，烛光在她脸上摇曳。',
+    },
+  ],
 })
 
 test('rejects scenes carrying the removed videoPrompt field', () => {
@@ -50,15 +71,72 @@ test('accepts a well formed video generation request', () => {
   assert.equal(Check(videoGenerationRequestSchema, makeVideoRequest()), true)
 })
 
-test('rejects video requests with out-of-range or fractional duration', () => {
-  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), duration: 3 }), false)
-  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), duration: 16 }), false)
-  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), duration: 6.5 }), false)
+test('accepts a scene publish with scene and characters only', () => {
+  assert.equal(Check(scenePublishSchema, {
+    scene: makeScene(2),
+    characters: [{ id: 'heroine', name: '沈清禾', gender: 'female', minAge: 16, maxAge: 20 }],
+  }), true)
+  assert.equal(Check(scenePublishSchema, { scene: makeScene(2) }), false)
+  assert.equal(Check(scenePublishSchema, { characters: [] }), false)
+})
+
+test('rejects a scene publish carrying a video field', () => {
+  assert.equal(Check(scenePublishSchema, {
+    scene: makeScene(2),
+    characters: [{ id: 'heroine', name: '沈清禾', gender: 'female', minAge: 16, maxAge: 20 }],
+    video: makeVideoRequest(),
+  }), false)
+})
+
+test('accepts a video plan submitted on its own', () => {
+  assert.equal(Check(videoPlanSchema, { video: makeVideoRequest() }), true)
+  assert.equal(Check(videoPlanSchema, {}), false)
+  assert.equal(Check(videoPlanSchema, {
+    video: makeVideoRequest(),
+    scene: makeScene(2),
+  }), false)
+})
+
+test('requires character ids and accepts the transition field on later video segments', () => {
+  const request = makeVideoRequest()
+  assert.equal(Check(videoGenerationRequestSchema, {
+    ...request,
+    videoPrompts: request.videoPrompts.map((segment) => Object.fromEntries(
+      Object.entries(segment).filter(([key]) => key !== 'characterIds'),
+    )),
+  }), false)
+  assert.equal(Check(videoGenerationRequestSchema, {
+    ...request,
+    videoPrompts: request.videoPrompts.map((segment) => segment.sequence === 2
+      ? { ...segment, transitionFromPrevious: undefined }
+      : segment),
+  }), true)
+})
+
+test('rejects video requests with unsupported total durations', () => {
+  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 14 }), false)
+  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 31 }), false)
+  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 15 }), true)
+  assert.equal(Check(videoGenerationRequestSchema, {
+    totalDuration: 30,
+    videoPrompts: [
+      { ...makeVideoRequest().videoPrompts[0], endTime: 10 },
+      { ...makeVideoRequest().videoPrompts[1], startTime: 10, endTime: 20 },
+      { ...makeVideoRequest().videoPrompts[1], sequence: 3, startTime: 20, endTime: 30 },
+    ],
+  }), true)
 })
 
 test('rejects video requests with a too short or too long prompt', () => {
-  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), prompt: '镜头推进宫墙' }), false)
-  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), prompt: 'a'.repeat(601) }), false)
+  const request = makeVideoRequest()
+  assert.equal(Check(videoGenerationRequestSchema, {
+    ...request,
+    videoPrompts: [{ ...request.videoPrompts[0], prompt: '镜头推进宫墙' }],
+  }), false)
+  assert.equal(Check(videoGenerationRequestSchema, {
+    ...request,
+    videoPrompts: [{ ...request.videoPrompts[0], prompt: 'a'.repeat(601) }],
+  }), false)
 })
 
 test('rejects video requests with extra fields', () => {

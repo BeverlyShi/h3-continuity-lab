@@ -1,53 +1,102 @@
 import { useCallback, useRef } from 'react'
 import { createFalVideoGenerator } from '../services/falVideoGenerator'
-import type { GameScene } from '../types/game'
+import { generateSceneVideoSegments } from '../services/sceneVideoGenerator'
+import type { GameScene, SceneVideoClip } from '../types/game'
 import type { VideoGenerationRequest } from '../types/story'
-
-type SceneVideoPatch = {
-  videoStatus: GameScene['videoStatus']
-  videoUrl?: string
-  videoError?: string
-  videoRequest?: VideoGenerationRequest
-}
+import type { VideoCharacterReference } from '../types/video'
 
 type UseSceneVideoParams = {
   apiKey: string
-  onVideoUpdate: (sceneId: string, patch: SceneVideoPatch) => void
+  onVideoPlan: (
+    sceneId: string,
+    request: VideoGenerationRequest,
+    status: SceneVideoClip['status'],
+  ) => void
+  onVideoClipUpdate: (
+    sceneId: string,
+    sequence: number,
+    patch: Partial<Pick<
+      SceneVideoClip,
+      'status' | 'videoUrl' | 'startImageUrl' | 'tailFrameUrl' | 'error'
+    >>,
+  ) => void
+  onVideoRetry: (sceneId: string, startSequence: number, endSequence?: number) => void
 }
 
-const durationForVideoRequest = (duration: number) => (duration <= 7 ? 5 : 10)
-
-export function useSceneVideo({ apiKey, onVideoUpdate }: UseSceneVideoParams) {
+export function useSceneVideo({
+  apiKey,
+  onVideoPlan,
+  onVideoClipUpdate,
+  onVideoRetry,
+}: UseSceneVideoParams) {
   const submittedScenes = useRef(new Set<string>())
 
-  const submitSceneVideo = useCallback((sceneId: string, request: VideoGenerationRequest) => {
+  const runGeneration = useCallback((
+    sceneId: string,
+    request: VideoGenerationRequest,
+    startSequence = 1,
+    initialTailFrameUrl?: string,
+    endSequence?: number,
+    characterReferences: Record<string, VideoCharacterReference> = {},
+  ) => {
+    void generateSceneVideoSegments(
+      createFalVideoGenerator(apiKey),
+      request,
+      (result) => {
+        onVideoClipUpdate(sceneId, result.sequence, {
+          status: result.status,
+          videoUrl: result.videoUrl,
+          startImageUrl: result.startImageUrl,
+          tailFrameUrl: result.tailFrameUrl,
+          error: result.status === 'failed' ? result.error : undefined,
+        })
+      },
+      { startSequence, endSequence, initialTailFrameUrl, characterReferences },
+    )
+  }, [apiKey, onVideoClipUpdate])
+
+  const submitSceneVideo = useCallback((
+    sceneId: string,
+    request: VideoGenerationRequest,
+    characterReferences: Record<string, VideoCharacterReference>,
+  ) => {
     if (!apiKey) return
     if (submittedScenes.current.has(sceneId)) return
     submittedScenes.current.add(sceneId)
 
-    onVideoUpdate(sceneId, { videoStatus: 'generating', videoRequest: request })
+    onVideoPlan(sceneId, request, 'generating')
+    runGeneration(sceneId, request, 1, undefined, undefined, characterReferences)
+  }, [apiKey, onVideoPlan, runGeneration])
 
-    createFalVideoGenerator(apiKey)
-      .generate(request.prompt, durationForVideoRequest(request.duration), 0)
-      .then((result) => {
-        onVideoUpdate(sceneId, { videoStatus: 'ready', videoUrl: result.videoUrl })
-      })
-      .catch((error: unknown) => {
-        console.warn('场景视频生成失败：', error)
-        const detail = error instanceof Error && error.message ? error.message : ''
-        const body = (error as { body?: { detail?: unknown } } | null)?.body?.detail
-        const bodyDetail = body ? JSON.stringify(body) : ''
-        onVideoUpdate(sceneId, {
-          videoStatus: 'failed',
-          videoError: [detail, bodyDetail].filter(Boolean).join(' · ') || '未知错误',
-        })
-      })
-  }, [apiKey, onVideoUpdate])
+  const retrySceneVideo = useCallback((
+    scene: GameScene,
+    characterReferences: Record<string, VideoCharacterReference>,
+  ) => {
+    if (!scene.videoRequest || !scene.videoClips?.length || !apiKey) return
+    const clips = [...scene.videoClips].sort((left, right) => left.sequence - right.sequence)
+    const blockedIndex = clips.findIndex((clip) => clip.status === 'failed' || clip.status === 'skipped')
+    let startIndex = blockedIndex >= 0 ? blockedIndex : 0
+    while (startIndex > 0
+      && clips[startIndex].transitionFromPrevious === 'continuous'
+      && !clips[startIndex - 1].tailFrameUrl) {
+      startIndex -= 1
+    }
+    const startSequence = clips[startIndex].sequence
+    const initialTailFrameUrl = startIndex > 0 ? clips[startIndex - 1].tailFrameUrl : undefined
+    const nextCut = clips.slice(startIndex + 1).find((clip) => clip.transitionFromPrevious === 'cut')
+    const endSequence = nextCut ? nextCut.sequence - 1 : clips.at(-1)?.sequence
 
-  const retrySceneVideo = useCallback((sceneId: string, request: VideoGenerationRequest) => {
-    submittedScenes.current.delete(sceneId)
-    submitSceneVideo(sceneId, request)
-  }, [submitSceneVideo])
+    submittedScenes.current.add(scene.id)
+    onVideoRetry(scene.id, startSequence, endSequence)
+    runGeneration(
+      scene.id,
+      scene.videoRequest,
+      startSequence,
+      initialTailFrameUrl,
+      endSequence,
+      characterReferences,
+    )
+  }, [apiKey, onVideoRetry, runGeneration])
 
   return { submitSceneVideo, retrySceneVideo }
 }
