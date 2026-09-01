@@ -1,6 +1,7 @@
 import type { VideoProject } from '../types/video'
 
 const API_KEY_STORAGE_KEY = 'h3-continuity-lab:fal-key'
+const OPENROUTER_API_KEY_STORAGE_KEY = 'h3-continuity-lab:openrouter-key'
 const DEEPSEEK_API_KEY_STORAGE_KEY = 'h3-continuity-lab:deepseek-key'
 const PROJECTS_STORAGE_KEY = 'h3-continuity-lab:projects'
 const ACTIVE_PROJECT_STORAGE_KEY = 'h3-continuity-lab:active-project'
@@ -10,6 +11,13 @@ export const loadApiKey = () => localStorage.getItem(API_KEY_STORAGE_KEY) ?? ''
 export const saveApiKey = (apiKey: string) => {
   if (apiKey) localStorage.setItem(API_KEY_STORAGE_KEY, apiKey)
   else localStorage.removeItem(API_KEY_STORAGE_KEY)
+}
+
+export const loadOpenRouterApiKey = () => localStorage.getItem(OPENROUTER_API_KEY_STORAGE_KEY) ?? ''
+
+export const saveOpenRouterApiKey = (apiKey: string) => {
+  if (apiKey) localStorage.setItem(OPENROUTER_API_KEY_STORAGE_KEY, apiKey)
+  else localStorage.removeItem(OPENROUTER_API_KEY_STORAGE_KEY)
 }
 
 export const loadDeepSeekApiKey = () => localStorage.getItem(DEEPSEEK_API_KEY_STORAGE_KEY) ?? ''
