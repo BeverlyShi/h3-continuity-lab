@@ -1,15 +1,15 @@
-import type { Actor, CharacterCasting } from '../types/actor'
-import type { SceneCharacter } from '../types/story'
-import type { VideoCharacterReference } from '../types/video'
+import type { Actor, CastableActor, CharacterCasting } from '../types/actor.ts'
+import type { SceneCharacter } from '../types/story.ts'
+import type { VideoCharacterReference } from '../types/video.ts'
 
 const rangesOverlap = (
   left: Pick<SceneCharacter, 'minAge' | 'maxAge'>,
-  right: Pick<Actor, 'minAge' | 'maxAge'>,
+  right: Pick<CastableActor, 'minAge' | 'maxAge'>,
 ) => left.minAge <= right.maxAge && left.maxAge >= right.minAge
 
 export const resolveCharacterCastings = (
   characters: SceneCharacter[],
-  actors: Actor[],
+  actors: CastableActor[],
   existing: CharacterCasting[],
 ) => {
   const resolved = [...existing]

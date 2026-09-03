@@ -1,4 +1,5 @@
 import type { DirectorModelId } from '../config/directorModels'
+import type { CastableActor, CharacterCasting, SceneCastingResult } from '../types/actor'
 import type { DirectorStreamEvent } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
 import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../types/story'
@@ -14,6 +15,7 @@ export function parseDirectorEvent(line: string): DirectorStreamEvent {
 export type StreamedDirectorTurn = {
   scene: StoryScene
   characters: SceneCharacter[]
+  casting?: SceneCastingResult
   video?: VideoGenerationRequest
 }
 
@@ -24,6 +26,8 @@ type StreamDirectorTurnOptions = {
   deepseekApiKey?: string
   context: DirectorTurnContext
   traceId: string
+  actors?: CastableActor[]
+  castings?: CharacterCasting[]
   agent?: DirectorAgentKind
   model: DirectorModelId
   signal?: AbortSignal
@@ -35,6 +39,8 @@ export async function streamDirectorTurn({
   deepseekApiKey,
   context,
   traceId,
+  actors = [],
+  castings = [],
   agent = 'pi',
   model,
   signal,
@@ -47,7 +53,7 @@ export async function streamDirectorTurn({
   const response = await fetch('/api/director/turn', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ context, traceId, agent, model }),
+    body: JSON.stringify({ context, traceId, actors, castings, agent, model }),
     signal,
   })
 
@@ -62,6 +68,7 @@ export async function streamDirectorTurn({
   let buffer = ''
   let scene: StoryScene | undefined
   let characters: SceneCharacter[] | undefined
+  let casting: SceneCastingResult | undefined
   let video: VideoGenerationRequest | undefined
   let streamError = ''
 
@@ -73,6 +80,7 @@ export async function streamDirectorTurn({
       scene = event.scene
       characters = event.characters
     }
+    if (event.type === 'cast') casting = event.casting
     if (event.type === 'video_plan') video = event.video
     if (event.type === 'error') streamError = event.error
   }
@@ -89,5 +97,5 @@ export async function streamDirectorTurn({
 
   if (streamError) throw new Error(streamError)
   if (!scene || !characters) throw new Error('Pi Agent 没有发布故事场景。')
-  return { scene, characters, video }
+  return { scene, characters, ...(casting ? { casting } : {}), video }
 }

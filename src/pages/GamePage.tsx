@@ -16,7 +16,7 @@ import { useSceneVideo } from '../hooks/useSceneVideo'
 import { palaceStory } from '../stories/palace'
 import { isDirectorActive } from '../services/directorStatus'
 import type { AgentTraceUpdate } from '../types/director'
-import type { VideoGenerationRequest } from '../types/story'
+import type { SceneCharacter, VideoGenerationRequest } from '../types/story'
 import type { Actor } from '../types/actor'
 import type { VideoCharacterReference } from '../types/video'
 
@@ -71,22 +71,26 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
   const videoGenerationEnabledRef = useRef(videoGenerationEnabled)
   const { submitSceneVideo, retrySceneVideo } = useSceneVideo({
     apiKey: savedFalApiKey,
+    deepSeekApiKey: savedDeepSeekApiKey,
     onVideoPlan: game.setSceneVideoPlan,
     onVideoClipUpdate: game.updateSceneVideoClip,
     onVideoRetry: game.resetSceneVideoFrom,
+    onTailFrameAnalyzed: game.completeTailFrameAnalysis,
   })
   const setSceneVideoPlan = game.setSceneVideoPlan
   const submitSceneVideoIfEnabled = useCallback((
     sceneId: string,
     request: VideoGenerationRequest,
     characterReferences: Record<string, VideoCharacterReference>,
+    characters: SceneCharacter[],
+    previousTailFrameUrl?: string,
   ) => {
-    if (!videoGenerationEnabledRef.current) {
+    if (!videoGenerationEnabledRef.current || !savedFalApiKey) {
       setSceneVideoPlan(sceneId, request, 'skipped')
       return
     }
-    submitSceneVideo(sceneId, request, characterReferences)
-  }, [setSceneVideoPlan, submitSceneVideo])
+    submitSceneVideo(sceneId, request, characterReferences, characters, previousTailFrameUrl)
+  }, [savedFalApiKey, setSceneVideoPlan, submitSceneVideo])
   const director = useDirectorAgent(
     game,
     savedOpenRouterApiKey,
@@ -101,7 +105,7 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
   const retryVideo = (sceneId: string) => {
     const scene = game.session?.sceneHistory.find((item) => item.id === sceneId)
     if (scene?.videoRequest && game.session) {
-      retrySceneVideo(scene, game.getCharacterReferences(actors))
+      retrySceneVideo(scene, game.getCharacterReferences(actors), game.session.characters)
     }
   }
 
@@ -178,6 +182,7 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
           <GameStage
             key={game.session?.currentScene?.id ?? 'empty-stage'}
             session={game.session}
+            actors={actors}
             hasApiKey={Boolean(activeApiKey)}
             apiKeyLabel={apiKeyLabel}
             directorStatus={director.status}

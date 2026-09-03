@@ -1,10 +1,19 @@
 import type { CharacterCasting } from './actor'
-import type { SceneCharacter, StoryInput, StoryScene, VideoGenerationRequest, VideoPromptSegment } from './story'
+import type { VideoInputReferenceImage } from './video'
+import type {
+  SceneCharacter,
+  StoryInput,
+  StoryScene,
+  TailFrameVisualState,
+  VideoGenerationRequest,
+  VideoPromptSegment,
+} from './story'
 
 export type SceneVideoClip = VideoPromptSegment & {
-  status: 'waiting' | 'generating' | 'extracting' | 'ready' | 'failed' | 'skipped'
+  status: 'waiting' | 'generating' | 'extracting' | 'analyzing' | 'ready' | 'failed' | 'skipped'
   videoUrl?: string
   startImageUrl?: string
+  referenceImages?: VideoInputReferenceImage[]
   tailFrameUrl?: string
   error?: string
 }
@@ -12,14 +21,22 @@ export type SceneVideoClip = VideoPromptSegment & {
 export type GameScene = StoryScene & {
   id: string
   turn: number
+  characterIds?: string[]
+  castingStatus?: 'selecting' | 'ready' | 'partial' | 'failed'
+  castings?: CharacterCasting[]
+  unmatchedCharacterIds?: string[]
+  castingError?: string
   videoRequest?: VideoGenerationRequest
   videoClips?: SceneVideoClip[]
+  tailFrameUrl?: string
+  tailVisualState?: TailFrameVisualState
+  visualAnalysisError?: string
 }
 
-export type GameSessionStatus = 'awaiting_agent' | 'awaiting_action'
+export type GameSessionStatus = 'awaiting_agent' | 'awaiting_media' | 'awaiting_action'
 
 export type GameSession = {
-  schemaVersion: 7
+  schemaVersion: 8
   id: string
   storyId: 'palace-validation'
   status: GameSessionStatus
@@ -38,4 +55,5 @@ export type DirectorTurnContext = {
   sessionId: string
   turn: number
   input: StoryInput
+  previousVisualState?: TailFrameVisualState
 }

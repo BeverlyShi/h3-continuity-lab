@@ -29,6 +29,7 @@ import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter'
 import { resolve } from 'node:path'
 import { getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
+import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
 import type { AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
 import type { ScenePublish, VideoGenerationRequest } from '../src/types/story.ts'
@@ -36,18 +37,18 @@ import {
   buildStoryInputMessage,
   DIRECTOR_COMPACTION_INSTRUCTIONS,
   DIRECTOR_SYSTEM_PROMPT,
-  DIRECTOR_VIDEO_PLAN_USER_MESSAGE,
-  DIRECTOR_VIDEO_TOOL_INSTRUCTIONS,
+  DIRECTOR_VIDEO_SYSTEM_PROMPT,
 } from './directorPrompt.ts'
+import { createCastSceneTool } from './castSceneTool.ts'
 import { createPublishSceneTool } from './publishSceneTool.ts'
-import { createVideoPlanTool } from './videoPlanTool.ts'
+import { createWriteVideoPromptTool } from './videoPlanTool.ts'
+import { compileVideoPlan } from './videoPromptCompiler.ts'
 import { summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
 
-const MAX_DIRECTOR_OUTPUT_TOKENS = 2_500
+const MAX_DIRECTOR_OUTPUT_TOKENS = 4_096
 const DIRECTOR_TIMEOUT_MS = 45_000
-// 场景/视频计划两阶段各自最多尝试 3 次模型调用（1 次初始 + 2 次重试），
-// 工具校验失败时把错误反馈回模型重试，而不是让整个回合作废。
-const MAX_TOOL_ATTEMPTS = 3
+// 每个确定性阶段只允许一次定向修复，避免完整内容反复重写。
+const MAX_TOOL_ATTEMPTS = 2
 const traceEnvironment = new NodeExecutionEnv({ cwd: process.cwd() })
 const traceRepo = new JsonlSessionRepo({
   fs: traceEnvironment,
@@ -113,6 +114,28 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
   const projected: AgentTraceEntry[] = []
 
   for (const entry of entries) {
+    if (entry.type === 'custom' && entry.customType === 'director_trace') {
+      projected.push({
+        id: entryId(traceId, entry, 'trace'),
+        kind: 'input',
+        title: 'Pi Run 标识',
+        timestamp: entry.timestamp,
+        data: entry.data,
+      })
+      continue
+    }
+
+    if (entry.type === 'custom' && entry.customType === 'director_timing') {
+      projected.push({
+        id: entryId(traceId, entry, 'timing'),
+        kind: 'assistant',
+        title: 'Pi 阶段耗时',
+        timestamp: entry.timestamp,
+        data: entry.data,
+      })
+      continue
+    }
+
     if (entry.type === 'compaction') {
       projected.push({
         id: entryId(traceId, entry, 'compaction'),
@@ -254,14 +277,19 @@ const maybeCompact = async ({
   return true
 }
 
-// 工具校验失败时（toolResults 中含 isError）让 Agent 循环自动把错误反馈给模型重试；
-// 只有工具成功、或已经用尽尝试次数时才停止当前阶段。
-export const createRetryingStopCondition = (maxAttempts: number) => {
+// 工具校验失败时把完整问题列表反馈给当前阶段；目标成功或用尽尝试次数后停止。
+export const createRetryingStopCondition = (maxAttempts: number, isComplete: () => boolean) => {
   let attempts = 0
   return ({ toolResults }: ShouldStopAfterTurnContext) => {
-    attempts += 1
     const hasToolError = toolResults.some((result) => result.isError)
-    return !hasToolError || attempts >= maxAttempts
+    if (!hasToolError) {
+      attempts = 0
+      return isComplete()
+    }
+    attempts += 1
+    if (attempts < maxAttempts) return false
+    attempts = 0
+    return true
   }
 }
 
@@ -269,6 +297,8 @@ export type DirectorAgentRequest = {
   apiKey: string
   modelId: DirectorModelId
   context: DirectorTurnContext
+  actors: CastableActor[]
+  castings: CharacterCasting[]
   traceId: string
   signal?: AbortSignal
   send: (event: DirectorStreamEvent) => void
@@ -290,6 +320,8 @@ async function runPersistentDirector({
   apiKey,
   modelId,
   context,
+  actors,
+  castings,
   traceId,
   signal,
   send,
@@ -301,7 +333,49 @@ async function runPersistentDirector({
   let persistedEntries = await session.findEntries({ order: 'oldestFirst' })
   const startSeq = lastSequence(persistedEntries)
   const telemetry = new InMemoryTelemetryContext()
+  const phaseTimings = {
+    sessionSetupMs: Date.now() - startedAt,
+    traceStartPersistenceMs: 0,
+    modelSetupMs: 0,
+    compactionPrecheckMs: 0,
+    agentRunMs: 0,
+    postCompactionMs: 0,
+  }
+  const providerTurns: Array<{
+    turn: number
+    startedAt: number
+    responseStartedAt?: number
+    firstTokenAt?: number
+    endedAt?: number
+    ttftMs?: number
+    responseStartMs?: number
+    durationMs?: number
+    stopReason?: string
+  }> = []
+  const toolCalls: Array<{
+    toolCallId: string
+    toolName: string
+    startedAt: number
+    endedAt?: number
+    durationMs?: number
+    isError?: boolean
+  }> = []
+  let activeProviderTurn: typeof providerTurns[number] | undefined
+  const activeToolCalls = new Map<string, typeof toolCalls[number]>()
 
+  const traceStartPersistenceStartedAt = Date.now()
+  try {
+    await session.appendCustomEntry('director_trace', { traceId, modelId, startedAt })
+  } catch (error) {
+    persistenceErrors.push({
+      message: `Pi Trace ID 持久化失败：${error instanceof Error ? error.message : String(error)}`,
+      timestamp: Date.now(),
+    })
+  } finally {
+    phaseTimings.traceStartPersistenceMs = Date.now() - traceStartPersistenceStartedAt
+  }
+
+  const modelSetupStartedAt = Date.now()
   const provider = getDirectorModelProvider(modelId)
   const models = createModels()
   models.setProvider(provider === 'deepseek' ? deepseekProvider() : openrouterProvider())
@@ -315,14 +389,13 @@ async function runPersistentDirector({
     { ...options, apiKey },
   )
 
-  // pi-ai 的 ToolChoice 类型只声明了 auto/none，但底层 OpenAI 兼容适配器会把
-  // samplingParams 原样合并进请求体，因此用它强制模型直接调用指定工具，
-  // 避免在工具调用之前输出闲聊文字（观测到的延迟大头）。
   const createDirectorStreamFn = (forcedToolName: string) => (
     streamModel: Model<Api>,
     streamContext: Parameters<Models['streamSimple']>[1],
     options?: SimpleStreamOptions,
   ) => {
+    activeProviderTurn = { turn: providerTurns.length + 1, startedAt: Date.now() }
+    providerTurns.push(activeProviderTurn)
     const policy = getDirectorStreamPolicy(modelId)
     return models.streamSimple(
       streamModel,
@@ -341,7 +414,9 @@ async function runPersistentDirector({
       },
     )
   }
+  phaseTimings.modelSetupMs = Date.now() - modelSetupStartedAt
 
+  const compactionPrecheckStartedAt = Date.now()
   try {
     if (await maybeCompact({ session, entries: persistedEntries, models, model, signal })) {
       persistedEntries = await session.findEntries({ order: 'oldestFirst' })
@@ -351,20 +426,82 @@ async function runPersistentDirector({
       message: `Pi Compaction 预检查失败：${error instanceof Error ? error.message : String(error)}`,
       timestamp: Date.now(),
     })
+  } finally {
+    phaseTimings.compactionPrecheckMs = Date.now() - compactionPrecheckStartedAt
   }
 
   const subscribeForPersistence = (agentInstance: Agent) => agentInstance.subscribe(async (event) => {
-    if (event.type !== 'message_end') return
-    try {
-      await session.appendMessage(toDurableMessage(event.message))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      persistenceErrors.push({ message, timestamp: Date.now() })
-      console.error('Agent trace persistence failed:', message)
+    const timestamp = Date.now()
+    if (event.type === 'message_start' && event.message.role === 'assistant') {
+      if (!activeProviderTurn) {
+        activeProviderTurn = { turn: providerTurns.length + 1, startedAt: timestamp }
+        providerTurns.push(activeProviderTurn)
+      }
+      activeProviderTurn.responseStartedAt = timestamp
+      activeProviderTurn.responseStartMs = timestamp - activeProviderTurn.startedAt
+    }
+    if (event.type === 'message_update' && event.message.role === 'assistant' && activeProviderTurn) {
+      activeProviderTurn.firstTokenAt ??= timestamp
+      activeProviderTurn.ttftMs ??= timestamp - activeProviderTurn.startedAt
+    }
+    if (event.type === 'message_end' && event.message.role === 'assistant' && activeProviderTurn) {
+      activeProviderTurn.endedAt = timestamp
+      activeProviderTurn.durationMs = timestamp - activeProviderTurn.startedAt
+      activeProviderTurn.stopReason = event.message.stopReason
+      activeProviderTurn = undefined
+    }
+    if (event.type === 'tool_execution_start') {
+      const timing = {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        startedAt: timestamp,
+      }
+      toolCalls.push(timing)
+      activeToolCalls.set(event.toolCallId, timing)
+    }
+    if (event.type === 'tool_execution_end') {
+      const timing = activeToolCalls.get(event.toolCallId)
+      if (timing) {
+        timing.endedAt = timestamp
+        timing.durationMs = timestamp - timing.startedAt
+        timing.isError = event.isError
+        activeToolCalls.delete(event.toolCallId)
+      }
+    }
+    if (event.type === 'message_end') {
+      try {
+        await session.appendMessage(toDurableMessage(event.message))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        persistenceErrors.push({ message, timestamp: Date.now() })
+        console.error('Agent trace persistence failed:', message)
+      }
     }
   })
 
+  let timingPersisted = false
+  const persistTiming = async () => {
+    if (timingPersisted) return
+    timingPersisted = true
+    try {
+      await session.appendCustomEntry('director_timing', toDurableValue({
+        traceId,
+        modelId,
+        ...phaseTimings,
+        providerTurns,
+        toolCalls,
+        totalMs: Date.now() - startedAt,
+      }))
+    } catch (error) {
+      persistenceErrors.push({
+        message: `Pi 阶段耗时持久化失败：${error instanceof Error ? error.message : String(error)}`,
+        timestamp: Date.now(),
+      })
+    }
+  }
+
   let videoPhaseStarted = false
+  const orchestrationTraceEntries: AgentTraceEntry[] = []
   const sendTrace = async (outcome: HarnessTraceSnapshot['outcome']) => {
     let entries: Entry[] = []
     try {
@@ -393,9 +530,9 @@ async function runPersistentDirector({
       systemPromptEntries.push({
         id: `${traceId}:video-system-prompt`,
         kind: 'input',
-        title: `Pi 视频计划阶段 System Prompt · ${modelId}`,
+        title: `Pi 视频阶段 System Prompt · ${modelId}`,
         timestamp: startedAt,
-        text: DIRECTOR_VIDEO_TOOL_INSTRUCTIONS,
+        text: DIRECTOR_VIDEO_SYSTEM_PROMPT,
       })
     }
     const trace: HarnessTraceSnapshot = {
@@ -407,7 +544,8 @@ async function runPersistentDirector({
       outcome,
       stopReason: finalMessage?.role === 'assistant' ? finalMessage.stopReason : undefined,
       usage: summarizeAssistantUsage(currentRunMessages),
-      entries: [...systemPromptEntries, ...projectTraceEntries(traceId, entries)],
+      entries: [...systemPromptEntries, ...projectTraceEntries(traceId, entries), ...orchestrationTraceEntries]
+        .sort((left, right) => left.timestamp - right.timestamp),
     }
     persistenceErrors.forEach((error, index) => {
       trace.entries.push({
@@ -451,55 +589,136 @@ async function runPersistentDirector({
     streamFn: createDirectorStreamFn('publish_scene'),
     sessionId: metadata.id,
     maxRetryDelayMs: 5_000,
-    shouldStopAfterTurn: createRetryingStopCondition(MAX_TOOL_ATTEMPTS),
+    shouldStopAfterTurn: createRetryingStopCondition(
+      MAX_TOOL_ATTEMPTS,
+      () => Boolean(scenePublish),
+    ),
   })
 
   signal?.addEventListener('abort', () => sceneAgent.abort(), { once: true })
   subscribeForPersistence(sceneAgent)
 
+  const agentRunStartedAt = Date.now()
   try {
-    await sceneAgent.prompt(buildStoryInputMessage(context.input))
+    await sceneAgent.prompt(buildStoryInputMessage(context.input, context.previousVisualState))
     if (sceneAgent.state.errorMessage) throw new Error(sceneAgent.state.errorMessage)
     if (!scenePublish) throw new Error('Pi Agent 没有调用 publish_scene 发布场景。')
 
     send({ type: 'scene', scene: scenePublish.scene, characters: scenePublish.characters })
-    send({ type: 'status', text: '场景已发布，正在生成视频计划。' })
+    send({ type: 'status', text: '场景已发布，正在并行选角和生成视频计划。' })
 
+    let castingResult: SceneCastingResult | undefined
+    let videoDraft: VideoGenerationRequest | undefined
     let videoPlan: VideoGenerationRequest | undefined
-    try {
-      videoPhaseStarted = true
-      const videoPlanEntries = await session.findEntries({ order: 'oldestFirst' })
-      const videoPlanTool = createVideoPlanTool(scenePublish.characters, (plan) => {
-        videoPlan = toDurableValue(plan.video)
-      })
-      const videoAgent = new Agent({
-        initialState: {
-          systemPrompt: DIRECTOR_VIDEO_TOOL_INSTRUCTIONS,
-          model,
-          tools: [videoPlanTool],
-          messages: buildSessionContext(videoPlanEntries).messages,
-          thinkingLevel: 'off',
-        },
-        convertToLlm,
-        streamFn: createDirectorStreamFn('submit_video_plan'),
-        sessionId: metadata.id,
-        maxRetryDelayMs: 5_000,
-        shouldStopAfterTurn: createRetryingStopCondition(MAX_TOOL_ATTEMPTS),
+
+    const castStartedAt = Date.now()
+    const castTiming = {
+      toolCallId: `${traceId}:cast-scene`,
+      toolName: 'cast_scene',
+      startedAt: castStartedAt,
+    }
+    toolCalls.push(castTiming)
+    orchestrationTraceEntries.push({
+      id: `${traceId}:cast-call`,
+      kind: 'tool_call',
+      title: '调用工具 · cast_scene',
+      timestamp: castStartedAt,
+      data: {},
+    })
+    const castingPromise = createCastSceneTool(scenePublish.characters, actors, castings)
+      .execute(`${traceId}:cast-scene`, {})
+      .then((result) => {
+        const endedAt = Date.now()
+        Object.assign(castTiming, {
+          endedAt,
+          durationMs: endedAt - castStartedAt,
+          isError: false,
+        })
+        castingResult = toDurableValue(result.details)
+        orchestrationTraceEntries.push({
+          id: `${traceId}:cast-result`,
+          kind: 'tool_result',
+          title: '工具结果 · cast_scene',
+          timestamp: Date.now(),
+          data: castingResult,
+        })
+        send({ type: 'cast', casting: castingResult })
+      }, (error) => {
+        const endedAt = Date.now()
+        Object.assign(castTiming, {
+          endedAt,
+          durationMs: endedAt - castStartedAt,
+          isError: true,
+        })
+        throw error
       })
 
-      signal?.addEventListener('abort', () => videoAgent.abort(), { once: true })
-      subscribeForPersistence(videoAgent)
+    videoPhaseStarted = true
+    const videoEntries = await session.findEntries({ order: 'oldestFirst' })
+    const videoPlanTool = createWriteVideoPromptTool(scenePublish.characters, (plan) => {
+      videoDraft = toDurableValue(plan.video)
+    })
+    const videoAgent = new Agent({
+      initialState: {
+        systemPrompt: DIRECTOR_VIDEO_SYSTEM_PROMPT,
+        model,
+        tools: [videoPlanTool],
+        messages: buildSessionContext(videoEntries).messages,
+        thinkingLevel: 'off',
+      },
+      convertToLlm,
+      streamFn: createDirectorStreamFn('write_video_prompt'),
+      sessionId: metadata.id,
+      maxRetryDelayMs: 5_000,
+      shouldStopAfterTurn: createRetryingStopCondition(
+        MAX_TOOL_ATTEMPTS,
+        () => Boolean(videoDraft),
+      ),
+    })
+    signal?.addEventListener('abort', () => videoAgent.abort(), { once: true })
+    subscribeForPersistence(videoAgent)
 
-      await videoAgent.prompt(DIRECTOR_VIDEO_PLAN_USER_MESSAGE)
+    const videoPromise = videoAgent.continue().then(() => {
       if (videoAgent.state.errorMessage) throw new Error(videoAgent.state.errorMessage)
-      if (!videoPlan) throw new Error('Pi Agent 没有调用 submit_video_plan 提交视频计划。')
+      if (!videoDraft) throw new Error('Pi Agent 没有调用 write_video_prompt 编写视频 Prompt。')
+    })
 
-      send({ type: 'video_plan', video: videoPlan })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+    const [castingOutcome, videoOutcome] = await Promise.allSettled([castingPromise, videoPromise])
+    if (castingOutcome.status === 'rejected') {
+      const message = castingOutcome.reason instanceof Error
+        ? castingOutcome.reason.message
+        : String(castingOutcome.reason)
+      orchestrationTraceEntries.push({
+        id: `${traceId}:cast-error`,
+        kind: 'error',
+        title: '场景选角失败',
+        timestamp: Date.now(),
+        text: message,
+        isError: true,
+      })
+      send({ type: 'cast_error', message })
+    }
+    if (videoOutcome.status === 'rejected') {
+      const message = videoOutcome.reason instanceof Error
+        ? videoOutcome.reason.message
+        : String(videoOutcome.reason)
       send({ type: 'video_plan_error', message })
+    } else if (videoDraft) {
+      const matchedCharacterIds = new Set(
+        castingResult?.castings.map((casting) => casting.characterId) ?? [],
+      )
+      videoPlan = toDurableValue(compileVideoPlan(
+        videoDraft,
+        scenePublish.characters,
+        context.previousVisualState,
+        matchedCharacterIds,
+      ))
+      send({ type: 'video_plan', video: videoPlan })
     }
 
+    phaseTimings.agentRunMs = Date.now() - agentRunStartedAt
+
+    const postCompactionStartedAt = Date.now()
     try {
       const allEntries = await session.findEntries({ order: 'oldestFirst' })
       await maybeCompact({ session, entries: allEntries, models, model, signal })
@@ -508,12 +727,22 @@ async function runPersistentDirector({
         message: `Pi Compaction 后处理失败：${error instanceof Error ? error.message : String(error)}`,
         timestamp: Date.now(),
       })
+    } finally {
+      phaseTimings.postCompactionMs = Date.now() - postCompactionStartedAt
     }
 
-    await sendTrace('completed')
+    await persistTiming()
+    await sendTrace(castingResult && videoPlan ? 'completed' : 'degraded')
     send({ type: 'done' })
-    return { scene: scenePublish.scene, characters: scenePublish.characters, video: videoPlan }
+    return {
+      scene: scenePublish.scene,
+      characters: scenePublish.characters,
+      casting: castingResult,
+      video: videoPlan,
+    }
   } catch (error) {
+    phaseTimings.agentRunMs ||= Date.now() - agentRunStartedAt
+    await persistTiming()
     await sendTrace(signal?.aborted ? 'aborted' : 'failed')
     throw error
   }

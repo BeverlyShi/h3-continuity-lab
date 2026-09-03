@@ -42,6 +42,12 @@ export type VideoGenerationConditioning = {
   characterReferences?: VideoCharacterReference[]
 }
 
+export type VideoInputReferenceImage = {
+  type: 'start_frame' | 'character'
+  imageUrl: string
+  label: string
+}
+
 export interface VideoGenerator {
   generate(
     prompt: string,

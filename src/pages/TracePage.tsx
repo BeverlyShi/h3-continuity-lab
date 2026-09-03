@@ -26,6 +26,13 @@ const formatClock = (timestamp: number) => new Intl.DateTimeFormat('zh-CN', {
 
 const stringify = (value: unknown) => JSON.stringify(value, null, 2)
 
+const statusLabel = (status: AgentTraceRun['status']) => {
+  if (status === 'running') return '运行中'
+  if (status === 'error') return '失败'
+  if (status === 'degraded') return '已降级'
+  return '已完成'
+}
+
 function TraceEntry({ entry }: { entry: AgentTraceEntry }) {
   const Icon = entryIcon[entry.kind]
   const collapsedByDefault = entry.kind === 'input' || entry.kind === 'thinking'
@@ -55,7 +62,7 @@ function TraceRunItem({ trace, active, onSelect }: {
       <span className={`trace-run-status ${trace.status}`} />
       <div>
         <strong>回合 {trace.turn} · {trace.action}</strong>
-        <small>{formatClock(trace.startedAt)} · {trace.status === 'running' ? '运行中' : trace.status === 'error' ? '失败' : '已完成'}</small>
+        <small>{formatClock(trace.startedAt)} · {statusLabel(trace.status)}</small>
       </div>
     </button>
   )
@@ -96,7 +103,7 @@ export function TracePage({ traces }: { traces: AgentTraceRun[] }) {
             <>
               <div className="trace-detail-heading">
                 <div><h2>回合 {selectedTrace.turn}</h2><p>{selectedTrace.action}</p></div>
-                <span className={`trace-outcome ${selectedTrace.status}`}>{selectedTrace.status === 'running' ? '运行中' : selectedTrace.status === 'error' ? '执行失败' : '执行完成'}</span>
+                <span className={`trace-outcome ${selectedTrace.status}`}>{statusLabel(selectedTrace.status)}</span>
               </div>
 
               <div className="trace-metrics">

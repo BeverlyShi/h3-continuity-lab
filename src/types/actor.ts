@@ -16,3 +16,10 @@ export type CharacterCasting = {
   characterId: string
   actorId: string
 }
+
+export type CastableActor = Pick<Actor, 'id' | 'name' | 'gender' | 'minAge' | 'maxAge'>
+
+export type SceneCastingResult = {
+  castings: CharacterCasting[]
+  unmatchedCharacterIds: string[]
+}
