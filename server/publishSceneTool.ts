@@ -5,6 +5,11 @@ import {
 } from '../src/types/story.ts'
 
 export const assertValidScenePublish = (turn: ScenePublish) => {
+  const choiceIds = new Set(turn.scene.choices.map((choice) => choice.id))
+  if (choiceIds.size !== 3 || !(['1', '2', '3'] as const).every((id) => choiceIds.has(id))) {
+    throw new Error('剧情选项必须各使用一次 ID 1、2、3。')
+  }
+
   const characterIds = new Set<string>()
   for (const character of turn.characters) {
     if (characterIds.has(character.id)) throw new Error(`人物 ID ${character.id} 重复。`)
@@ -27,7 +32,7 @@ export const createPublishSceneTool = (
     return {
       content: [{ type: 'text', text: '场景已发布。' }],
       details: turn,
-      terminate: true,
+      terminate: false,
     }
   },
 })

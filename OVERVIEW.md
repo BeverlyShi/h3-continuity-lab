@@ -24,20 +24,28 @@
                 ↓
 Pi Agent 通过 OpenRouter 调用用户选择的模型续写故事
                 ↓
-Agent 一次调用 publish_scene，提交场景与视频计划
+场景阶段只调用 publish_scene
                 ↓
-页面发布叙事和 2～3 个新选择，同时启动视频生成
+程序选角与视频草稿阶段并行执行并汇合
+                ↓
+页面生成 2～3 个视频片段，DeepSeek Vision 识别最终尾帧
+                ↓
+开放新选择；下一回合读取用户选择与尾帧实测状态
 ```
 
 ### Agent 边界
 
-- Agent 只注册 `publish_scene`，一次模型调用同时产出场景和视频计划。
+- 每回合使用确定性的两阶段编排：场景模型只调用 `publish_scene`，随后程序选角与视频模型的 `write_video_prompt` 并行执行。
+- `cast_scene` 只接收演员库元数据，根据性别、年龄和已有绑定完成选角；演员图片仍由前端根据演员 ID 从本地演员库解析，避免把大型图片数据发送给 Director 服务。
+- 前端等待选角结果与视频计划同时就绪后才提交生成，并把匹配演员的参考图传给 fal。
 - 视频计划根据 narrative 规划 15～30 秒的场景视频，拆成 2～3 个 5～10 秒的连续片段。
-- 同一幕片段按顺序生成，后续片段使用上一片段尾帧作为首帧参考。
-- 工具使用 TypeBox 校验场景结构，并要求每回合提供两个或三个选择。
-- 工具成功后以结构化 `details` 返回场景和视频计划，并通过 `terminate: true` 结束当前 Agent 回合。
+- 视频模型只提交镜头节拍、结构化台词和预测性的 `endFrame` 文字；程序按台词长度生成每个时间块、sequence、起止时间与总时长。
+- 同一幕片段按顺序生成，后续片段以及下一幕首段使用上一尾帧作为首帧参考。
+- `inspect_tail_frame` 只调用 DeepSeek Vision，将整幕最终尾帧转换成下一回合使用的实测视觉状态。
+- 工具使用 TypeBox 校验场景结构，并要求每回合提供三个选择。
+- 工具成功后以结构化 `details` 返回场景与模板编译结果。
 - 可在 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 与 GLM-5.3-Flash 之间切换，thinking 保持关闭。
-- 如果模型没有调用工具或参数无效，本回合直接报错，不自动发起第二次模型调用。
+- 工具参数不符合 schema 时会把错误反馈给模型，并在有限次数内重试。
 
 ### 会话与连续性
 
@@ -53,7 +61,7 @@ Agent 一次调用 publish_scene，提交场景与视频计划
 Trace 页面用于查看互动故事 Agent 的运行详情，包括：
 
 - System Prompt 与玩家输入。
-- Assistant 的单次 `publish_scene` Tool Call。
+- 场景阶段的 `publish_scene`、程序选角，以及视频阶段的 `write_video_prompt` 调用与结果。
 - ToolResult 的结构化场景与视频计划数据。
 - Pi Compaction、Token、耗时、停止原因和错误。
 

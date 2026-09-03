@@ -14,6 +14,7 @@ export function useAgentTraces() {
         if (update.type === 'harness') {
           return {
             ...trace,
+            status: update.snapshot.outcome === 'degraded' ? 'degraded' : trace.status,
             harnessSessionId: update.snapshot.harnessSessionId,
             outcome: update.snapshot.outcome,
             stopReason: update.snapshot.stopReason,
@@ -25,7 +26,11 @@ export function useAgentTraces() {
           return { ...trace, entries: [...trace.entries, update.entry] }
         }
         if (update.type === 'complete') {
-          return { ...trace, status: 'completed', endedAt: update.endedAt }
+          return {
+            ...trace,
+            status: trace.outcome === 'degraded' ? 'degraded' : 'completed',
+            endedAt: update.endedAt,
+          }
         }
 
         const errorEntry: AgentTraceEntry = {

@@ -37,7 +37,9 @@ function App() {
     setIsApiDialogOpen(false)
   }
 
-  const allKeysConfigured = Boolean(savedApiKey && (savedOpenRouterApiKey || savedDeepSeekApiKey))
+  const allKeysConfigured = Boolean(
+    savedApiKey && savedDeepSeekApiKey && (savedOpenRouterApiKey || savedDeepSeekApiKey),
+  )
 
   return (
     <div className="app-shell">

@@ -228,6 +228,22 @@ textarea:focus, input:focus { border-color: #64748b; box-shadow: 0 0 0 3px rgba(
 .game-section-heading { margin-bottom: 12px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .game-section-heading h2 { font-size: 14px; line-height: 20px; font-weight: 650; }
 .game-section-heading p { margin-top: 2px; color: #64748b; font-size: 11px; line-height: 17px; }
+.game-cast { margin-bottom: 12px; }
+.game-cast-heading { margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.game-cast-heading > span { display: inline-flex; align-items: center; gap: 5px; color: #475569; font-size: 11px; font-weight: 650; }
+.game-cast-heading > small { color: #94a3b8; font-size: 9px; }
+.game-cast-track { padding: 1px; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: thin; }
+.game-cast-card { min-width: 132px; height: 52px; padding: 5px; display: grid; flex: 0 0 132px; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 8px; border: 1px solid #e2e8f0; border-radius: 7px; color: #334155; background: #f8fafc; text-decoration: none; transition: border-color .15s, background .15s; }
+.game-cast-card:hover { border-color: #cbd5e1; background: white; }
+.game-cast-card img, .game-cast-placeholder, .game-cast-skeleton { width: 40px; height: 40px; display: block; border-radius: 6px; background: #f1f5f9; object-fit: contain; }
+.game-cast-card > div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.game-cast-card strong { overflow: hidden; font-size: 11px; line-height: 15px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.game-cast-card small { overflow: hidden; color: #94a3b8; font-size: 9px; line-height: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.game-cast-placeholder { display: grid; place-items: center; color: #b91c1c; background: #fee2e2; }
+.game-cast-card.unmatched { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
+.game-cast-card.loading { pointer-events: none; }
+.game-cast-skeleton { background: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
+.game-cast-error { width: 100%; padding: 8px 10px; border: 1px solid #fecaca; border-radius: 6px; color: #b91c1c; background: #fef2f2; font-size: 10px; line-height: 15px; }
 .game-status { padding-top: 3px; display: flex; align-items: center; gap: 7px; color: #64748b; font-size: 11px; white-space: nowrap; }
 .game-status > span { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px #dcfce7; }
 .game-status.busy > span { background: #f59e0b; box-shadow: 0 0 0 3px #fef3c7; }

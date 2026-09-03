@@ -9,7 +9,7 @@ import type {
   DirectorStreamEvent,
 } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
-import type { StoryChoice, VideoGenerationRequest } from '../types/story'
+import type { SceneCharacter, StoryChoice, VideoGenerationRequest } from '../types/story'
 import type { Actor } from '../types/actor'
 import type { VideoCharacterReference } from '../types/video'
 import type { useGameSession } from './useGameSession'
@@ -20,6 +20,8 @@ type SubmitSceneVideo = (
   sceneId: string,
   request: VideoGenerationRequest,
   characterReferences: Record<string, VideoCharacterReference>,
+  characters: SceneCharacter[],
+  previousTailFrameUrl?: string,
 ) => void
 
 const makeMessage = (
@@ -73,27 +75,71 @@ export function useDirectorAgent(
     setStatus('thinking')
     let publishedSceneId: string | null = null
     let publishedCharacterReferences: Record<string, VideoCharacterReference> = {}
+    let publishedCharacters: SceneCharacter[] = []
+    let publishedVideoPlan: VideoGenerationRequest | undefined
+    let previousTailFrameUrl: string | undefined
     let scenePublished = false
+    let castingReady = false
+    let castingFailed = false
+    let videoSubmitted = false
+
+    const submitVideoWhenReady = () => {
+      if (videoSubmitted || castingFailed || !castingReady
+        || !publishedSceneId || !publishedVideoPlan) return
+      videoSubmitted = true
+      if (submitSceneVideo) {
+        submitSceneVideo(
+          publishedSceneId,
+          publishedVideoPlan,
+          publishedCharacterReferences,
+          publishedCharacters,
+          previousTailFrameUrl,
+        )
+      } else {
+        game.releaseSceneChoices(publishedSceneId, '没有可用的视频生成器。')
+      }
+    }
 
     const handleEvent = (event: DirectorStreamEvent) => {
       if (event.type === 'status') append('status', event.text)
       if (event.type === 'scene') {
         setStatus('publishing')
-        const published = game.publishTurn({ scene: event.scene, characters: event.characters }, actors)
+        const published = game.publishTurn({ scene: event.scene, characters: event.characters })
         publishedSceneId = published?.sceneId ?? null
-        publishedCharacterReferences = published?.characterReferences ?? {}
+        publishedCharacters = event.characters
+        previousTailFrameUrl = published?.previousTailFrameUrl
         if (published) {
           scenePublished = true
           append('agent', event.scene.narrative)
-          append('status', '下一幕已经发布，请作出选择。')
-          setStatus('idle')
         }
       }
-      if (event.type === 'video_plan' && publishedSceneId) {
-        submitSceneVideo?.(publishedSceneId, event.video, publishedCharacterReferences)
+      if (event.type === 'cast' && publishedSceneId) {
+        const applied = game.applySceneCasting(publishedSceneId, event.casting, actors)
+        publishedCharacterReferences = applied?.characterReferences ?? {}
+        castingReady = true
+        append(
+          'status',
+          event.casting.unmatchedCharacterIds.length
+            ? `选角完成，${event.casting.unmatchedCharacterIds.length} 个人物暂无匹配演员。`
+            : '本幕选角完成。',
+        )
+        submitVideoWhenReady()
+      }
+      if (event.type === 'cast_error') {
+        castingFailed = true
+        append('error', `场景选角失败：${event.message}`)
+        if (publishedSceneId) {
+          game.setSceneCastingError(publishedSceneId, event.message)
+          game.releaseSceneChoices(publishedSceneId, event.message)
+        }
+      }
+      if (event.type === 'video_plan') {
+        publishedVideoPlan = event.video
+        submitVideoWhenReady()
       }
       if (event.type === 'video_plan_error') {
         append('error', `视频计划生成失败：${event.message}`)
+        if (publishedSceneId) game.releaseSceneChoices(publishedSceneId, event.message)
       }
       if (event.type === 'harness_trace') {
         onTraceUpdate({ type: 'harness', traceId, snapshot: event.trace })
@@ -101,8 +147,25 @@ export function useDirectorAgent(
     }
 
     try {
-      await streamDirectorTurn({ openRouterApiKey, deepseekApiKey, context, traceId, agent: agentKind, model: modelId, onEvent: handleEvent })
+      await streamDirectorTurn({
+        openRouterApiKey,
+        deepseekApiKey,
+        context,
+        traceId,
+        actors: actors.map(({ id, name, gender, minAge, maxAge }) => ({
+          id,
+          name,
+          gender,
+          minAge,
+          maxAge,
+        })),
+        castings: game.getCastings(),
+        agent: agentKind,
+        model: modelId,
+        onEvent: handleEvent,
+      })
       if (!scenePublished) throw new Error('当前回合已经变化，无法发布这个场景。')
+      setStatus('idle')
       onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
       return true
     } catch (error) {

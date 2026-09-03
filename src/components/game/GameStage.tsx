@@ -1,5 +1,4 @@
 import {
-  ChevronRight,
   Clock3,
   History,
   Link2,
@@ -10,6 +9,7 @@ import {
   Play,
   RotateCcw,
   Sparkles,
+  UserRound,
   Video,
   VideoOff,
   Volume2,
@@ -19,9 +19,11 @@ import { useEffect, useRef, useState } from 'react'
 import { isDirectorActive } from '../../services/directorStatus'
 import type { DirectorStatus } from '../../types/director'
 import type { GameSession, SceneVideoClip } from '../../types/game'
+import type { Actor } from '../../types/actor'
 
 type GameStageProps = {
   session: GameSession | null
+  actors: Actor[]
   hasApiKey: boolean
   apiKeyLabel?: string
   directorStatus: DirectorStatus
@@ -43,6 +45,7 @@ const getStatus = (session: GameSession | null, directorStatus: DirectorStatus) 
       ? ['导演续写中', 'busy'] as const
       : ['续写待恢复', 'error'] as const
   }
+  if (session.status === 'awaiting_media') return ['视频与尾帧处理中', 'busy'] as const
   return ['等待选择', ''] as const
 }
 
@@ -52,9 +55,10 @@ const formatTime = (seconds: number) => {
 }
 
 const clipStatusLabel = (clip: SceneVideoClip) => {
-  if (clip.status === 'waiting') return clip.transitionFromPrevious === 'cut' ? '等待生成' : '等待前置片段'
+  if (clip.status === 'waiting') return '等待前置片段尾帧'
   if (clip.status === 'generating') return '生成中'
   if (clip.status === 'extracting') return '提取尾帧'
+  if (clip.status === 'analyzing') return 'DeepSeek 识别尾帧'
   if (clip.status === 'ready') return '已就绪'
   if (clip.status === 'failed') return '生成失败'
   return '已跳过'
@@ -98,7 +102,7 @@ const waitForSwitchBuffer = (video: HTMLVideoElement, onReady: () => void) => {
 
 export function GameStage(props: GameStageProps) {
   const {
-    session, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoGenerationEnabled,
+    session, actors, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoGenerationEnabled,
     onStart, onToggleVideoGeneration, onRetryVideo,
     narrativeExpanded, onNarrativeExpandedChange,
   } = props
@@ -313,7 +317,7 @@ export function GameStage(props: GameStageProps) {
   const blockedClip = activeClip?.status === 'failed'
     ? activeClip
     : waitingForNext && nextClip?.status === 'failed' ? nextClip : undefined
-  const pendingStatuses: SceneVideoClip['status'][] = ['waiting', 'generating', 'extracting']
+  const pendingStatuses: SceneVideoClip['status'][] = ['waiting', 'generating', 'extracting', 'analyzing']
   const isWaitingForClip = Boolean(activeClip && pendingStatuses.includes(activeClip.status))
     || Boolean(waitingForNext && nextClip && pendingStatuses.includes(nextClip.status))
 
@@ -325,6 +329,14 @@ export function GameStage(props: GameStageProps) {
     ? Math.min(timelineSelection.index, Math.max(0, videoClips.length - 1))
     : playbackIndex
   const promptClip = videoClips[timelineSelectedIndex] ?? videoClips[0]
+  const actorsById = new Map(actors.map((actor) => [actor.id, actor]))
+  const charactersById = new Map((session?.characters ?? []).map((character) => [character.id, character]))
+  const sceneCharacterIds = scene?.characterIds ?? [
+    ...new Set(scene?.videoRequest?.videoPrompts.flatMap((segment) => segment.characterIds) ?? []),
+  ]
+  const castingsByCharacterId = new Map(
+    (scene?.castings ?? []).map((casting) => [casting.characterId, casting.actorId]),
+  )
 
   return (
     <section className="game-stage-card">
@@ -352,6 +364,60 @@ export function GameStage(props: GameStageProps) {
         </div>
         <span className={`game-status ${statusClass}`}><span />{statusLabel}</span>
       </div>
+
+      {scene && scene.castingStatus && (
+        <section className="game-cast" aria-label="本幕演员">
+          <div className="game-cast-heading">
+            <span><UserRound size={13} />本幕演员</span>
+            <small>
+              {scene.castingStatus === 'selecting'
+                ? '正在选角'
+                : scene.castingStatus === 'failed'
+                  ? '选角失败'
+                  : `${scene.castings?.length ?? 0}/${sceneCharacterIds.length} 已匹配`}
+            </small>
+          </div>
+          <div className="game-cast-track">
+            {scene.castingStatus === 'selecting' ? (
+              Array.from({ length: Math.max(1, sceneCharacterIds.length) }, (_, index) => (
+                <div className="game-cast-card loading" key={sceneCharacterIds[index] ?? index}>
+                  <span className="game-cast-skeleton" />
+                  <div><strong>正在选角</strong><small>查询演员库…</small></div>
+                </div>
+              ))
+            ) : scene.castingStatus === 'failed' ? (
+              <p className="game-cast-error">{scene.castingError ?? '没有完成本幕选角。'}</p>
+            ) : (
+              sceneCharacterIds.map((characterId) => {
+                const character = charactersById.get(characterId)
+                const actorId = castingsByCharacterId.get(characterId)
+                const actor = actorId ? actorsById.get(actorId) : undefined
+                if (!actor) {
+                  return (
+                    <div className="game-cast-card unmatched" key={characterId}>
+                      <span className="game-cast-placeholder"><UserRound size={16} /></span>
+                      <div><strong>{character?.name ?? characterId}</strong><small>未匹配演员</small></div>
+                    </div>
+                  )
+                }
+                return (
+                  <a
+                    className="game-cast-card"
+                    href={actor.referenceImageUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`查看${actor.name}的演员参考图`}
+                    key={characterId}
+                  >
+                    <img src={actor.referenceImageUrl} alt={`${actor.name}参考图`} loading="lazy" decoding="async" />
+                    <div><strong>{actor.name}</strong><small>饰 {character?.name ?? characterId}</small></div>
+                  </a>
+                )
+              })
+            )}
+          </div>
+        </section>
+      )}
 
       <article className={`game-stage-frame${hasVideo ? ' has-video' : ''}${narrativeExpanded ? '' : ' narrative-collapsed'}`}>
         <div className="game-stage-canvas">
@@ -514,12 +580,12 @@ export function GameStage(props: GameStageProps) {
                 <div className="game-video-timeline-item-wrap" key={clip.sequence}>
                   {index > 0 && (
                     <span
-                      className={`game-video-timeline-link ${clip.transitionFromPrevious ?? ''}${clip.startImageUrl ? ' linked' : ''}`}
-                      title={clip.transitionFromPrevious === 'continuous'
-                        ? clip.startImageUrl ? 'Continuous：已使用上一片段尾帧' : 'Continuous：等待上一片段尾帧'
-                        : 'Cut：使用独立开场画面'}
+                      className={`game-video-timeline-link${clip.startImageUrl ? ' linked' : ''}`}
+                      title={clip.startImageUrl
+                        ? '已使用上一片段尾帧作为起始参考'
+                        : '等待上一片段尾帧'}
                     >
-                      {clip.transitionFromPrevious === 'continuous' ? <Link2 size={11} /> : <ChevronRight size={12} />}
+                      <Link2 size={11} />
                     </span>
                   )}
                   <button
@@ -566,7 +632,40 @@ export function GameStage(props: GameStageProps) {
           {promptClip && (
             <div className="game-video-timeline-prompt">
               <strong>片段 {promptClip.sequence} Prompt</strong>
-              <p>{promptClip.prompt}</p>
+              <div className="game-video-timeline-prompt-body">
+                <p>{promptClip.prompt}</p>
+              </div>
+              <div className="game-video-prompt-reference-section" aria-label="发给 fal 的参考图">
+                <strong className="game-video-prompt-reference-title">发给 fal 的参考图</strong>
+                {promptClip.referenceImages === undefined ? (
+                  <p className="game-video-prompt-reference-status">
+                    {promptClip.status === 'waiting'
+                      ? '等待上一片段尾帧；生成开始后将在这里显示实际发送的图片。'
+                      : promptClip.status === 'skipped'
+                        ? '视频生成已关闭，未向 fal 发送请求。'
+                        : ['generating', 'extracting', 'analyzing'].includes(promptClip.status)
+                          ? '正在确认发送给 fal 的参考图…'
+                          : '本片段没有已记录的 fal 参考图。'}
+                  </p>
+                ) : promptClip.referenceImages.length > 0 ? (
+                  <div className="game-video-prompt-references">
+                    {promptClip.referenceImages.map((reference) => (
+                      <a
+                        href={reference.imageUrl}
+                        key={`${reference.type}:${reference.imageUrl}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={`查看${reference.label}`}
+                      >
+                        <img src={reference.imageUrl} alt={reference.label} loading="lazy" decoding="async" />
+                        <span>{reference.label}</span>
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="game-video-prompt-reference-status">本次请求没有向 fal 发送参考图。</p>
+                )}
+              </div>
             </div>
           )}
         </section>

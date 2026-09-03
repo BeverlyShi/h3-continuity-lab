@@ -1,12 +1,14 @@
-import type { VideoCharacterReference, VideoGenerator } from '../types/video'
-import type { VideoGenerationRequest } from '../types/story'
+import type { VideoCharacterReference, VideoGenerator, VideoInputReferenceImage } from '../types/video'
+import type { TailFrameVisualState, VideoGenerationRequest } from '../types/story'
 
 export type SceneVideoSegmentResult = {
   sequence: number
-  status: 'generating' | 'extracting' | 'ready' | 'failed'
+  status: 'generating' | 'extracting' | 'analyzing' | 'ready' | 'failed'
   videoUrl?: string
   startImageUrl?: string
+  referenceImages?: VideoInputReferenceImage[]
   tailFrameUrl?: string
+  visualState?: TailFrameVisualState
   error?: string
 }
 
@@ -15,6 +17,7 @@ type SceneVideoGenerationOptions = {
   endSequence?: number
   initialTailFrameUrl?: string
   characterReferences?: Record<string, VideoCharacterReference>
+  analyzeTailFrame?: (imageUrl: string) => Promise<TailFrameVisualState>
 }
 
 const errorMessage = (error: unknown) => {
@@ -35,17 +38,27 @@ export const generateSceneVideoSegments = async (
     .filter((segment) => segment.sequence >= (options.startSequence ?? 1))
     .filter((segment) => segment.sequence <= (options.endSequence ?? Number.POSITIVE_INFINITY))
   let previousTailFrameUrl = options.initialTailFrameUrl
+  const finalSequence = Math.max(...request.videoPrompts.map((segment) => segment.sequence))
 
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index]
-    const usesPreviousTail = segment.sequence > 1 && segment.transitionFromPrevious === 'continuous'
-    const startImageUrl = usesPreviousTail ? previousTailFrameUrl : undefined
-    if (usesPreviousTail && !startImageUrl) continue
+    const needsPreviousTail = segment.sequence > 1
+    const startImageUrl = previousTailFrameUrl
+    if (needsPreviousTail && !startImageUrl) continue
     const characterReferences = startImageUrl ? [] : segment.characterIds.flatMap((characterId) => {
       const reference = options.characterReferences?.[characterId]
       return reference ? [reference] : []
     })
-    onResult({ sequence: segment.sequence, status: 'generating', startImageUrl })
+    const referenceImages: VideoInputReferenceImage[] = startImageUrl
+      ? [{ type: 'start_frame', imageUrl: startImageUrl, label: '起始尾帧' }]
+      : characterReferences.map((reference) => ({
+          type: 'character',
+          imageUrl: reference.imageUrl,
+          label: `人物参考 · ${reference.characterName}`,
+        }))
+    onResult({ sequence: segment.sequence, status: 'generating', startImageUrl, referenceImages })
+    let videoUrl: string | undefined
+    let tailFrameUrl: string | undefined
     try {
       const result = await generator.generate(
         segment.prompt,
@@ -53,38 +66,54 @@ export const generateSceneVideoSegments = async (
         segment.sequence,
         { startImageUrl, characterReferences },
       )
-      const nextSegment = segments[index + 1]
-      const needsTailFrame = nextSegment?.transitionFromPrevious === 'continuous'
-      if (!needsTailFrame) {
-        onResult({
-          sequence: segment.sequence,
-          status: 'ready',
-          videoUrl: result.videoUrl,
-          startImageUrl,
-        })
-        continue
-      }
-
+      videoUrl = result.videoUrl
       onResult({
         sequence: segment.sequence,
         status: 'extracting',
         videoUrl: result.videoUrl,
         startImageUrl,
+        referenceImages,
       })
-      const tailFrameUrl = await generator.createTailFrameUrl(result.videoUrl)
+      tailFrameUrl = await generator.createTailFrameUrl(result.videoUrl)
+      previousTailFrameUrl = tailFrameUrl
+      const shouldAnalyze = segment.sequence === finalSequence && options.analyzeTailFrame
+      if (shouldAnalyze) {
+        onResult({
+          sequence: segment.sequence,
+          status: 'analyzing',
+          videoUrl: result.videoUrl,
+          startImageUrl,
+          referenceImages,
+          tailFrameUrl,
+        })
+        const visualState = await options.analyzeTailFrame!(tailFrameUrl)
+        onResult({
+          sequence: segment.sequence,
+          status: 'ready',
+          videoUrl: result.videoUrl,
+          startImageUrl,
+          referenceImages,
+          tailFrameUrl,
+          visualState,
+        })
+        continue
+      }
       onResult({
         sequence: segment.sequence,
         status: 'ready',
         videoUrl: result.videoUrl,
         startImageUrl,
+        referenceImages,
         tailFrameUrl,
       })
-      previousTailFrameUrl = tailFrameUrl
     } catch (error) {
       onResult({
         sequence: segment.sequence,
         status: 'failed',
         startImageUrl,
+        referenceImages,
+        videoUrl,
+        tailFrameUrl,
         error: errorMessage(error),
       })
       previousTailFrameUrl = undefined

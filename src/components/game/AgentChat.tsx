@@ -95,7 +95,7 @@ export function AgentChat({
           <div className="agent-empty">
             <Bot size={19} />
             <p>{hasApiKey
-              ? '我会通过 publish_scene 一次提交剧情、选择和完整视频计划。'
+              ? '我会根据你的选择、剧情状态和上一幕尾帧状态推进下一幕。'
               : `配置 ${apiKeyLabel} API Key 后，我会接管每一幕的推进。`}</p>
           </div>
         )}

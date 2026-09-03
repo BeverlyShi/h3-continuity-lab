@@ -46,7 +46,19 @@ export function GameInteraction({
         <LoaderCircle className="spin" size={20} />
         <div>
           <h2>Pi 导演正在续写故事</h2>
-          <p>模型会通过 publish_scene 发布下一幕、选择和视频计划。</p>
+          <p>模型会发布下一幕，并按模板编写视频 Prompt。</p>
+        </div>
+      </section>
+    )
+  }
+
+  if (session.status === 'awaiting_media') {
+    return (
+      <section className="game-interaction-card waiting" aria-live="polite">
+        <LoaderCircle className="spin" size={20} />
+        <div>
+          <h2>正在完成这一幕</h2>
+          <p>视频生成并完成 DeepSeek 尾帧识别后，将开放新的选择。</p>
         </div>
       </section>
     )

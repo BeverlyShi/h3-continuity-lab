@@ -70,9 +70,9 @@ test('uses low reasoning and avoids Darkbloom for GPT-OSS', () => {
   })
 })
 
-test('keeps the existing output budget for other director models', () => {
+test('gives DeepSeek enough output budget for structured tool arguments', () => {
   assert.deepEqual(getDirectorStreamPolicy('deepseek-v4-flash'), {
-    maxTokens: 2_500,
+    maxTokens: 4_096,
   })
 })
 
@@ -127,18 +127,21 @@ const toolResultContext = (isError: boolean): ShouldStopAfterTurnContext => ({
 })
 
 test('retries a failed tool call up to the configured attempt count before stopping', () => {
-  const shouldStop = createRetryingStopCondition(3)
+  const shouldStop = createRetryingStopCondition(3, () => false)
 
   assert.equal(shouldStop(toolResultContext(true)), false, 'first failure should retry')
   assert.equal(shouldStop(toolResultContext(true)), false, 'second failure should retry once more')
   assert.equal(shouldStop(toolResultContext(true)), true, 'third failure exhausts retries and stops')
 })
 
-test('stops immediately once a tool call succeeds', () => {
-  const shouldStop = createRetryingStopCondition(3)
+test('continues after publish_scene and stops after the whole agent turn is complete', () => {
+  let complete = false
+  const shouldStop = createRetryingStopCondition(3, () => complete)
 
   assert.equal(shouldStop(toolResultContext(true)), false, 'first failure should retry')
-  assert.equal(shouldStop(toolResultContext(false)), true, 'a successful retry stops the loop')
+  assert.equal(shouldStop(toolResultContext(false)), false, 'publishing the scene keeps the tool loop running')
+  complete = true
+  assert.equal(shouldStop(toolResultContext(false)), true, 'the completed video plan stops the loop')
 })
 
 test('keeps a non-trailing failed turn', () => {

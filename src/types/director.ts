@@ -1,4 +1,5 @@
 import type { SceneCharacter, StoryScene, VideoGenerationRequest } from './story'
+import type { SceneCastingResult } from './actor'
 
 export type DirectorStatus = 'idle' | 'thinking' | 'publishing' | 'error'
 
@@ -42,7 +43,7 @@ export type HarnessTraceSnapshot = {
   startedAt: number
   endedAt: number
   durationMs: number
-  outcome: 'completed' | 'aborted' | 'failed' | 'suspended'
+  outcome: 'completed' | 'degraded' | 'aborted' | 'failed' | 'suspended'
   stopReason?: string
   usage?: TraceUsage
   entries: AgentTraceEntry[]
@@ -55,7 +56,7 @@ export type AgentTraceRun = {
   action: string
   startedAt: number
   endedAt?: number
-  status: 'running' | 'completed' | 'error'
+  status: 'running' | 'completed' | 'degraded' | 'error'
   harnessSessionId?: string
   outcome?: HarnessTraceSnapshot['outcome']
   stopReason?: string
@@ -75,6 +76,8 @@ export type DirectorStreamEvent =
   | { type: 'trace_started'; traceId: string; harnessSessionId: string; startedAt: number }
   | { type: 'harness_trace'; trace: HarnessTraceSnapshot }
   | { type: 'scene'; scene: StoryScene; characters: SceneCharacter[] }
+  | { type: 'cast'; casting: SceneCastingResult }
+  | { type: 'cast_error'; message: string }
   | { type: 'video_plan'; video: VideoGenerationRequest }
   | { type: 'video_plan_error'; message: string }
   | { type: 'done' }

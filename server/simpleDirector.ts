@@ -1,6 +1,7 @@
 import { Check } from 'typebox/value'
 import type { TSchema } from 'typebox'
 import { getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
+import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
 import type { DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
 import {
@@ -14,19 +15,25 @@ import {
 import {
   buildStoryInputMessage,
   DIRECTOR_SYSTEM_PROMPT,
-  DIRECTOR_VIDEO_PLAN_USER_MESSAGE,
-  DIRECTOR_VIDEO_TOOL_INSTRUCTIONS,
+  DIRECTOR_VIDEO_SYSTEM_PROMPT,
 } from './directorPrompt.ts'
+import { createCastSceneTool } from './castSceneTool.ts'
 import { assertValidScenePublish } from './publishSceneTool.ts'
-import { assertValidVideoPlan } from './videoPlanTool.ts'
+import {
+  assertValidVideoDraft,
+  assertValidVideoPlan,
+  normalizeVideoPlan,
+  prepareVideoPlanArguments,
+} from './videoPlanTool.ts'
+import { compileVideoPlan } from './videoPromptCompiler.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
-const MAX_OUTPUT_TOKENS = 1_600
+const MAX_OUTPUT_TOKENS = 4_096
 const REQUEST_TIMEOUT_MS = 45_000
 const MAX_HISTORY_TURNS = 20
-// 每个阶段最多尝试 3 次模型调用（1 次初始 + 2 次重试），把工具校验失败信息喂回模型重试。
-const MAX_TOOL_ATTEMPTS = 3
+// 每个阶段最多尝试 2 次模型调用（1 次初始 + 1 次定向修复）。
+const MAX_TOOL_ATTEMPTS = 2
 
 type ApiMessage =
   | { role: 'system' | 'user'; content: string }
@@ -68,8 +75,8 @@ const publishSceneToolDefinition = {
 const submitVideoPlanToolDefinition = {
   type: 'function',
   function: {
-    name: 'submit_video_plan',
-    description: '为已发布的场景提交视频计划。本工具会本地启动视频生成，每回合只调用一次。',
+    name: 'write_video_prompt',
+    description: '根据已发布场景和上一幕实测视觉状态，按模板编译本幕视频 Prompt。',
     parameters: videoPlanSchema,
   },
 } as const
@@ -89,6 +96,7 @@ async function requestToolCall<T>(
   validate: (value: T) => void,
   initialMessages: ApiMessage[],
   signal: AbortSignal | undefined,
+  prepareArguments?: (value: unknown) => T,
 ): Promise<ToolCallOutcome<T>> {
   const toolName = toolDefinition.function.name
   const provider = getDirectorModelProvider(modelId)
@@ -129,7 +137,8 @@ async function requestToolCall<T>(
     if (!toolCall?.function?.arguments) throw new Error(`模型没有调用 ${toolName}。`)
 
     try {
-      const parsed = JSON.parse(toolCall.function.arguments) as T
+      const raw = JSON.parse(toolCall.function.arguments) as unknown
+      const parsed = prepareArguments ? prepareArguments(raw) : raw as T
       if (!Check(schema, parsed)) throw new Error(`模型输出的 ${toolName} 参数不符合 schema。`)
       validate(parsed)
       return { result: parsed, usage: lastUsage, requestMs: totalRequestMs, messages }
@@ -151,6 +160,8 @@ export type SimpleDirectorRequest = {
   apiKey: string
   modelId: DirectorModelId
   context: DirectorTurnContext
+  actors: CastableActor[]
+  castings: CharacterCasting[]
   traceId: string
   signal?: AbortSignal
   send: (event: DirectorStreamEvent) => void
@@ -160,15 +171,25 @@ export async function runSimpleDirector({
   apiKey,
   modelId,
   context,
+  actors,
+  castings,
   traceId,
   signal,
   send,
-}: SimpleDirectorRequest): Promise<{ scene: ScenePublish['scene']; characters: SceneCharacter[]; video?: VideoGenerationRequest }> {
+}: SimpleDirectorRequest): Promise<{
+  scene: ScenePublish['scene']
+  characters: SceneCharacter[]
+  casting?: SceneCastingResult
+  video?: VideoGenerationRequest
+}> {
   const startedAt = Date.now()
   if (context.input.type === 'start') sessionHistories.delete(context.sessionId)
   const history = sessionHistories.get(context.sessionId) ?? []
 
-  const userMessage: ChatMessage = { role: 'user', content: buildStoryInputMessage(context.input) }
+  const userMessage: ChatMessage = {
+    role: 'user',
+    content: buildStoryInputMessage(context.input, context.previousVisualState),
+  }
   const sceneMessages: ApiMessage[] = [
     { role: 'system', content: DIRECTOR_SYSTEM_PROMPT },
     ...history.slice(-MAX_HISTORY_TURNS * 2),
@@ -218,45 +239,84 @@ export async function runSimpleDirector({
     })
 
     send({ type: 'scene', scene: scenePublish.scene, characters: scenePublish.characters })
-    send({ type: 'status', text: '场景已发布，正在生成视频计划。' })
+    send({ type: 'status', text: '场景已发布，正在并行选角和生成视频计划。' })
 
+    let castingResult: SceneCastingResult | undefined
+    let videoDraft: VideoGenerationRequest | undefined
     let videoPlan: VideoGenerationRequest | undefined
+    let castingRequestMs = 0
     let videoRequestMs = 0
-    try {
+    const castingStartedAt = Date.now()
+    traceEntries.push({
+      id: `${traceId}:cast-tool-call`,
+      kind: 'tool_call',
+      title: '调用工具 · cast_scene',
+      timestamp: castingStartedAt,
+      data: {},
+    })
+    const castingPromise = createCastSceneTool(scenePublish.characters, actors, castings)
+      .execute(`${traceId}:cast-scene`, {})
+      .then((result) => {
+        castingRequestMs = Date.now() - castingStartedAt
+        castingResult = result.details
+        traceEntries.push({
+          id: `${traceId}:cast-tool-result`,
+          kind: 'tool_result',
+          title: '工具结果 · cast_scene',
+          timestamp: Date.now(),
+          data: castingResult,
+        })
+        send({ type: 'cast', casting: castingResult })
+      })
+
+    const videoPromise = (async () => {
       const videoMessages: ApiMessage[] = [
-        { role: 'system', content: DIRECTOR_VIDEO_TOOL_INSTRUCTIONS },
+        { role: 'system', content: DIRECTOR_VIDEO_SYSTEM_PROMPT },
         ...sceneOutcome.messages.filter((message) => message.role !== 'system'),
-        { role: 'user', content: DIRECTOR_VIDEO_PLAN_USER_MESSAGE },
+        { role: 'assistant', content: JSON.stringify(scenePublish) },
+        { role: 'user', content: '场景已发布，请调用 write_video_prompt 提交本幕视频计划。' },
       ]
       const videoOutcome = await requestToolCall<VideoPlan>(
         apiKey,
         modelId,
         submitVideoPlanToolDefinition,
         videoPlanSchema,
-        (plan) => assertValidVideoPlan(plan.video, scenePublish.characters),
+        (plan) => {
+          assertValidVideoDraft(plan, scenePublish.characters)
+          assertValidVideoPlan(normalizeVideoPlan(plan), scenePublish.characters)
+        },
         videoMessages,
         signal,
+        prepareVideoPlanArguments,
       )
-      videoPlan = videoOutcome.result.video
+      videoDraft = normalizeVideoPlan(videoOutcome.result)
       videoRequestMs = videoOutcome.requestMs
-      traceEntries.push(
-        {
-          id: `${traceId}:video-system-prompt`,
-          kind: 'input',
-          title: `Simple Agent 视频计划阶段 System Prompt · ${modelId}`,
-          timestamp: Date.now(),
-          text: DIRECTOR_VIDEO_TOOL_INSTRUCTIONS,
-        },
-        {
-          id: `${traceId}:video-tool-call`,
-          kind: 'tool_call',
-          title: '调用工具 · submit_video_plan',
-          timestamp: Date.now(),
-          data: videoPlan,
-        },
-      )
-      send({ type: 'video_plan', video: videoPlan })
-    } catch (error) {
+      traceEntries.push({
+        id: `${traceId}:video-system-prompt`,
+        kind: 'input',
+        title: `Simple Agent 视频计划阶段 System Prompt · ${modelId}`,
+        timestamp: Date.now(),
+        text: DIRECTOR_VIDEO_SYSTEM_PROMPT,
+      })
+    })()
+
+    const [castingOutcome, videoOutcome] = await Promise.allSettled([castingPromise, videoPromise])
+    if (castingOutcome.status === 'rejected') {
+      const message = castingOutcome.reason instanceof Error
+        ? castingOutcome.reason.message
+        : String(castingOutcome.reason)
+      traceEntries.push({
+        id: `${traceId}:cast-error`,
+        kind: 'error',
+        title: '场景选角失败',
+        timestamp: Date.now(),
+        text: message,
+        isError: true,
+      })
+      send({ type: 'cast_error', message })
+    }
+    if (videoOutcome.status === 'rejected') {
+      const error = videoOutcome.reason
       const message = error instanceof Error ? error.message : String(error)
       traceEntries.push({
         id: `${traceId}:video-plan-error`,
@@ -267,6 +327,24 @@ export async function runSimpleDirector({
         isError: true,
       })
       send({ type: 'video_plan_error', message })
+    } else if (videoDraft) {
+      const matchedCharacterIds = new Set(
+        castingResult?.castings.map((casting) => casting.characterId) ?? [],
+      )
+      videoPlan = compileVideoPlan(
+        videoDraft,
+        scenePublish.characters,
+        context.previousVisualState,
+        matchedCharacterIds,
+      )
+      traceEntries.push({
+        id: `${traceId}:video-tool-call`,
+        kind: 'tool_call',
+        title: '调用工具 · write_video_prompt',
+        timestamp: Date.now(),
+        data: videoPlan,
+      })
+      send({ type: 'video_plan', video: videoPlan })
     }
 
     const endedAt = Date.now()
@@ -277,6 +355,7 @@ export async function runSimpleDirector({
       timestamp: endedAt,
       data: {
         sceneRequestMs: sceneOutcome.requestMs,
+        castingRequestMs,
         videoRequestMs,
         modelId,
         totalMs: endedAt - startedAt,
@@ -289,7 +368,7 @@ export async function runSimpleDirector({
       startedAt,
       endedAt,
       durationMs: endedAt - startedAt,
-      outcome: 'completed',
+      outcome: castingResult && videoPlan ? 'completed' : 'degraded',
       stopReason: 'toolUse',
       usage: {
         input: (sceneOutcome.usage?.prompt_tokens ?? 0),
@@ -302,7 +381,12 @@ export async function runSimpleDirector({
     }
     send({ type: 'harness_trace', trace })
     send({ type: 'done' })
-    return { scene: scenePublish.scene, characters: scenePublish.characters, video: videoPlan }
+    return {
+      scene: scenePublish.scene,
+      characters: scenePublish.characters,
+      casting: castingResult,
+      video: videoPlan,
+    }
   } catch (error) {
     const endedAt = Date.now()
     const message = error instanceof Error ? error.message : String(error)
