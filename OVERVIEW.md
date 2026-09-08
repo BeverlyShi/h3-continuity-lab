@@ -41,7 +41,7 @@ agent 调用 finish_turn 结束回合，程序把选角与视频计划推给页�
 - 工具共四个：`publish_scene`、`cast_scene`、`write_video_prompt`、`finish_turn`。视频模式为“仅文字”时不提供 `write_video_prompt`。
 - 选角由模型决定，程序保证连续性：老角色的演员绑定由程序沿用，模型更换必须显式 `recast: true`；同一幕两个人物不能使用同一演员；演员图片仍由前端按演员 ID 从本地演员库解析。
 - 库中没有年龄相符候选时，`cast_scene` 允许用 `create { name, appearance }` 新建演员：模型只写身份层外观，程序拼出 16:9、纯白背景的人物三视图 prompt 并随 `cast` 事件下发，前端把新演员写入演员库。用户在演员库复制 prompt、外部生成图片后上传；待生成期间该人物按无参考图处理，分镜每段重复其外观。
-- `write_video_prompt` 只提交 `style` 与每段的 `characters`、`seconds`、`prompt`。prompt 由 `0–4秒：` 形式的时间块组成，台词处写 `{{line_1}}` 占位符。程序替换为人物姓名与原文，校验每句台词恰好按序使用一次、时间块从 0 开始首尾相接、每段 5～10 秒且不低于台词所需、整幕 15～30 秒、正文不泄漏人物 ID。
+- `write_video_prompt` 只提交 `style` 与每段的 `characters`、`seconds`、`prompt`。prompt 由 `0–4秒：` 形式的时间块组成，台词处写 `{{line_1}}` 占位符。程序替换为人物姓名与原文，校验每句台词恰好按序使用一次、时间块从 0 开始首尾相接、每段 5～15 秒且不低于台词所需、整幕 15～45 秒、正文不泄漏人物 ID。
 - 同一工具连续 3 次校验失败则结束回合；模型停下却没有调用 `finish_turn` 时程序提醒一次，再不行按已有结果降级为纯文字。
 - 同一幕片段按顺序生成，后续片段以及下一幕首段使用上一尾帧作为首帧参考。
 - `inspect_tail_frame` 只调用 DeepSeek Vision，将整幕最终尾帧转换成下一回合使用的实测视觉状态。

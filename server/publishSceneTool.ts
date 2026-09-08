@@ -4,6 +4,11 @@ import {
   scenePublishSchema,
   type ScenePublish,
 } from '../src/types/story.ts'
+import { countHanCharacters } from './textMetrics.ts'
+
+export const DIALOGUE_LINE_MAX_HAN = 20
+export const DIALOGUE_TOTAL_MAX_HAN = 90
+export const DIALOGUE_MAX_LINES = 6
 
 export const SCENE_PUBLISH_ARGUMENTS_EXAMPLE = JSON.stringify({
   scene: {
@@ -82,6 +87,25 @@ export const assertValidScenePublish = (turn: ScenePublish) => {
   if (closingQuote) throw new Error('narrative 人物对白的双引号未闭合。')
   if (spokenLines.length !== turn.dialogues.length || spokenLines.some((line, index) => line !== turn.dialogues[index].text)) {
     throw new Error(`dialogues 台词清单与 narrative 人物对白不一致。必须按顺序逐句保留原文和标点，每组双引号对应一项，无对白提交空数组。narrative 中的台词：${JSON.stringify(spokenLines)}`)
+  }
+
+  const budgetIssues: string[] = []
+  let totalHan = 0
+  for (const dialogue of turn.dialogues) {
+    const han = countHanCharacters(dialogue.text)
+    totalHan += han
+    if (han > DIALOGUE_LINE_MAX_HAN) {
+      budgetIssues.push(`台词 ${dialogue.id} 有 ${han} 个汉字，超过单句 ${DIALOGUE_LINE_MAX_HAN} 字上限`)
+    }
+  }
+  if (turn.dialogues.length > DIALOGUE_MAX_LINES) {
+    budgetIssues.push(`本幕有 ${turn.dialogues.length} 句台词，超过 ${DIALOGUE_MAX_LINES} 句上限`)
+  }
+  if (totalHan > DIALOGUE_TOTAL_MAX_HAN) {
+    budgetIssues.push(`本幕台词合计 ${totalHan} 字，超出 ${DIALOGUE_TOTAL_MAX_HAN} 字预算`)
+  }
+  if (budgetIssues.length) {
+    throw new Error(`${budgetIssues.join('；')}。一幕对应 15–45 秒画面，请缩短台词或把后续对话留到下一回合；不要把对白改写成叙述，也不要删掉已有事件。`)
   }
 }
 

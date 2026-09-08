@@ -122,7 +122,8 @@ test('keeps mechanical timing out of the tool input schema but bounds seconds pe
   assert.equal(Check(videoPlanSchema, { ...plan, totalDuration: 15 }), false)
   assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, startTime: 0 })) }), false)
   assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, seconds: 4 })) }), false)
-  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, seconds: 11 })) }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, seconds: 15 })) }), true)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, seconds: 16 })) }), false)
   assert.equal(Check(videoPlanSchema, { ...plan, segments: [plan.segments[0]] }), false)
   assert.equal(Check(videoPlanSchema, { ...plan, segments: [...plan.segments, ...plan.segments] }), false)
   const request = makeVideoRequest()
@@ -136,15 +137,16 @@ test('keeps mechanical timing out of the tool input schema but bounds seconds pe
 
 test('rejects video requests with unsupported total durations', () => {
   assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 14 }), false)
-  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 31 }), false)
+  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 46 }), false)
   assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 15 }), true)
+  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 45 }), true)
   assert.equal(Check(videoGenerationRequestSchema, {
-    totalDuration: 30,
+    totalDuration: 45,
     style: makeVideoRequest().style,
     videoPrompts: [
-      { ...makeVideoRequest().videoPrompts[0], endTime: 10 },
-      { ...makeVideoRequest().videoPrompts[1], startTime: 10, endTime: 20 },
-      { ...makeVideoRequest().videoPrompts[1], sequence: 3, startTime: 20, endTime: 30 },
+      { ...makeVideoRequest().videoPrompts[0], endTime: 15 },
+      { ...makeVideoRequest().videoPrompts[1], startTime: 15, endTime: 30 },
+      { ...makeVideoRequest().videoPrompts[1], sequence: 3, startTime: 30, endTime: 45 },
     ],
   }), true)
 })

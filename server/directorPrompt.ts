@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs'
 import type { StoryInput, TailFrameVisualState } from '../src/types/story.ts'
-import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from './publishSceneTool.ts'
+import {
+  DIALOGUE_LINE_MAX_HAN,
+  DIALOGUE_MAX_LINES,
+  DIALOGUE_TOTAL_MAX_HAN,
+  SCENE_PUBLISH_ARGUMENTS_EXAMPLE,
+} from './publishSceneTool.ts'
 import { VIDEO_PLAN_ARGUMENTS_EXAMPLE, VIDEO_PLAN_STRUCTURE_GUIDANCE } from './videoPlanTool.ts'
 
 const videoShotSkill = readFileSync(new URL('../skills/video-shot-prompt/SKILL.md', import.meta.url), 'utf8')
@@ -18,7 +23,8 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 - 把玩家刚刚的选择或自由行动作为本幕的直接起因，并保持人物、关系、既有事实和关键物体连续。
 - narrative 只叙述本幕已经发生的内容，不替玩家选择，也不提前演出结尾选项的结果。
 - narrative 中的冲突必须能够通过人物行为、台词或可见环境呈现。
-- narrative 中每句台词不超过 20 个汉字，便于拆成 5–10 秒的视频片段。
+- 一幕对应 15–45 秒画面，是一个节拍，不是一场完整的戏。一场长对话要拆到多个回合里：本幕只写到第一两句交锋就停下让玩家选择，后续对话由玩家的选择推进到下一幕。
+- 台词单句不超过 ${DIALOGUE_LINE_MAX_HAN} 字、全幕合计不超过 ${DIALOGUE_TOTAL_MAX_HAN} 字、最多 ${DIALOGUE_MAX_LINES} 句；通常 2–4 句、合计 60 字以内，剩余时长留给动作和反应。超预算会被拒绝发布。
 - narrative 中人物实际说出的每句对白必须用成对的中文双引号“”或英文双引号包住；双引号只用于人物对白，心声、书信文字、称谓及对白内部引用使用叙述或单引号，不要混用或嵌套双引号。
 - 构思在内心完成，只通过工具输出，不要在工具之外输出分析或正文。
 - 每回合的工作顺序：先 publish_scene 发布场景；如果工具结果列出待选角人物及候选演员，用 cast_scene 提交决定；然后 write_video_prompt 编写分镜；最后 finish_turn 结束回合。工具结果末尾会提示下一步，跳步会被程序拒绝并告诉你先做什么。
@@ -36,7 +42,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 
 ### 场景
 
-- scene.narrative 简洁完整，篇幅以本幕内容为准，避免无关铺陈和重复描写；写清地点、人物动作和关键冲突，结尾留下一个尚未解决的问题或抉择。
+- scene.narrative 简洁完整，篇幅以本幕内容为准，避免无关铺陈和重复描写；写清地点、人物动作和关键冲突，结尾留下一个尚未解决的问题或抉择。narrative 的事件量以 15–45 秒能拍完为准。
 - scene.choices 必须提供 3 个方向明显不同的选项，每项不超过 30 字，id 只能是 "1"、"2"、"3"。
 - characters 必须列出本幕实际出场的全部人物，包括无台词者、背景人物和结尾新出现的人物；未命名者用原文称谓，不编造身份；每个人物都包含稳定的 id、name、gender、minAge、maxAge。同一人物跨幕复用原 id。
 - characters 与 scene 必须位于同一层，不能放在 scene 内。scene 只包含 title、narrative、choices。

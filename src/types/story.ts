@@ -50,8 +50,8 @@ export const tailFrameVisualStateSchema = Type.Object({
 
 export const videoPromptSegmentSchema = Type.Object({
   sequence: Type.Integer({ minimum: 1, maximum: 3 }),
-  startTime: Type.Integer({ minimum: 0, maximum: 25 }),
-  endTime: Type.Integer({ minimum: 5, maximum: 30 }),
+  startTime: Type.Integer({ minimum: 0, maximum: 40 }),
+  endTime: Type.Integer({ minimum: 5, maximum: 45 }),
   characterIds: Type.Array(Type.String({ minLength: 1, maxLength: 50 }), {
     maxItems: 6,
     uniqueItems: true,
@@ -60,7 +60,7 @@ export const videoPromptSegmentSchema = Type.Object({
 }, { additionalProperties: false })
 
 export const videoGenerationRequestSchema = Type.Object({
-  totalDuration: Type.Integer({ minimum: 15, maximum: 30 }),
+  totalDuration: Type.Integer({ minimum: 15, maximum: 45 }),
   style: Type.String({ minLength: 10, maxLength: 400 }),
   videoPrompts: Type.Array(videoPromptSegmentSchema, { minItems: 2, maxItems: 3 }),
 }, { additionalProperties: false })
@@ -77,7 +77,7 @@ export const videoPlanSegmentSchema = Type.Object({
     uniqueItems: true,
     description: '本段实际入画或说话的人物 ID，首段按此顺序附参考图。',
   }),
-  seconds: Type.Integer({ minimum: 5, maximum: 10, description: '本段时长秒数，5–10 的整数；不得低于本段台词字数 ÷ 3.5 再加 1 秒。' }),
+  seconds: Type.Integer({ minimum: 5, maximum: 15, description: '本段时长秒数，5–15 的整数；不得低于本段台词字数 ÷ 3.5 再加 1 秒。' }),
   prompt: Type.String({ minLength: 20, maxLength: 2000, description: '本段分镜正文，由若干时间块组成，每块以“0–4秒：”开头，从 0 秒开始首尾相接，最后一块结束于 seconds。在实际说话位置写 {{line_1}} 形式的台词占位符，不抄写台词正文，不写内部人物 ID。' }),
 }, { additionalProperties: false })
 

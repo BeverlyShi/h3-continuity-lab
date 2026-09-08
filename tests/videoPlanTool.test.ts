@@ -107,14 +107,40 @@ test('validates time blocks: present, starting at zero, contiguous and ending at
   assert.equal(video.videoPrompts[0].endTime, 7)
 })
 
-test('requires seconds to cover the spoken text and keeps the scene within 15–30 seconds', () => {
+test('requires seconds to cover the spoken text and keeps the scene within 15–45 seconds', () => {
   assert.equal(minimumSegmentSeconds(0), 0)
   assert.equal(minimumSegmentSeconds(14), 5)
   assert.equal(minimumSegmentSeconds(22), 8)
   const longLine = [{ ...dialogues[0], text: '下车吧，进了这道门，宫里头的规矩就得一条条都记牢。' }, dialogues[1]]
   assert.throws(() => prepareVideoPlan(plan, characters, longLine), /第 1 段台词共 22 字，至少需要 8 秒，当前 seconds=7/)
   assert.throws(() => prepareVideoPlan(withSegments((segment, index) => index === 1
-    ? { seconds: 6, prompt: segment.prompt.replace('0–8秒', '0–6秒') } : {}), characters, dialogues), /合计 13 秒，必须在 15–30 秒之间/)
+    ? { seconds: 6, prompt: segment.prompt.replace('0–8秒', '0–6秒') } : {}), characters, dialogues), /合计 13 秒，必须在 15–45 秒之间/)
+})
+
+test('allows segments up to 15 seconds and a 45 second scene, rejecting anything longer', () => {
+  const fifteen = withSegments((segment, index) => index === 1
+    ? { seconds: 15, prompt: segment.prompt.replace('0–8秒', '0–15秒') } : {})
+  assert.equal(prepareVideoPlan(fifteen, characters, dialogues).video.totalDuration, 22)
+  assert.throws(() => prepareVideoPlanArguments(withSegments((segment, index) => index === 1
+    ? { seconds: 16, prompt: segment.prompt.replace('0–8秒', '0–16秒') } : {})), /write_video_prompt 参数不符合 schema/)
+
+  const silentThird = {
+    characters: ['heroine'],
+    prompt: '0–15秒：沈知微近景，平视，镜头缓缓推近。她站在台阶前，双手交叠在身前，望向画面右侧。安静。',
+  }
+  const full = {
+    ...plan,
+    segments: [
+      { ...plan.segments[0], seconds: 15, prompt: plan.segments[0].prompt.replace('5–7秒', '5–15秒') },
+      { ...plan.segments[1], seconds: 15, prompt: plan.segments[1].prompt.replace('0–8秒', '0–15秒') },
+      { ...silentThird, seconds: 15 },
+    ],
+  }
+  assert.equal(prepareVideoPlan(full, characters, dialogues).video.totalDuration, 45)
+  assert.throws(() => prepareVideoPlanArguments({
+    ...full,
+    segments: [full.segments[0], full.segments[1], { ...silentThird, seconds: 16, prompt: silentThird.prompt.replace('0–15秒', '0–16秒') }],
+  }), /write_video_prompt 参数不符合 schema/)
 })
 
 test('reports schema problems with structure guidance instead of echoing the payload', () => {
