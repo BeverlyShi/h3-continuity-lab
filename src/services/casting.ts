@@ -12,7 +12,8 @@ export const buildCharacterReferences = (
   return Object.fromEntries(characters.flatMap((character) => {
     const actorId = castingsByCharacterId.get(character.id)
     const actor = actorId ? actorsById.get(actorId) : undefined
-    if (!actor) return []
+    // 参考图待生成的演员不产生 reference，分镜按无参考图处理。
+    if (!actor?.referenceImageUrl) return []
     const reference: VideoCharacterReference = {
       characterName: character.name,
       imageUrl: actor.referenceImageUrl,

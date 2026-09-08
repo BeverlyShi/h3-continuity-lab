@@ -50,6 +50,8 @@ const isCastableActor = (value: unknown): value is CastableActor => {
   return typeof actor.id === 'string'
     && typeof actor.name === 'string'
     && (actor.gender === 'female' || actor.gender === 'male')
+    && (actor.appearance === undefined || typeof actor.appearance === 'string')
+    && typeof actor.hasImage === 'boolean'
     && Number.isInteger(actor.minAge)
     && Number.isInteger(actor.maxAge)
     && actor.minAge! >= 0

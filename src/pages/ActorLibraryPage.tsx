@@ -1,4 +1,4 @@
-import { ImagePlus, Plus, Trash2, UserRound, X } from 'lucide-react'
+import { ClipboardCopy, ImagePlus, Plus, Trash2, Upload, UserRound, X } from 'lucide-react'
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import type { Actor, ActorDraft, ActorGender } from '../types/actor'
 
@@ -8,6 +8,7 @@ type ActorLibraryPageProps = {
   error: string
   onAdd: (draft: ActorDraft) => Promise<Actor>
   onRemove: (actorId: string) => Promise<void>
+  onSetImage: (actorId: string, referenceImageUrl: string) => Promise<void>
 }
 
 const readImage = (file: File) => new Promise<string>((resolve, reject) => {
@@ -17,15 +18,18 @@ const readImage = (file: File) => new Promise<string>((resolve, reject) => {
   reader.readAsDataURL(file)
 })
 
-export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove }: ActorLibraryPageProps) {
+export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSetImage }: ActorLibraryPageProps) {
   const [formOpen, setFormOpen] = useState(false)
   const [name, setName] = useState('')
   const [gender, setGender] = useState<ActorGender>('female')
   const [minAge, setMinAge] = useState(15)
   const [maxAge, setMaxAge] = useState(25)
+  const [appearance, setAppearance] = useState('')
   const [referenceImageUrl, setReferenceImageUrl] = useState('')
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [cardError, setCardError] = useState('')
+  const [copiedActorId, setCopiedActorId] = useState('')
 
   const closeForm = () => {
     setFormOpen(false)
@@ -33,8 +37,33 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove }: Ac
     setGender('female')
     setMinAge(15)
     setMaxAge(25)
+    setAppearance('')
     setReferenceImageUrl('')
     setFormError('')
+  }
+
+  const uploadImage = async (actorId: string, event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.target
+    const file = input.files?.[0]
+    if (!file) return
+    try {
+      await onSetImage(actorId, await readImage(file))
+      setCardError('')
+    } catch (reason) {
+      setCardError(reason instanceof Error ? reason.message : '无法保存图片')
+    } finally {
+      input.value = ''
+    }
+  }
+
+  const copyPrompt = async (actor: Actor) => {
+    try {
+      await navigator.clipboard.writeText(actor.imagePrompt ?? '')
+      setCopiedActorId(actor.id)
+      setTimeout(() => { setCopiedActorId((current) => (current === actor.id ? '' : current)) }, 2000)
+    } catch (reason) {
+      setCardError(reason instanceof Error ? reason.message : '无法复制 prompt')
+    }
   }
 
   const chooseImage = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -66,7 +95,7 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove }: Ac
     setSaving(true)
     setFormError('')
     try {
-      await onAdd({ name: cleanName, gender, minAge, maxAge, referenceImageUrl })
+      await onAdd({ name: cleanName, gender, minAge, maxAge, referenceImageUrl, ...(appearance.trim() ? { appearance: appearance.trim() } : {}) })
       closeForm()
     } catch (reason) {
       setFormError(reason instanceof Error ? reason.message : '保存演员失败')
@@ -81,14 +110,14 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove }: Ac
         <div>
           <span className="actor-eyebrow"><UserRound size={14} />角色参考演员</span>
           <h1>演员库</h1>
-          <p>为每名演员上传一张包含三视图的合成图，并设置性别和年龄区间，游戏会自动完成简单选角。</p>
+          <p>上传一张 16:9、纯白背景的人物三视图；导演在库中找不到合适演员时会新建演员并给出生图 prompt。</p>
         </div>
         <button className="button button-primary" onClick={() => setFormOpen(true)}>
           <Plus size={15} />新增演员
         </button>
       </section>
 
-      {error && <div className="actor-notice error">{error}</div>}
+      {(error || cardError) && <div className="actor-notice error">{error || cardError}</div>}
       {loading ? (
         <div className="actor-empty">正在读取演员库…</div>
       ) : actors.length === 0 ? (
@@ -102,13 +131,20 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove }: Ac
           {actors.map((actor) => (
             <article className="actor-card" key={actor.id}>
               <div className="actor-card-image">
-                <img src={actor.referenceImageUrl} alt={`${actor.name}三视图`} />
-                <span>三视图</span>
+                {actor.referenceImageUrl ? (
+                  <>
+                    <img src={actor.referenceImageUrl} alt={`${actor.name}三视图`} />
+                    <span>三视图</span>
+                  </>
+                ) : (
+                  <div className="actor-card-pending"><UserRound size={26} />待生成参考图</div>
+                )}
               </div>
               <div className="actor-card-info">
                 <div>
                   <h2>{actor.name}</h2>
                   <p>{actor.gender === 'female' ? '女' : '男'} · {actor.minAge}～{actor.maxAge} 岁</p>
+                  {actor.appearance && <p className="actor-card-appearance">{actor.appearance}</p>}
                 </div>
                 <button
                   type="button"
@@ -118,6 +154,20 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove }: Ac
                 >
                   <Trash2 size={14} />
                 </button>
+              </div>
+              <div className="actor-card-actions">
+                <button
+                  type="button"
+                  disabled={!actor.imagePrompt}
+                  title={actor.imagePrompt ?? '该演员没有生图 prompt'}
+                  onClick={() => { void copyPrompt(actor) }}
+                >
+                  <ClipboardCopy size={13} />{copiedActorId === actor.id ? '已复制' : '复制 prompt'}
+                </button>
+                <label>
+                  <Upload size={13} />{actor.referenceImageUrl ? '更换图片' : '上传三视图'}
+                  <input type="file" accept="image/*" onChange={(event) => { void uploadImage(actor.id, event) }} />
+                </label>
               </div>
             </article>
           ))}
@@ -140,6 +190,16 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove }: Ac
                 <label>最小年龄<input type="number" min="0" max="100" value={minAge} onChange={(event) => setMinAge(Number(event.target.value))} /></label>
                 <label>最大年龄<input type="number" min="0" max="100" value={maxAge} onChange={(event) => setMaxAge(Number(event.target.value))} /></label>
               </div>
+              <label className="actor-form-appearance">
+                外观描述（可选）
+                <textarea
+                  value={appearance}
+                  maxLength={300}
+                  rows={3}
+                  placeholder="年龄、脸型、发式、服饰、标志物、气质"
+                  onChange={(event) => setAppearance(event.target.value)}
+                />
+              </label>
               <label className="actor-upload">
                 {referenceImageUrl ? <img src={referenceImageUrl} alt="三视图预览" /> : <ImagePlus size={22} />}
                 <span>{referenceImageUrl ? '更换三视图' : '上传三视图合成图'}</span>

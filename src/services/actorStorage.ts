@@ -43,14 +43,16 @@ export const loadActors = async () => {
   return storedActors.flatMap((stored) => {
     const referenceImageUrl = stored.referenceImageUrl ?? stored.views?.front
     if (!stored.id || !stored.name || !stored.gender || stored.minAge === undefined
-      || stored.maxAge === undefined || stored.createdAt === undefined || !referenceImageUrl) return []
+      || stored.maxAge === undefined || stored.createdAt === undefined) return []
     return [{
       id: stored.id,
       name: stored.name,
       gender: stored.gender,
       minAge: stored.minAge,
       maxAge: stored.maxAge,
-      referenceImageUrl,
+      ...(referenceImageUrl ? { referenceImageUrl } : {}),
+      ...(stored.appearance ? { appearance: stored.appearance } : {}),
+      ...(stored.imagePrompt ? { imagePrompt: stored.imagePrompt } : {}),
       createdAt: stored.createdAt,
     } satisfies Actor]
   }).sort((left, right) => left.createdAt - right.createdAt)
@@ -58,6 +60,9 @@ export const loadActors = async () => {
 
 export const saveActor = (actor: Actor) =>
   runRequest<IDBValidKey>('readwrite', (store) => store.put(actor))
+
+export const saveActors = (actors: Actor[]) =>
+  Promise.all(actors.map((actor) => saveActor(actor)))
 
 export const deleteActor = (actorId: string) =>
   runRequest<undefined>('readwrite', (store) => store.delete(actorId))

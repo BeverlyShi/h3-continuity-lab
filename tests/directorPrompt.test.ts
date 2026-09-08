@@ -17,6 +17,8 @@ test('the single system prompt covers story, casting and shot writing in a fixed
   assert.match(DIRECTOR_SYSTEM_PROMPT, /先 publish_scene 发布场景.*cast_scene.*write_video_prompt.*finish_turn/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /"1"、"2"、"3"/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /更换往回合已绑定的演员必须设置 recast: true/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /create: \{ name, appearance \}/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /appearance 只写身份层外观/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /空间关系只用画面坐标/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /镜头硬切为/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /skipVideo\.reason/)

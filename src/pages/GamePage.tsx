@@ -16,7 +16,7 @@ import { palaceStory } from '../stories/palace'
 import { isDirectorActive } from '../services/directorStatus'
 import type { AgentTraceUpdate } from '../types/director'
 import type { SceneCharacter, VideoGenerationRequest } from '../types/story'
-import type { Actor } from '../types/actor'
+import type { Actor, CreatedActor } from '../types/actor'
 import type { VideoCharacterReference } from '../types/video'
 import type { GameScene } from '../types/game'
 
@@ -28,6 +28,7 @@ type GamePageProps = {
   onTraceUpdate: (update: AgentTraceUpdate) => void
   onRequestApiKey: () => void
   actors: Actor[]
+  onActorsCreated: (created: CreatedActor[]) => Promise<void> | void
 }
 
 const DIRECTOR_MODEL_STORAGE_KEY = 'palace-director-model'
@@ -62,7 +63,7 @@ const loadVideoMode = (): NonNullable<GameScene['videoMode']> => {
   }
 }
 
-export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors }: GamePageProps) {
+export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors, onActorsCreated }: GamePageProps) {
   const game = useGameSession()
   const [modelId, setModelId] = useState<DirectorModelId>(loadDirectorModel)
   const [thinkingEnabled, setThinkingEnabled] = useState(loadDirectorThinking)
@@ -112,6 +113,7 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
     modelId,
     thinkingEnabled,
     actors,
+    onActorsCreated,
     submitSceneVideoIfEnabled,
   )
 

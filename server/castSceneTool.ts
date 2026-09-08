@@ -1,13 +1,16 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core/node'
 import { Type, type Static } from 'typebox'
-import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
+import type { CastableActor, CharacterCasting, CreatedActor, SceneCastingResult } from '../src/types/actor.ts'
 import type { SceneCharacter } from '../src/types/story.ts'
+import { buildActorImagePrompt } from './actorPortraitPrompt.ts'
 
 export const MAX_CANDIDATES_PER_CHARACTER = 8
 
 // 本局的选角账本：绑定表由程序持有，跨回合沿用，模型只对新人物做决定。
 export type CastingBook = {
   actors: CastableActor[]
+  // 本回合新建、等待用户生成参考图的演员。
+  createdActors: CreatedActor[]
   bindings: Map<string, string>
   // 本幕已经显式决定“不给参考图”的人物。
   declined: Set<string>
@@ -20,13 +23,15 @@ export const createCastingBook = (actors: CastableActor[], existing: CharacterCa
   const validExisting = existing.filter((casting) => actorIds.has(casting.actorId))
   return {
     actors,
+    createdActors: [],
     bindings: new Map(validExisting.map((casting) => [casting.characterId, casting.actorId])),
     declined: new Set(),
     lockedCharacterIds: new Set(validExisting.map((casting) => casting.characterId)),
   }
 }
 
-const actorLabel = (actor: CastableActor) => `${actor.name}（${actor.id}，${actor.minAge}–${actor.maxAge}）`
+const actorLabel = (actor: CastableActor) =>
+  `${actor.name}（${actor.id}，${actor.minAge}–${actor.maxAge}${actor.appearance ? `，${actor.appearance}` : ''}）`
 
 const rangesOverlap = (
   left: { minAge: number; maxAge: number },
@@ -36,6 +41,16 @@ const rangesOverlap = (
 const ageCenter = (range: { minAge: number; maxAge: number }) => (range.minAge + range.maxAge) / 2
 
 export type CastingCandidate = CastableActor & { ageMatch: boolean; usedBy?: string }
+
+const toCastableActor = (actor: CreatedActor): CastableActor => ({
+  id: actor.id,
+  name: actor.name,
+  gender: actor.gender,
+  minAge: actor.minAge,
+  maxAge: actor.maxAge,
+  appearance: actor.appearance,
+  hasImage: false,
+})
 
 // 为待选角人物列出候选演员：同性别，年龄相符的排在前面，都按年龄区间中心距离升序，最多 8 个。
 export const listCastingCandidates = (book: CastingBook, character: SceneCharacter, characters: SceneCharacter[]): CastingCandidate[] => {
@@ -73,10 +88,12 @@ export const resolveSceneCasting = (book: CastingBook, characters: SceneCharacte
     unmatchedCharacterIds: characters
       .filter((character) => !book.bindings.has(character.id))
       .map((character) => character.id),
+    ...(book.createdActors.length ? { createdActors: book.createdActors } : {}),
   }
 }
 
-const candidateLabel = (candidate: CastingCandidate) => `${actorLabel(candidate)}${candidate.usedBy ? `，已扮演：${candidate.usedBy}` : ''}`
+const candidateLabel = (candidate: CastingCandidate) =>
+  `${actorLabel(candidate)}${candidate.hasImage ? '' : '，待生成图片'}${candidate.usedBy ? `，已扮演：${candidate.usedBy}` : ''}`
 
 // 演员库为空时没有可挑的对象，直接把待选角人物记为无参考图，省去一次无意义的 cast_scene。
 export const describeCastingStatus = (book: CastingBook, characters: SceneCharacter[]) => {
@@ -120,8 +137,12 @@ export const describeCastingStatus = (book: CastingBook, characters: SceneCharac
 export const castSceneSchema = Type.Object({
   assignments: Type.Array(Type.Object({
     characterId: Type.String({ minLength: 1, maxLength: 50 }),
-    actorId: Type.Union([Type.String({ minLength: 1, maxLength: 100 }), Type.Null()], { description: '选定的演员 ID；null 表示该人物不使用参考图。' }),
-    reason: Type.String({ minLength: 1, maxLength: 200, description: '选择或放弃该演员的理由。' }),
+    actorId: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 100 }), Type.Null()], { description: '选定的演员 ID；null 表示该人物不使用参考图。与 create 二选一。' })),
+    create: Type.Optional(Type.Object({
+      name: Type.String({ minLength: 1, maxLength: 30, description: '新演员姓名。' }),
+      appearance: Type.String({ minLength: 10, maxLength: 300, description: '人物外观：年龄、脸型、发式、服饰、标志物、气质；不写构图、背景、光线' }),
+    }, { additionalProperties: false, description: '演员库没有合适人选时新建演员；与 actorId 二选一。' })),
+    reason: Type.String({ minLength: 1, maxLength: 200, description: '选择、放弃或新建该演员的理由。' }),
     recast: Type.Optional(Type.Boolean({ description: '仅在确需更换已绑定演员时设为 true。' })),
   }, { additionalProperties: false }), { maxItems: 8 }),
 }, { additionalProperties: false })
@@ -135,7 +156,7 @@ export const createCastSceneTool = (
 ): AgentTool<typeof castSceneSchema, SceneCastingResult> => ({
   name: 'cast_scene',
   label: '为场景选择演员',
-  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。提交后本幕所有人物都必须有选角决定。',
+  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。演员库没有合适人选时，可通过 create { name, appearance } 新建演员，程序会生成三视图 prompt 交给用户生成图片；只写人物身份层外观。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。提交后本幕所有人物都必须有选角决定。',
   parameters: castSceneSchema,
   executionMode: 'sequential',
   execute: async (_toolCallId, input) => {
@@ -148,6 +169,8 @@ export const createCastSceneTool = (
     const nextBindings = new Map(book.bindings)
     const nextDeclined = new Set(book.declined)
     const seenCharacterIds = new Set<string>()
+    const createRequests: Array<{ character: SceneCharacter; create: { name: string; appearance: string } }> = []
+    const created: CreatedActor[] = []
 
     for (const assignment of input.assignments) {
       const character = charactersById.get(assignment.characterId)
@@ -160,9 +183,20 @@ export const createCastSceneTool = (
         continue
       }
       seenCharacterIds.add(character.id)
+      if ((assignment.actorId === undefined) === (assignment.create === undefined)) {
+        issues.push(`人物 ${character.name} 必须提供 actorId（或 null）或 create 之一`)
+        continue
+      }
       const existingActorId = book.bindings.get(character.id)
       if (existingActorId && existingActorId !== assignment.actorId && book.lockedCharacterIds.has(character.id) && !assignment.recast) {
         issues.push(`人物 ${character.name} 已绑定演员 ${actorsById.get(existingActorId)?.name ?? existingActorId}，不能更换；确需更换请设置 recast: true 并说明理由`)
+        continue
+      }
+      if (assignment.create) {
+        // 新建的绑定推迟到全部 actorId 落定后再判断候选是否真的都不可用。
+        nextBindings.delete(character.id)
+        nextDeclined.delete(character.id)
+        createRequests.push({ character, create: assignment.create })
         continue
       }
       if (assignment.actorId === null) {
@@ -170,7 +204,7 @@ export const createCastSceneTool = (
         nextDeclined.add(character.id)
         continue
       }
-      const actor = actorsById.get(assignment.actorId)
+      const actor = actorsById.get(assignment.actorId!)
       if (!actor) {
         issues.push(`演员 ${assignment.actorId} 不存在，请从 publish_scene 结果列出的候选中选择`)
         continue
@@ -184,6 +218,38 @@ export const createCastSceneTool = (
       }
       nextBindings.set(character.id, actor.id)
       nextDeclined.delete(character.id)
+    }
+
+    for (const { character, create } of createRequests) {
+      const occupied = new Set(characters.flatMap((other) => {
+        if (other.id === character.id) return []
+        const actorId = nextBindings.get(other.id)
+        return actorId ? [actorId] : []
+      }))
+      const available = listCastingCandidates(book, character, characters)
+        .filter((candidate) => candidate.ageMatch && !occupied.has(candidate.id))
+      if (available.length) {
+        issues.push(`人物 ${character.name} 已有年龄相符的候选演员 ${available.map((candidate) => candidate.name).join('、')}，请从中选择；确实都不合适请在 reason 中说明并把 actorId 设为 null`)
+        continue
+      }
+      const actor: CreatedActor = {
+        id: crypto.randomUUID(),
+        name: create.name,
+        gender: character.gender,
+        minAge: character.minAge,
+        maxAge: character.maxAge,
+        appearance: create.appearance,
+        imagePrompt: buildActorImagePrompt({
+          name: create.name,
+          gender: character.gender,
+          minAge: character.minAge,
+          maxAge: character.maxAge,
+          appearance: create.appearance,
+        }),
+      }
+      created.push(actor)
+      actorsById.set(actor.id, toCastableActor(actor))
+      nextBindings.set(character.id, actor.id)
     }
 
     const actorUsage = new Map<string, string[]>()
@@ -205,18 +271,39 @@ export const createCastSceneTool = (
     for (const [characterId, actorId] of nextBindings) book.bindings.set(characterId, actorId)
     book.declined.clear()
     for (const characterId of nextDeclined) book.declined.add(characterId)
+    // 本回合新建后又被覆盖的演员不再需要参考图，从账本里撤掉。
+    const boundActorIds = new Set(book.bindings.values())
+    const survivingCreated = [...book.createdActors, ...created].filter((actor) => boundActorIds.has(actor.id))
+    const survivingIds = new Set(survivingCreated.map((actor) => actor.id))
+    const droppedIds = new Set([...book.createdActors, ...created]
+      .filter((actor) => !survivingIds.has(actor.id))
+      .map((actor) => actor.id))
+    book.actors = [
+      ...book.actors.filter((actor) => !droppedIds.has(actor.id)),
+      ...created.filter((actor) => survivingIds.has(actor.id)).map(toCastableActor),
+    ]
+    book.createdActors = survivingCreated
 
     const result = resolveSceneCasting(book, characters)
     await onCast?.(result)
+    const createdIds = new Set(book.createdActors.map((actor) => actor.id))
     const table = characters.map((character) => {
       const actorId = book.bindings.get(character.id)
       const actor = actorId ? actorsById.get(actorId) : undefined
-      return `- ${character.name}：${actor ? `${actor.name}，有参考图` : '无参考图'}`
+      if (!actor) return `- ${character.name}：无参考图`
+      if (actor.hasImage) return `- ${character.name}：${actor.name}，有参考图`
+      return `- ${character.name}：${createdIds.has(actor.id) ? '新演员 ' : ''}${actor.name}，待生成参考图`
+    })
+    const pendingAppearances = characters.flatMap((character) => {
+      const actorId = book.bindings.get(character.id)
+      const actor = actorId ? actorsById.get(actorId) : undefined
+      return actor && !actor.hasImage && actor.appearance ? [`- ${actor.name}：${actor.appearance}`] : []
     })
     const text = [
       '选角已确定：',
       ...table,
       ...(warnings.length ? [`提示：${warnings.join('；')}。`] : []),
+      ...(pendingAppearances.length ? ['无参考图人物的外观（分镜每段重复使用）：', ...pendingAppearances] : []),
       '下一步：调用 write_video_prompt 编写分镜；首段只为有参考图的人物附图。',
     ].join('\n')
     return {

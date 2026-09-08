@@ -72,6 +72,20 @@ test('the director endpoint runs the single agent for both official providers wi
       } }),
     })
     assert.match(await invalid.text(), /视频模式设置无效/)
+
+    for (const actor of [
+      { id: 'actor-a', name: '演员甲', gender: 'female', minAge: 16, maxAge: 24 },
+      { id: 'actor-a', name: '演员甲', gender: 'female', minAge: 16, maxAge: 24, hasImage: 'yes' },
+    ]) {
+      const badActors = await realFetch(`http://127.0.0.1:${address.port}/api/director/turn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
+        body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode: 'manual', traceId: 'invalid-actors', actors: [actor], castings: [], context: {
+          ok: true, sessionId: 'http-invalid-actors', turn: 1, input: { type: 'start' },
+        } }),
+      })
+      assert.match(await badActors.text(), /演员库数据无效/)
+    }
   } finally {
     globalThis.fetch = realFetch
     await new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve()))

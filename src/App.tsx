@@ -117,6 +117,7 @@ function App() {
           error={actorLibrary.error}
           onAdd={actorLibrary.addActor}
           onRemove={actorLibrary.removeActor}
+          onSetImage={actorLibrary.setActorImage}
         />
       </div>
       <div hidden={workspace !== 'game'}>
@@ -128,6 +129,7 @@ function App() {
           onTraceUpdate={updateTrace}
           onRequestApiKey={() => setIsApiDialogOpen(true)}
           actors={actorLibrary.actors}
+          onActorsCreated={actorLibrary.addCreatedActors}
         />
       </div>
       <div hidden={workspace !== 'trace'}>

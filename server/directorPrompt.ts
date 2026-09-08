@@ -28,7 +28,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 ## Tool Guidance
 
 - publish_scene：本回合第一个工具，只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
-- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。
+- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。
 - write_video_prompt：把已发布的 narrative 转成 2–3 段视频 prompt。${VIDEO_PLAN_STRUCTURE_GUIDANCE}
 - finish_turn：全部完成后调用。视频计划无法完成时，通过 skipVideo.reason 说明后结束。
 
@@ -49,7 +49,9 @@ ${SCENE_PUBLISH_ARGUMENTS_EXAMPLE}
 
 ### 选角
 
-- 为新人物挑演员时按性别、年龄区间和人物气质判断；背景人物或没有合适演员时把 actorId 设为 null 并说明理由。
+- 为新人物挑演员时优先从 publish_scene 列出的年龄相符候选中选择，候选后面的外观文字用于判断气质是否贴合。
+- 库中没有年龄相符的候选时，用 create: { name, appearance } 新建演员。appearance 只写身份层外观：年龄、脸型、发式、服饰、标志物、气质，不写构图、背景、光线，40 字左右。
+- 背景人物或不需要参考图的人物把 actorId 设为 null 并说明理由。
 - 保持老角色的演员不变，除非剧情明确要求更换。
 
 ### 视频分镜

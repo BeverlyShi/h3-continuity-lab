@@ -45,6 +45,15 @@ button { color: inherit; }
 .actor-card-info { min-height: 66px; padding: 12px 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .actor-card-info h2 { color: #1e293b; font-size: 14px; line-height: 20px; font-weight: 650; }
 .actor-card-info p { margin-top: 2px; color: #64748b; font-size: 11px; }
+.actor-card-info .actor-card-appearance { overflow: hidden; color: #94a3b8; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.actor-card-pending { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: #94a3b8; font-size: 11px; }
+.actor-card-actions { padding: 0 13px 12px; display: flex; gap: 7px; }
+.actor-card-actions button, .actor-card-actions label { flex: 1; height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #e2e8f0; border-radius: 6px; color: #475569; background: #f8fafc; font-size: 10px; cursor: pointer; }
+.actor-card-actions button:hover:not(:disabled), .actor-card-actions label:hover { border-color: #cbd5e1; background: #f1f5f9; }
+.actor-card-actions button:disabled { color: #cbd5e1; cursor: not-allowed; }
+.actor-card-actions input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.actor-form-appearance { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; color: #475569; font-size: 11px; }
+.actor-form-appearance textarea { padding: 7px 9px; border: 1px solid #e2e8f0; border-radius: 7px; color: #1e293b; font: inherit; font-size: 12px; resize: vertical; }
 .actor-card-info button { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 6px; color: #94a3b8; background: transparent; cursor: pointer; }
 .actor-card-info button:hover { color: #b91c1c; background: #fef2f2; }
 .actor-empty { min-height: 360px; margin-top: 18px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; border: 1px dashed #cbd5e1; border-radius: 10px; color: #94a3b8; background: white; font-size: 11px; }
@@ -241,6 +250,8 @@ textarea:focus, input:focus { border-color: #64748b; box-shadow: 0 0 0 3px rgba(
 .game-cast-card small { overflow: hidden; color: #94a3b8; font-size: 9px; line-height: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .game-cast-placeholder { display: grid; place-items: center; color: #b91c1c; background: #fee2e2; }
 .game-cast-card.unmatched { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
+.game-cast-card.pending { border-color: #fde68a; color: #b45309; background: #fffbeb; }
+.game-cast-card.pending .game-cast-placeholder { color: #b45309; background: #fef3c7; }
 .game-cast-card.loading { pointer-events: none; }
 .game-cast-skeleton { background: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
 .game-cast-error { width: 100%; padding: 8px 10px; border: 1px solid #fecaca; border-radius: 6px; color: #b91c1c; background: #fef2f2; font-size: 10px; line-height: 15px; }

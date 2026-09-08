@@ -12,9 +12,9 @@ import { installScriptedProvider, messageText, type ScriptedStep } from './helpe
 const scene = JSON.parse(SCENE_PUBLISH_ARGUMENTS_EXAMPLE)
 const plan = JSON.parse(VIDEO_PLAN_ARGUMENTS_EXAMPLE)
 const actors: CastableActor[] = [
-  { id: 'actor-young', name: '演员甲', gender: 'female', minAge: 16, maxAge: 22 },
-  { id: 'actor-elder', name: '演员乙', gender: 'female', minAge: 40, maxAge: 55 },
-  { id: 'actor-man', name: '演员丙', gender: 'male', minAge: 30, maxAge: 40 },
+  { id: 'actor-young', name: '演员甲', gender: 'female', minAge: 16, maxAge: 22, hasImage: true },
+  { id: 'actor-elder', name: '演员乙', gender: 'female', minAge: 40, maxAge: 55, hasImage: true },
+  { id: 'actor-man', name: '演员丙', gender: 'male', minAge: 30, maxAge: 40, hasImage: true },
 ]
 
 const withTempTraces = async (run: (runDirectorAgent: typeof import('../server/directorAgent.ts')['runDirectorAgent']) => Promise<void>) => {
@@ -262,6 +262,50 @@ test('gives up after three consecutive failed publish attempts and reports the l
       const trace = events.findLast((event) => event.type === 'harness_trace')
       assert.ok(trace?.type === 'harness_trace')
       assert.equal(trace.trace.outcome, 'failed')
+    } finally {
+      provider.restore()
+    }
+  })
+})
+
+test('creates a new actor when the library has no candidate for a scene character and streams it with the cast event', async () => {
+  await withTempTraces(async (runDirectorAgent) => {
+    const sceneWithEunuch = {
+      ...scene,
+      characters: [...scene.characters, { id: 'eunuch', name: '李公公', gender: 'male', minAge: 45, maxAge: 55 }],
+    }
+    const appearance = '五十上下，清瘦长脸，灰白鬓发，藏青太监常服，拂尘挽在臂弯'
+    const provider = installScriptedProvider([
+      { tool: 'publish_scene', args: sceneWithEunuch },
+      { tool: 'cast_scene', args: { assignments: [
+        { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
+        { characterId: 'steward', actorId: 'actor-elder', reason: '年龄相符' },
+        { characterId: 'eunuch', create: { name: '演员丁', appearance }, reason: '库中没有男演员' },
+      ] } },
+      { tool: 'write_video_prompt', args: plan },
+      { tool: 'finish_turn', args: {} },
+    ])
+    const events: DirectorStreamEvent[] = []
+    try {
+      const result = await runDirectorAgent({
+        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
+        context: { ok: true, sessionId: 'loop-create-actor', turn: 1, input: { type: 'start' } },
+        actors: actors.filter((actor) => actor.gender === 'female'),
+        castings: [], traceId: 'loop-create-actor', videoMode: 'manual',
+        send: (event) => { events.push(event) },
+      })
+      assert.equal(provider.remaining(), 0)
+      assert.match(lastToolResult(provider.requests[1]), /李公公（eunuch，男 45–55）：无同性别演员/)
+      assert.match(lastToolResult(provider.requests[2]), /李公公：新演员 演员丁，待生成参考图/)
+      assert.match(lastToolResult(provider.requests[2]), new RegExp(`演员丁：${appearance}`))
+      const castEvent = events.find((event) => event.type === 'cast')
+      assert.ok(castEvent?.type === 'cast')
+      assert.equal(castEvent.casting.createdActors?.length, 1)
+      const createdId = castEvent.casting.createdActors![0].id
+      assert.match(castEvent.casting.createdActors![0].imagePrompt, /16:9/)
+      assert.deepEqual(result.casting?.castings.find((casting) => casting.characterId === 'eunuch'),
+        { characterId: 'eunuch', actorId: createdId })
+      assert.deepEqual(result.casting?.createdActors, castEvent.casting.createdActors)
     } finally {
       provider.restore()
     }

@@ -10,7 +10,7 @@ import type {
 } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
 import type { SceneCharacter, StoryChoice, VideoGenerationRequest } from '../types/story'
-import type { Actor } from '../types/actor'
+import type { Actor, CreatedActor } from '../types/actor'
 import type { VideoCharacterReference } from '../types/video'
 import type { useGameSession } from './useGameSession'
 
@@ -39,6 +39,7 @@ export function useDirectorAgent(
   modelId: DirectorModelId,
   thinkingEnabled: boolean,
   actors: Actor[],
+  onActorsCreated: (created: CreatedActor[]) => Promise<void> | void,
   submitSceneVideo?: SubmitSceneVideo,
 ) {
   const [messages, setMessages] = useState<DirectorChatMessage[]>([])
@@ -116,6 +117,13 @@ export function useDirectorAgent(
         }
       }
       if (event.type === 'cast' && publishedSceneId) {
+        const created = event.casting.createdActors ?? []
+        if (created.length) {
+          void (async () => { await onActorsCreated(created) })().catch((reason: unknown) => {
+            append('error', `新建演员入库失败：${reason instanceof Error ? reason.message : '未知错误'}`)
+          })
+          append('status', `新建演员 ${created.map((actor) => actor.name).join('、')}，待生成参考图，请到演员库复制 prompt 生成后上传。`)
+        }
         const applied = game.applySceneCasting(publishedSceneId, event.casting, actors)
         publishedCharacterReferences = applied?.characterReferences ?? {}
         castingReady = true
@@ -155,12 +163,14 @@ export function useDirectorAgent(
         bigModelApiKey,
         context,
         traceId,
-        actors: actors.map(({ id, name, gender, minAge, maxAge }) => ({
+        actors: actors.map(({ id, name, gender, minAge, maxAge, appearance, referenceImageUrl }) => ({
           id,
           name,
           gender,
           minAge,
           maxAge,
+          ...(appearance ? { appearance } : {}),
+          hasImage: Boolean(referenceImageUrl),
         })),
         castings: game.getCastings(),
         videoMode,
@@ -181,7 +191,7 @@ export function useDirectorAgent(
     } finally {
       runningRef.current = false
     }
-  }, [actors, openRouterApiKey, deepseekApiKey, bigModelApiKey, videoMode, append, game, modelId, thinkingEnabled, onTraceUpdate, submitSceneVideo])
+  }, [actors, openRouterApiKey, deepseekApiKey, bigModelApiKey, videoMode, append, game, modelId, thinkingEnabled, onTraceUpdate, onActorsCreated, submitSceneVideo])
 
   const startStory = useCallback(() => {
     if (runningRef.current) return false

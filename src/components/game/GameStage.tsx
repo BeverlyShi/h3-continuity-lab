@@ -470,6 +470,14 @@ export function GameStage(props: GameStageProps) {
                     </div>
                   )
                 }
+                if (!actor.referenceImageUrl) {
+                  return (
+                    <div className="game-cast-card pending" key={characterId}>
+                      <span className="game-cast-placeholder"><UserRound size={16} /></span>
+                      <div><strong>{actor.name}</strong><small>待生成参考图</small></div>
+                    </div>
+                  )
+                }
                 return (
                   <a
                     className="game-cast-card"
