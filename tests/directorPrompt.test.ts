@@ -23,6 +23,8 @@ test('the single system prompt covers story, casting and shot writing in a fixed
   assert.match(DIRECTOR_SYSTEM_PROMPT, /合计不超过 90 字/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /空间关系只用画面坐标/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /镜头硬切为/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /建立镜头/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /入画动作/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /skipVideo\.reason/)
   assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /actionSeconds|visualContext|videoPrompts|宿籍|数值|150|250/)
   assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /search_actors/)
