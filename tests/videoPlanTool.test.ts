@@ -59,6 +59,17 @@ test('the system prompt example passes validation against the publish example', 
   assert.match(video.videoPrompts[0].prompt, /掌事姑姑说：“你识字吗？”/)
 })
 
+test('drops the redundant punctuation left after a placeholder so the quote joins the next sentence', () => {
+  const { video } = prepareVideoPlan(plan, characters, dialogues)
+  assert.doesNotMatch(video.videoPrompts[0].prompt, /”[。；]/)
+  assert.ok(video.videoPrompts[0].prompt.includes(`李公公说：“${dialogues[0].text}”沈知微从车门向他看来。`))
+  const example = prepareVideoPlan(JSON.parse(VIDEO_PLAN_ARGUMENTS_EXAMPLE), [
+    { id: 'heroine', name: '女主', gender: 'female', minAge: 16, maxAge: 20 },
+    { id: 'steward', name: '掌事姑姑', gender: 'female', minAge: 40, maxAge: 50 },
+  ], [{ id: 'line_1', characterId: 'steward', text: '你识字吗？' }])
+  assert.ok(example.video.videoPrompts[0].prompt.includes('掌事姑姑说：“你识字吗？”安静。'))
+})
+
 test('rejects omitted, unknown, duplicate and reordered dialogue references', () => {
   const cases: Array<[VideoPlan, RegExp]> = [
     [withSegments((segment, index) => index === 0 ? { prompt: segment.prompt.replace('{{line_1}}', '开口说话') } : {}), /尚未安排 line_1：李公公“下车吧/],
