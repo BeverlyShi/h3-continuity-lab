@@ -13,6 +13,7 @@ import type { SceneCastingResult } from '../types/actor'
 import { buildCharacterReferences } from '../services/casting'
 import { applyManualClip, invalidateManualClipsFrom, prepareManualScene } from '../services/manualSceneVideo'
 import { deleteUploadedVideo, loadUploadedVideo } from '../services/uploadedVideoStorage'
+import { ALLOW_CHOICE_BEFORE_MEDIA } from '../config/debugFlags'
 
 const now = () => Date.now()
 
@@ -156,7 +157,10 @@ export function useGameSession() {
 
   const queueInput = useCallback((input: StoryInput) => {
     const current = sessionRef.current
-    if (!current || current.status !== 'awaiting_action') return null
+    if (!current) return null
+    const canAct = current.status === 'awaiting_action'
+      || (ALLOW_CHOICE_BEFORE_MEDIA && current.status === 'awaiting_media')
+    if (!canAct) return null
     const next: GameSession = {
       ...current,
       status: 'awaiting_agent',

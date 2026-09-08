@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { Bot, LoaderCircle, RotateCcw, Send } from 'lucide-react'
 import { isDirectorActive } from '../../services/directorStatus'
+import { ALLOW_CHOICE_BEFORE_MEDIA } from '../../config/debugFlags'
 import type { DirectorStatus } from '../../types/director'
 import type { GameSession } from '../../types/game'
 import type { StoryChoice } from '../../types/story'
@@ -55,7 +56,8 @@ export function GameInteraction({
   }
 
   // 场景一发布就展示三个选项；视频与尾帧识别完成前只读，不能提交。
-  const lockedReason = session.status === 'awaiting_media' || mediaBusy
+  const mediaPending = session.status === 'awaiting_media' || Boolean(mediaBusy)
+  const lockedReason = mediaPending && !ALLOW_CHOICE_BEFORE_MEDIA
     ? (session.currentScene?.videoMode === 'manual'
         ? '请逐段上传视频；最后一段完成尾帧识别后即可选择。'
         : '视频生成并完成尾帧识别后即可选择。')
@@ -82,6 +84,9 @@ export function GameInteraction({
         <p className="game-choice-locked" aria-live="polite">
           <LoaderCircle className="spin" size={13} />{lockedReason}
         </p>
+      )}
+      {!locked && mediaPending && (
+        <p className="game-choice-locked">调试模式：视频尚未完成也可以选择，下一幕将没有尾帧状态。</p>
       )}
       <form onSubmit={submit}>
         <label htmlFor="player-action">或者自由行动</label>
