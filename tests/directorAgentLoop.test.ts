@@ -144,7 +144,7 @@ test('text-only mode removes write_video_prompt and finishes right after publish
       { tool: 'publish_scene', args: scene },
       { tool: 'cast_scene', args: { assignments: [
         { characterId: 'heroine', actorId: null, reason: '仅文字模式' },
-        { characterId: 'steward', actorId: null, reason: '仅文字模式' },
+        { characterId: 'steward', actorId: 'actor-elder', reason: '有台词，必须有参考图' },
       ] } },
       { tool: 'finish_turn', args: {} },
     ])
@@ -159,7 +159,10 @@ test('text-only mode removes write_video_prompt and finishes right after publish
       assert.deepEqual(requestTools(provider.requests[0]), ['publish_scene', 'cast_scene', 'finish_turn'])
       assert.match(messageText(provider.requests[0].body.messages.at(-1)), /仅文字/)
       assert.equal(result.video, undefined)
-      assert.deepEqual(result.casting, { castings: [], unmatchedCharacterIds: ['heroine', 'steward'] })
+      assert.deepEqual(result.casting, {
+        castings: [{ characterId: 'steward', actorId: 'actor-elder' }],
+        unmatchedCharacterIds: ['heroine'],
+      })
       const types = events.map((event) => event.type)
       assert.equal(types.includes('video_plan'), false)
       assert.equal(types.includes('video_plan_error'), false)
@@ -219,7 +222,7 @@ test('refuses to skip steps: finishing before casting and writing shots before p
       ] } },
       { tool: 'cast_scene', args: { assignments: [
         { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
-        { characterId: 'steward', actorId: null, reason: '没有合适的年长演员' },
+        { characterId: 'steward', actorId: 'actor-elder', reason: '有台词，必须有参考图' },
       ] } },
       { tool: 'write_video_prompt', args: plan },
       { tool: 'finish_turn', args: {} },
@@ -234,8 +237,11 @@ test('refuses to skip steps: finishing before casting and writing shots before p
       assert.match(lastToolResult(provider.requests[1]), /必须先通过 publish_scene 发布场景/)
       assert.match(lastToolResult(provider.requests[3]), /以下人物尚未选角：女主、掌事姑姑；请先调用 cast_scene/)
       assert.match(lastToolResult(provider.requests[4]), /同一幕不能撞脸/)
-      assert.match(lastToolResult(provider.requests[5]), /掌事姑姑：无参考图/)
-      assert.deepEqual(result.casting, { castings: [{ characterId: 'heroine', actorId: 'actor-young' }], unmatchedCharacterIds: ['steward'] })
+      assert.match(lastToolResult(provider.requests[5]), /掌事姑姑：演员乙，有参考图/)
+      assert.deepEqual(result.casting, {
+        castings: [{ characterId: 'heroine', actorId: 'actor-young' }, { characterId: 'steward', actorId: 'actor-elder' }],
+        unmatchedCharacterIds: [],
+      })
       assert.equal(result.video?.videoPrompts.length, 2)
     } finally {
       provider.restore()

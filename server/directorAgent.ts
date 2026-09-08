@@ -621,6 +621,7 @@ async function runPersistentDirector({
 
   const publishSceneTool = createPublishSceneTool((turn) => {
     scenePublish = toDurableValue(turn)
+    book.speakingCharacterIds = new Set(turn.dialogues.map((dialogue) => dialogue.characterId))
     send({ type: 'scene', scene: scenePublish.scene, characters: scenePublish.characters })
     send({ type: 'status', text: '场景已发布，正在确定人物参考素材。' })
   }, {

@@ -134,9 +134,14 @@ test('describes casting status with candidates for each pending character and re
   assert.match(status, /沿用已有选角：沈清禾 → 演员甲/)
   assert.match(status, /待选角人物：/)
   assert.match(status, /- 皇帝（emperor，男 30–42）：候选 演员乙（actor-b，35–50）/)
-  assert.match(status, /请调用 cast_scene 为每个待选角人物指定演员或设为 null；同一幕两个人物不能使用同一演员。/)
+  assert.match(status, /请调用 cast_scene 为每个待选角人物做出决定：从候选中指定 actorId、用 create \{ name, appearance \} 新建演员，或对没有台词的背景人物设为 null；有台词的人物必须有参考图。同一幕两个人物不能使用同一演员。/)
   assert.deepEqual(resolveSceneCasting(book, characters), { castings: [{ characterId: 'heroine', actorId: 'actor-a' }], unmatchedCharacterIds: ['emperor'] })
   assert.match(describeCastingStatus(createCastingBook([], []), characters), /演员库为空/)
+  const speakingEmpty = createCastingBook([], [], ['heroine'])
+  const emptyStatus = describeCastingStatus(speakingEmpty, characters)
+  assert.match(emptyStatus, /沈清禾（heroine，女 17–20）：无同性别演员，请用 create \{ name, appearance \} 新建演员/)
+  assert.doesNotMatch(emptyStatus, /皇帝（emperor/)
+  assert.equal(speakingEmpty.declined.has('emperor'), true)
 })
 
 test('describes casting status with no age-matched candidates and a fallback of unmatched ones', () => {
@@ -144,7 +149,7 @@ test('describes casting status with no age-matched candidates and a fallback of 
   const teens: SceneCharacter[] = [{ id: 'steward', name: '掌事姑姑', gender: 'female', minAge: 15, maxAge: 18 }]
   const book = createCastingBook(elderOnly, [])
   const status = describeCastingStatus(book, teens)
-  assert.match(status, /- 掌事姑姑（steward，女 15–18）：无年龄相符的女演员；年龄不重叠的备选 演员丙（actor-c，40–55）/)
+  assert.match(status, /- 掌事姑姑（steward，女 15–18）：无年龄相符的女演员；年龄不重叠的备选 演员丙（actor-c，40–55）；不合适可用 create 新建/)
 })
 
 const eunuch: SceneCharacter = { id: 'eunuch', name: '李公公', gender: 'male', minAge: 60, maxAge: 70 }
@@ -219,4 +224,38 @@ test('candidate labels carry the appearance text and mark actors whose reference
   ]
   const status = describeCastingStatus(createCastingBook(pending, []), [eunuch])
   assert.match(status, /候选 演员丁（actor-d，60–70，清瘦长脸，藏青太监常服），待生成图片/)
+})
+
+test('describes casting status without candidates by pointing at create, and marks speaking characters', () => {
+  const eunuchScene: SceneCharacter[] = [{ id: 'eunuch', name: '掌事太监', gender: 'male', minAge: 40, maxAge: 55 }]
+  const femaleOnly: CastableActor[] = [actors[0]]
+  const book = createCastingBook(femaleOnly, [], ['eunuch'])
+  const status = describeCastingStatus(book, eunuchScene)
+  assert.match(status, /- （有台词）掌事太监（eunuch，男 40–55）：无同性别演员，请用 create \{ name, appearance \} 新建演员/)
+  assert.match(status, /有台词的人物必须有参考图/)
+})
+
+test('cast_scene refuses null for a character with dialogue and still allows it for silent ones', async () => {
+  const scene: SceneCharacter[] = [characters[0], eunuch]
+  const speaking = createCastingBook(actors, [], ['eunuch'])
+  const speakingTool = createCastSceneTool(speaking, () => scene)
+  await assert.rejects(() => speakingTool.execute('cast-speaking-null', { assignments: [
+    { characterId: 'heroine', actorId: 'actor-a', reason: '年龄相符' },
+    { characterId: 'eunuch', actorId: null, reason: '没有合适的男演员' },
+  ] }), (error: unknown) => {
+    assert.ok(error instanceof Error)
+    assert.match(error.message, /人物 李公公 有台词，必须有参考图/)
+    assert.match(error.message, /null 只能用于没有台词的背景人物/)
+    return true
+  })
+  assert.equal(speaking.declined.has('eunuch'), false)
+
+  const silent = createCastingBook(actors, [], ['heroine'])
+  const silentTool = createCastSceneTool(silent, () => scene)
+  const result = await silentTool.execute('cast-silent-null', { assignments: [
+    { characterId: 'heroine', actorId: 'actor-a', reason: '年龄相符' },
+    { characterId: 'eunuch', actorId: null, reason: '没有台词的背景人物' },
+  ] })
+  assert.deepEqual(result.details.castings, [{ characterId: 'heroine', actorId: 'actor-a' }])
+  assert.equal(silent.declined.has('eunuch'), true)
 })

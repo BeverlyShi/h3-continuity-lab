@@ -16,9 +16,15 @@ export type CastingBook = {
   declined: Set<string>
   // 跨回合沿用的绑定：只有这些人物更换演员才需要 recast。
   lockedCharacterIds: Set<string>
+  // 本幕有台词的人物：必须有参考图，不能设为 null。
+  speakingCharacterIds: Set<string>
 }
 
-export const createCastingBook = (actors: CastableActor[], existing: CharacterCasting[]): CastingBook => {
+export const createCastingBook = (
+  actors: CastableActor[],
+  existing: CharacterCasting[],
+  speakingCharacterIds?: Iterable<string>,
+): CastingBook => {
   const actorIds = new Set(actors.map((actor) => actor.id))
   const validExisting = existing.filter((casting) => actorIds.has(casting.actorId))
   return {
@@ -27,6 +33,7 @@ export const createCastingBook = (actors: CastableActor[], existing: CharacterCa
     bindings: new Map(validExisting.map((casting) => [casting.characterId, casting.actorId])),
     declined: new Set(),
     lockedCharacterIds: new Set(validExisting.map((casting) => casting.characterId)),
+    speakingCharacterIds: new Set(speakingCharacterIds ?? []),
   }
 }
 
@@ -95,10 +102,12 @@ export const resolveSceneCasting = (book: CastingBook, characters: SceneCharacte
 const candidateLabel = (candidate: CastingCandidate) =>
   `${actorLabel(candidate)}${candidate.hasImage ? '' : '，待生成图片'}${candidate.usedBy ? `，已扮演：${candidate.usedBy}` : ''}`
 
-// 演员库为空时没有可挑的对象，直接把待选角人物记为无参考图，省去一次无意义的 cast_scene。
+// 演员库为空时，没有台词的人物直接记为无参考图；有台词的人物仍要通过 cast_scene 新建演员。
 export const describeCastingStatus = (book: CastingBook, characters: SceneCharacter[]) => {
   if (!book.actors.length) {
-    for (const character of pendingCastingCharacters(book, characters)) book.declined.add(character.id)
+    for (const character of pendingCastingCharacters(book, characters)) {
+      if (!book.speakingCharacterIds.has(character.id)) book.declined.add(character.id)
+    }
   }
   const actorsById = new Map(book.actors.map((actor) => [actor.id, actor]))
   const reused = characters.flatMap((character) => {
@@ -121,15 +130,16 @@ export const describeCastingStatus = (book: CastingBook, characters: SceneCharac
         : matched.length
           ? `候选 ${matched.map(candidateLabel).join('、')}`
           : unmatched.length
-            ? `无年龄相符的${genderLabel}演员；年龄不重叠的备选 ${unmatched.map(candidateLabel).join('、')}`
-            : '无同性别演员'
-      lines.push(`- ${character.name}（${character.id}，${genderLabel} ${character.minAge}–${character.maxAge}）：${body}`)
+            ? `无年龄相符的${genderLabel}演员；年龄不重叠的备选 ${unmatched.map(candidateLabel).join('、')}；不合适可用 create 新建`
+            : '无同性别演员，请用 create { name, appearance } 新建演员'
+      const speaking = book.speakingCharacterIds.has(character.id) ? '（有台词）' : ''
+      lines.push(`- ${speaking}${character.name}（${character.id}，${genderLabel} ${character.minAge}–${character.maxAge}）：${body}`)
     }
-    lines.push('请调用 cast_scene 为每个待选角人物指定演员或设为 null；同一幕两个人物不能使用同一演员。')
+    lines.push('请调用 cast_scene 为每个待选角人物做出决定：从候选中指定 actorId、用 create { name, appearance } 新建演员，或对没有台词的背景人物设为 null；有台词的人物必须有参考图。同一幕两个人物不能使用同一演员。')
   } else if (book.actors.length) {
     lines.push('本幕人物均已有选角决定，无需调用 cast_scene。')
   } else {
-    lines.push('演员库为空，本幕人物均无参考图；无需调用 cast_scene。')
+    lines.push('演员库为空，本幕人物均无台词且无参考图；无需调用 cast_scene。')
   }
   return lines.join('\n')
 }
@@ -156,7 +166,7 @@ export const createCastSceneTool = (
 ): AgentTool<typeof castSceneSchema, SceneCastingResult> => ({
   name: 'cast_scene',
   label: '为场景选择演员',
-  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。演员库没有合适人选时，可通过 create { name, appearance } 新建演员，程序会生成三视图 prompt 交给用户生成图片；只写人物身份层外观。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。提交后本幕所有人物都必须有选角决定。',
+  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。演员库没有合适人选时，可通过 create { name, appearance } 新建演员，程序会生成三视图 prompt 交给用户生成图片；只写人物身份层外观。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。有台词的人物必须指定演员或新建，不能设为 null。提交后本幕所有人物都必须有选角决定。',
   parameters: castSceneSchema,
   executionMode: 'sequential',
   execute: async (_toolCallId, input) => {
@@ -200,6 +210,10 @@ export const createCastSceneTool = (
         continue
       }
       if (assignment.actorId === null) {
+        if (book.speakingCharacterIds.has(character.id)) {
+          issues.push(`人物 ${character.name} 有台词，必须有参考图：请从候选中选择演员，或用 create { name, appearance } 新建；null 只能用于没有台词的背景人物`)
+          continue
+        }
         nextBindings.delete(character.id)
         nextDeclined.add(character.id)
         continue

@@ -29,6 +29,7 @@ test('the director endpoint runs the single agent for both official providers wi
       for (const thinkingEnabled of [undefined, true, false]) {
         const provider = installScriptedProvider([
           { tool: 'publish_scene', args: scene, reasoning: '构思场景。' },
+          { tool: 'cast_scene', args: { assignments: [{ characterId: 'steward', create: { name: '崔姑姑', appearance: '四十五岁上下，面容清瘦端严，乌发圆髻，深青窄袖宫装' }, reason: '演员库为空' }] }, reasoning: '新建演员。' },
           { tool: 'write_video_prompt', args: plan, reasoning: '编写分镜。' },
           { tool: 'finish_turn', args: {}, reasoning: '结束。' },
         ])
@@ -56,8 +57,8 @@ test('the director endpoint runs the single agent for both official providers wi
             assert.deepEqual(request.body.tools?.map((tool) => tool.function.name), ['publish_scene', 'cast_scene', 'write_video_prompt', 'finish_turn'])
           }
           // 同一回合内后续请求回放了此前的思考内容。
-          const assistants = provider.requests[2].body.messages.filter((message) => message.role === 'assistant')
-          assert.equal(assistants.length, 2)
+          const assistants = provider.requests[3].body.messages.filter((message) => message.role === 'assistant')
+          assert.equal(assistants.length, 3)
         } finally {
           provider.restore()
         }
