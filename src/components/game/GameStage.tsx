@@ -1,5 +1,7 @@
 import {
   Clock3,
+  Copy,
+  Download,
   History,
   Link2,
   LoaderCircle,
@@ -10,16 +12,16 @@ import {
   RotateCcw,
   Sparkles,
   UserRound,
-  Video,
-  VideoOff,
+  Upload,
   Volume2,
   VolumeX,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { isDirectorActive } from '../../services/directorStatus'
 import type { DirectorStatus } from '../../types/director'
-import type { GameSession, SceneVideoClip } from '../../types/game'
+import type { GameScene, GameSession, SceneVideoClip } from '../../types/game'
 import type { Actor } from '../../types/actor'
+import { buildManualPrompt } from '../../services/manualSceneVideo'
 
 type GameStageProps = {
   session: GameSession | null
@@ -27,9 +29,13 @@ type GameStageProps = {
   hasApiKey: boolean
   apiKeyLabel?: string
   directorStatus: DirectorStatus
-  videoGenerationEnabled: boolean
+  videoMode: NonNullable<GameScene['videoMode']>
+  mediaRunning: boolean
+  manualBusy: boolean
   onStart: () => void
-  onToggleVideoGeneration: (next: boolean) => void
+  onVideoModeChange: (next: NonNullable<GameScene['videoMode']>) => void
+  onUploadVideo: (sceneId: string, sequence: number, file: File) => Promise<void>
+  onRetryTail: (sceneId: string) => void
   onRetryVideo?: (sceneId: string) => void
   narrativeExpanded: boolean
   onNarrativeExpandedChange: (next: boolean) => void
@@ -56,11 +62,12 @@ const formatTime = (seconds: number) => {
 
 const clipStatusLabel = (clip: SceneVideoClip) => {
   if (clip.status === 'waiting') return '等待前置片段尾帧'
+  if (clip.status === 'awaiting_upload') return '等待上传'
   if (clip.status === 'generating') return '生成中'
   if (clip.status === 'extracting') return '提取尾帧'
   if (clip.status === 'analyzing') return 'DeepSeek 识别尾帧'
   if (clip.status === 'ready') return '已就绪'
-  if (clip.status === 'failed') return '生成失败'
+  if (clip.status === 'failed') return '处理失败'
   return '已跳过'
 }
 
@@ -102,8 +109,8 @@ const waitForSwitchBuffer = (video: HTMLVideoElement, onReady: () => void) => {
 
 export function GameStage(props: GameStageProps) {
   const {
-    session, actors, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoGenerationEnabled,
-    onStart, onToggleVideoGeneration, onRetryVideo,
+    session, actors, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoMode, mediaRunning, manualBusy,
+    onStart, onVideoModeChange, onRetryVideo, onUploadVideo, onRetryTail,
     narrativeExpanded, onNarrativeExpandedChange,
   } = props
   const [reviewSceneId, setReviewSceneId] = useState('')
@@ -111,8 +118,13 @@ export function GameStage(props: GameStageProps) {
   const scene = session?.sceneHistory.find((item) => item.id === reviewSceneId) ?? currentScene
   const sceneIndex = session?.sceneHistory.findIndex((item) => item.id === scene?.id) ?? -1
   const isReviewing = Boolean(scene && currentScene && scene.id !== currentScene.id)
+  const manualMode = isReviewing ? scene?.videoMode === 'manual' : videoMode === 'manual'
+  const [uploadTarget, setUploadTarget] = useState(0)
+  const uploadInput = useRef<HTMLInputElement>(null)
+  const [actionMessage, setActionMessage] = useState('')
   const [liveStatusLabel, liveStatusClass] = getStatus(session, directorStatus)
-  const statusLabel = isReviewing ? `回看第 ${sceneIndex + 1} 幕` : liveStatusLabel
+  const statusLabel = isReviewing ? `回看第 ${sceneIndex + 1} 幕`
+    : manualMode && session?.status === 'awaiting_media' && !mediaRunning ? '等待逐段上传' : liveStatusLabel
   const statusClass = isReviewing ? 'reviewing' : liveStatusClass
 
   // 打字进度带上场景 id，换幕时自动归零，不需要在 effect 里同步重置。
@@ -306,11 +318,12 @@ export function GameStage(props: GameStageProps) {
   const allClipsReady = videoClips.length > 0 && readyClipCount === videoClips.length
   const allClipsSkipped = videoClips.length > 0 && videoClips.every((clip) => clip.status === 'skipped')
   const videoBadge = scene
-    ? failedClip ? ['部分片段生成失败', 'failed'] as const
+    ? failedClip ? ['部分片段处理失败', 'failed'] as const
     : allClipsReady ? ['视频已就绪', 'ready'] as const
+    : manualMode && !mediaRunning && videoClips.length ? [`手动上传 ${readyClipCount}/${videoClips.length}`, 'skipped'] as const
     : allClipsSkipped ? ['视频生成已关闭', 'skipped'] as const
-    : videoClips.length ? [`视频生成中 ${readyClipCount}/${videoClips.length}`, 'generating'] as const
-    : videoGenerationEnabled ? ['视频计划生成中', 'generating'] as const
+    : videoClips.length ? [`${manualMode ? '视频处理中' : '视频生成中'} ${readyClipCount}/${videoClips.length}`, 'generating'] as const
+    : videoMode !== 'off' ? ['视频计划生成中', 'generating'] as const
     : ['本幕未提交视频', 'none'] as const
     : null
 
@@ -321,14 +334,36 @@ export function GameStage(props: GameStageProps) {
   const isWaitingForClip = Boolean(activeClip && pendingStatuses.includes(activeClip.status))
     || Boolean(waitingForNext && nextClip && pendingStatuses.includes(nextClip.status))
 
-  const canGenerateVideo = Boolean(onRetryVideo && scene?.videoRequest)
-  const timelineDuration = scene?.videoRequest?.totalDuration
-    ?? videoClips.at(-1)?.endTime
-    ?? 0
+  const canGenerateVideo = Boolean(onRetryVideo && scene?.videoRequest && videoMode === 'auto' && !isReviewing && !mediaRunning && !isDirectorActive(directorStatus))
+  const timelineDuration = videoClips.reduce((sum, clip) => sum + (clip.actualDuration ?? clip.endTime - clip.startTime), 0)
   const timelineSelectedIndex = timelineSelection.sceneId === scene?.id
     ? Math.min(timelineSelection.index, Math.max(0, videoClips.length - 1))
     : playbackIndex
   const promptClip = videoClips[timelineSelectedIndex] ?? videoClips[0]
+  const promptText = promptClip ? buildManualPrompt(promptClip) : ''
+  const canUpload = !isReviewing && manualMode && !mediaRunning && !isDirectorActive(directorStatus)
+    && session?.status !== 'awaiting_agent'
+  const chooseUpload = (clip: SceneVideoClip) => {
+    if (!canUpload || clip.sequence > 1 && !clip.startImageUrl) return
+    if (videoClips.some((item) => item.sequence > clip.sequence && item.videoUrl)
+      && !window.confirm('替换这一片段后，后续片段需要依据新的尾帧重新生成并上传。继续替换？')) return
+    setActionMessage('')
+    setUploadTarget(clip.sequence)
+    uploadInput.current?.click()
+  }
+  const downloadReference = async (imageUrl: string, label: string) => {
+    try {
+      const response = await fetch(imageUrl)
+      if (!response.ok) throw new Error('下载失败，可点击图片打开后保存。')
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${label}.${blob.type === 'image/png' ? 'png' : 'jpg'}`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) { setActionMessage(error instanceof Error ? error.message : '参考图下载失败') }
+  }
   const actorsById = new Map(actors.map((actor) => [actor.id, actor]))
   const charactersById = new Map((session?.characters ?? []).map((character) => [character.id, character]))
   const sceneCharacterIds = scene?.characterIds ?? [
@@ -349,21 +384,56 @@ export function GameStage(props: GameStageProps) {
                 <span />{videoBadge[0]}
               </span>
             )}
-            <button
-              type="button"
-              className={`game-video-toggle${videoGenerationEnabled ? ' on' : ''}`}
-              aria-pressed={videoGenerationEnabled}
-              title={videoGenerationEnabled ? '关闭后新的幕次不会提交 fal 生成视频' : '开启后新的幕次会自动提交 fal 生成视频'}
-              onClick={() => onToggleVideoGeneration(!videoGenerationEnabled)}
-            >
-              {videoGenerationEnabled ? <Video size={12} /> : <VideoOff size={12} />}
-              {videoGenerationEnabled ? '视频生成开' : '视频生成关'}
-            </button>
           </div>
           <p>{scene ? `《后宫》· 第 ${scene.turn} 幕` : 'Pi 故事导演将主动决定第一幕'}</p>
         </div>
         <span className={`game-status ${statusClass}`}><span />{statusLabel}</span>
       </div>
+
+      <section className="game-video-modes" aria-label="视频生成方式">
+        <div className="game-video-mode-options">
+          <button
+            type="button"
+            className={`game-video-mode${videoMode === 'manual' ? ' active' : ''}`}
+            aria-pressed={videoMode === 'manual'}
+            disabled={mediaRunning || isDirectorActive(directorStatus)}
+            onClick={() => onVideoModeChange('manual')}
+          >
+            <strong><Upload size={15} />上传视频</strong>
+            <span>使用你在其他平台的额度生成，再上传到这里。</span>
+          </button>
+          <button
+            type="button"
+            className={`game-video-mode${videoMode === 'auto' ? ' active' : ''}`}
+            aria-pressed={videoMode === 'auto'}
+            disabled={mediaRunning || isDirectorActive(directorStatus)}
+            onClick={() => onVideoModeChange('auto')}
+          >
+            <strong><Sparkles size={15} />API 生成</strong>
+            <span>通过已接入的 fal API 自动生成并衔接视频。</span>
+          </button>
+        </div>
+        <p className="game-video-mode-help">{videoMode === 'manual'
+          ? '复制 Prompt + 下载参考图 → 在外部生成 → 逐段上传视频 → 识别最终尾帧，辅助下一幕 Prompt 撰写。无需视频生成 Key，仍需导演与视觉模型 Key。'
+          : videoMode === 'auto'
+            ? '导演编写 Prompt → fal API 生成视频 → 自动衔接尾帧 → 视觉反馈辅助下一幕 Prompt 撰写。需要 FAL_KEY，以及导演与视觉模型 Key。'
+            : '仅续写故事与编写 Prompt，暂不生成或上传视频。'}</p>
+        <div className="game-video-mode-footer">
+          <small>视觉反馈当前分析最终尾帧，不包含整段视频的动作与音频。</small>
+          <button
+            type="button"
+            className="game-video-action"
+            aria-pressed={videoMode === 'off'}
+            disabled={mediaRunning || isDirectorActive(directorStatus)}
+            onClick={() => onVideoModeChange('off')}
+          >仅文字</button>
+        </div>
+        {canGenerateVideo && scene?.videoMode === 'manual' && !allClipsReady && (
+          <button type="button" className="game-video-action" onClick={() => onRetryVideo?.(scene.id)}>
+            <Play size={12} />通过 API 生成本幕剩余片段
+          </button>
+        )}
+      </section>
 
       {scene && scene.castingStatus && (
         <section className="game-cast" aria-label="本幕演员">
@@ -459,14 +529,17 @@ export function GameStage(props: GameStageProps) {
 
           {scene ? (
             <>
-              {isWaitingForClip && (
+              {manualMode && !hasVideo && (
+                <div className="game-stage-notice">{manualBusy ? '正在保存视频并处理尾帧…' : '在下方逐段上传视频，系统会自动衔接尾帧。'}</div>
+              )}
+              {isWaitingForClip && !manualMode && (
                 <div className="game-stage-notice">
                   {waitingForNext ? `等待第 ${nextClip?.sequence} 段生成完成…` : '首段画面正在成形…'}
                 </div>
               )}
               {blockedClip && (
                 <div className="game-stage-notice error">
-                  <span>{`第 ${blockedClip.sequence} 段生成失败：${blockedClip.error ?? '未知错误'}`}</span>
+                  <span>{`第 ${blockedClip.sequence} 段处理失败：${blockedClip.error ?? '未知错误'}`}</span>
                   {canGenerateVideo && (
                     <button type="button" className="game-video-retry" onClick={() => onRetryVideo?.(scene.id)}>
                       重新生成本幕
@@ -474,7 +547,7 @@ export function GameStage(props: GameStageProps) {
                   )}
                 </div>
               )}
-              {allClipsSkipped && (
+              {allClipsSkipped && !manualMode && (
                 <div className="game-stage-notice">
                   <span>本幕的视频生成已关闭</span>
                   {canGenerateVideo && (
@@ -569,11 +642,36 @@ export function GameStage(props: GameStageProps) {
         <section className="game-video-timeline" aria-label="本幕视频时间轴">
           <div className="game-video-timeline-heading">
             <span><Clock3 size={14} />本幕视频</span>
-            <small>{timelineDuration} 秒 · {videoClips.length} 个片段</small>
+            <small>{Number(timelineDuration.toFixed(1))} 秒 · {videoClips.length} 个片段</small>
           </div>
+          {manualMode && (
+            <p className="game-video-upload-help">复制 Prompt、下载参考图，在外部生成后逐段上传。下一段参考图会在上一段上传后更新。</p>
+          )}
+          {manualBusy && <p className="game-video-upload-help" role="status">正在读取视频、保存并处理尾帧…</p>}
+          {actionMessage && <p className="game-video-upload-help" role="status">{actionMessage}</p>}
+          {canGenerateVideo && videoClips.some((clip) => clip.status === 'awaiting_upload') && (
+            <button type="button" className="game-video-action" onClick={() => onRetryVideo?.(scene.id)}>
+              <Play size={12} />生成剩余片段
+            </button>
+          )}
+          <input
+            ref={uploadInput}
+            type="file"
+            accept="video/*,.mp4,.mov,.webm"
+            hidden
+            aria-label="选择片段视频"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              event.target.value = ''
+              if (!file || !scene) return
+              void onUploadVideo(scene.id, uploadTarget, file).then(() => {
+                setActionMessage(`片段 ${uploadTarget} 已上传。`)
+              }).catch((error: unknown) => setActionMessage(error instanceof Error ? error.message : '上传失败'))
+            }}
+          />
           <div className="game-video-timeline-track">
             {videoClips.map((clip, index) => {
-              const duration = clip.endTime - clip.startTime
+              const duration = clip.actualDuration ?? clip.endTime - clip.startTime
               const isSelected = index === timelineSelectedIndex
               const isPending = pendingStatuses.includes(clip.status)
               return (
@@ -611,9 +709,21 @@ export function GameStage(props: GameStageProps) {
                     )}
                     <span className="game-video-timeline-meta">
                       <strong>片段 {clip.sequence}</strong>
-                      <small>{duration} 秒</small>
+                      <small title={`计划 ${clip.endTime - clip.startTime} 秒`}>{Number(duration.toFixed(1))} 秒</small>
                     </span>
                   </button>
+                  {manualMode && !isReviewing && (
+                    <button
+                      className="game-video-upload"
+                      type="button"
+                      aria-label={`${clip.videoUrl ? '替换' : '上传'}片段 ${clip.sequence}`}
+                      disabled={!canUpload || clip.sequence > 1 && !clip.startImageUrl}
+                      onClick={() => chooseUpload(clip)}
+                      title={clip.sequence > 1 && !clip.startImageUrl ? '请先上传上一片段' : '上传视频后自动提取尾帧'}
+                    >
+                      <Upload size={12} />{clip.videoUrl ? '替换视频' : '上传视频'}
+                    </button>
+                  )}
                   {clip.status === 'failed' && canGenerateVideo && (
                     <button
                       type="button"
@@ -631,12 +741,17 @@ export function GameStage(props: GameStageProps) {
           </div>
           {promptClip && (
             <div className="game-video-timeline-prompt">
-              <strong>片段 {promptClip.sequence} Prompt</strong>
-              <div className="game-video-timeline-prompt-body">
-                <p>{promptClip.prompt}</p>
+              <div className="game-video-prompt-heading">
+                <strong>片段 {promptClip.sequence} Prompt</strong>
+                <button type="button" className="game-video-action" onClick={() => {
+                  void navigator.clipboard.writeText(promptText).then(() => setActionMessage('Prompt 已复制。')).catch(() => setActionMessage('无法访问剪贴板，请选中 Prompt 手动复制。'))
+                }}><Copy size={12} />复制 Prompt</button>
               </div>
-              <div className="game-video-prompt-reference-section" aria-label="发给 fal 的参考图">
-                <strong className="game-video-prompt-reference-title">发给 fal 的参考图</strong>
+              <div className="game-video-timeline-prompt-body">
+                <p>{promptText}</p>
+              </div>
+              <div className="game-video-prompt-reference-section" aria-label="本片段生成参考图">
+                <strong className="game-video-prompt-reference-title">本片段生成参考图</strong>
                 {promptClip.referenceImages === undefined ? (
                   <p className="game-video-prompt-reference-status">
                     {promptClip.status === 'waiting'
@@ -650,23 +765,34 @@ export function GameStage(props: GameStageProps) {
                 ) : promptClip.referenceImages.length > 0 ? (
                   <div className="game-video-prompt-references">
                     {promptClip.referenceImages.map((reference) => (
-                      <a
-                        href={reference.imageUrl}
-                        key={`${reference.type}:${reference.imageUrl}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={`查看${reference.label}`}
-                      >
-                        <img src={reference.imageUrl} alt={reference.label} loading="lazy" decoding="async" />
-                        <span>{reference.label}</span>
-                      </a>
+                      <div className="game-video-reference" key={`${reference.type}:${reference.imageUrl}`}>
+                        <a
+                          href={reference.imageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={`查看${reference.label}`}
+                        >
+                          <img src={reference.imageUrl} alt={reference.label} loading="lazy" decoding="async" />
+                          <span>{reference.label}</span>
+                        </a>
+                        <button type="button" className="game-video-action" onClick={() => { void downloadReference(reference.imageUrl, reference.label) }}><Download size={11} />下载参考图</button>
+                      </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="game-video-prompt-reference-status">本次请求没有向 fal 发送参考图。</p>
+                  <p className="game-video-prompt-reference-status">{manualMode
+                    ? promptClip.sequence > 1 ? '等待上一片段上传后提取起始参考图。' : '本片段暂无人物参考图，请检查演员匹配。'
+                    : '本次请求没有向 fal 发送参考图。'}</p>
                 )}
               </div>
             </div>
+          )}
+          {promptClip?.error && <p className="game-cast-error">{promptClip.error}</p>}
+          {scene.visualAnalysisError && scene.visualAnalysisError !== promptClip?.error && <p className="game-cast-error">{scene.visualAnalysisError}</p>}
+          {manualMode && !isReviewing && (scene.visualAnalysisError || videoClips.at(-1)?.error) && videoClips.at(-1)?.tailFrameUrl && (
+            <button type="button" className="game-video-action" disabled={mediaRunning || isDirectorActive(directorStatus)} onClick={() => onRetryTail(scene.id)}>
+              <RotateCcw size={12} />重试尾帧识别
+            </button>
           )}
         </section>
       )}
@@ -704,7 +830,10 @@ export function GameStage(props: GameStageProps) {
             <button className="button button-primary game-start-button" disabled={!hasApiKey} onClick={onStart}>
               <Play size={17} fill="currentColor" />请开始故事
             </button>
-            <p className="game-cost-note">{hasApiKey ? '每一幕由 Pi Agent 续写，并自动提交 fal 生成场景视频。' : `请先在页面右上角配置 ${apiKeyLabel} API Key。`}</p>
+            <p className="game-cost-note">{!hasApiKey ? `请先在页面右上角配置 ${apiKeyLabel} API Key。`
+              : videoMode === 'manual' ? '开始后将准备 Prompt 和参考图，等待你在外部生成并上传视频。'
+                : videoMode === 'auto' ? '开始后将自动调用 fal 生成视频，消耗对应 API 额度。'
+                  : '开始后续写故事与编写 Prompt。'}</p>
           </div>
         </div>
       )}

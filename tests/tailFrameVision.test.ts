@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyzeTailFrame, DEEPSEEK_VISION_MODEL } from '../server/tailFrameVision.ts'
-import { createInspectTailFrameTool } from '../server/inspectTailFrameTool.ts'
+import { createInspectTailFrameTool, inspectTailFrameSchema } from '../server/inspectTailFrameTool.ts'
+import { Check } from 'typebox/value'
+
+test('accepts inline tail images from uploaded videos without a hosted image URL', () => {
+  assert.equal(Check(inspectTailFrameSchema, {
+    imageUrl: `data:image/jpeg;base64,${'a'.repeat(20_000)}`,
+    characters: [],
+  }), true)
+})
 
 const characters = [
   { id: 'heroine', name: '沈清禾', gender: 'female' as const, minAge: 16, maxAge: 20 },

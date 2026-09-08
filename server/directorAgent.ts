@@ -28,13 +28,14 @@ import {
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter'
 import { resolve } from 'node:path'
-import { getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
+import { getDirectorApiModelId, getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
 import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
 import type { AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
 import type { ScenePublish, VideoGenerationRequest } from '../src/types/story.ts'
 import {
   buildStoryInputMessage,
+  buildVideoInputMessage,
   DIRECTOR_COMPACTION_INSTRUCTIONS,
   DIRECTOR_SYSTEM_PROMPT,
   DIRECTOR_VIDEO_SYSTEM_PROMPT,
@@ -43,22 +44,33 @@ import { createCastSceneTool } from './castSceneTool.ts'
 import { createPublishSceneTool } from './publishSceneTool.ts'
 import { createWriteVideoPromptTool } from './videoPlanTool.ts'
 import { compileVideoPlan } from './videoPromptCompiler.ts'
-import { summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
+import { inspectRawToolArguments, summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
+
+import { assertNarrativeReview, narrativeReviewToolDefinition, narrativeSources, NARRATIVE_REVIEW_PROMPT } from './narrativeReview.ts'
+import { withDirectorSession } from './directorSession.ts'
+import { bigmodelProvider } from './bigmodelProvider.ts'
 
 const MAX_DIRECTOR_OUTPUT_TOKENS = 4_096
 const DIRECTOR_TIMEOUT_MS = 45_000
-// 每个确定性阶段只允许一次定向修复，避免完整内容反复重写。
-const MAX_TOOL_ATTEMPTS = 2
+// 每个确定性阶段允许有限次定向修复，避免完整内容反复重写。
+const MAX_TOOL_ATTEMPTS = 3
 const traceEnvironment = new NodeExecutionEnv({ cwd: process.cwd() })
 const traceRepo = new JsonlSessionRepo({
   fs: traceEnvironment,
   sessionsRoot: resolve(process.cwd(), '.agent-traces'),
 })
-const activeGameSessions = new Set<string>()
 
 type DirectorStreamPolicy = Pick<SimpleStreamOptions, 'maxTokens' | 'reasoning' | 'samplingParams'>
 
-export const getDirectorStreamPolicy = (modelId: DirectorModelId): DirectorStreamPolicy => {
+export const getDirectorStreamPolicy = (modelId: DirectorModelId, thinkingEnabled = false): DirectorStreamPolicy => {
+  if (modelId === 'z-ai/glm-5.3-flash') {
+    // GLM-5.3-Flash 强制思考，关闭增强思考时使用最低的 low 档。
+    return { maxTokens: 16_384, reasoning: thinkingEnabled ? 'high' : 'low' }
+  }
+  if (modelId === 'deepseek-v4-flash') {
+    return { maxTokens: 16_384, reasoning: thinkingEnabled ? 'high' : undefined }
+  }
+
   if (modelId === 'google/gemini-2.5-flash-lite') {
     return {
       maxTokens: 4_096,
@@ -114,6 +126,17 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
   const projected: AgentTraceEntry[] = []
 
   for (const entry of entries) {
+    if (entry.type === 'custom' && entry.customType === 'director_tool_arguments') {
+      projected.push({
+        id: entryId(traceId, entry, 'raw-arguments'),
+        kind: 'assistant',
+        title: '原始工具参数与 JSON 解析诊断',
+        timestamp: entry.timestamp,
+        data: entry.data,
+      })
+      continue
+    }
+
     if (entry.type === 'custom' && entry.customType === 'director_trace') {
       projected.push({
         id: entryId(traceId, entry, 'trace'),
@@ -122,6 +145,11 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
         timestamp: entry.timestamp,
         data: entry.data,
       })
+      continue
+    }
+
+    if (entry.type === 'custom' && entry.customType === 'narrative_review') {
+      projected.push({ id: entryId(traceId, entry, 'review'), kind: 'tool_result', title: '原文一致性核对', timestamp: entry.timestamp, data: entry.data })
       continue
     }
 
@@ -278,14 +306,20 @@ const maybeCompact = async ({
 }
 
 // 工具校验失败时把完整问题列表反馈给当前阶段；目标成功或用尽尝试次数后停止。
-export const createRetryingStopCondition = (maxAttempts: number, isComplete: () => boolean) => {
+export const createRetryingStopCondition = (
+  maxAttempts: number,
+  isComplete: () => boolean,
+  onToolError?: (message: string) => void,
+) => {
   let attempts = 0
   return ({ toolResults }: ShouldStopAfterTurnContext) => {
-    const hasToolError = toolResults.some((result) => result.isError)
-    if (!hasToolError) {
+    const errorResult = toolResults.find((result) => result.isError)
+    if (!errorResult) {
       attempts = 0
       return isComplete()
     }
+    const errorText = errorResult.content.find((item) => item.type === 'text')?.text ?? '未知错误'
+    onToolError?.(errorText)
     attempts += 1
     if (attempts < maxAttempts) return false
     attempts = 0
@@ -296,6 +330,7 @@ export const createRetryingStopCondition = (maxAttempts: number, isComplete: () 
 export type DirectorAgentRequest = {
   apiKey: string
   modelId: DirectorModelId
+  thinkingEnabled?: boolean
   context: DirectorTurnContext
   actors: CastableActor[]
   castings: CharacterCasting[]
@@ -305,20 +340,13 @@ export type DirectorAgentRequest = {
 }
 
 export async function runDirectorAgent(request: DirectorAgentRequest) {
-  const gameSessionId = request.context.sessionId
-  if (activeGameSessions.has(gameSessionId)) throw new Error('故事导演正在处理这个会话的上一项行动。')
-
-  activeGameSessions.add(gameSessionId)
-  try {
-    return await runPersistentDirector(request)
-  } finally {
-    activeGameSessions.delete(gameSessionId)
-  }
+  return withDirectorSession(request.context.sessionId, () => runPersistentDirector(request))
 }
 
 async function runPersistentDirector({
   apiKey,
   modelId,
+  thinkingEnabled = false,
   context,
   actors,
   castings,
@@ -365,7 +393,7 @@ async function runPersistentDirector({
 
   const traceStartPersistenceStartedAt = Date.now()
   try {
-    await session.appendCustomEntry('director_trace', { traceId, modelId, startedAt })
+    await session.appendCustomEntry('director_trace', { traceId, modelId, thinkingEnabled, startedAt })
   } catch (error) {
     persistenceErrors.push({
       message: `Pi Trace ID 持久化失败：${error instanceof Error ? error.message : String(error)}`,
@@ -378,9 +406,9 @@ async function runPersistentDirector({
   const modelSetupStartedAt = Date.now()
   const provider = getDirectorModelProvider(modelId)
   const models = createModels()
-  models.setProvider(provider === 'deepseek' ? deepseekProvider() : openrouterProvider())
-  const model = models.getModel(provider, modelId)
-  if (!model) throw new Error(`Pi 未找到${provider === 'deepseek' ? ' DeepSeek' : ' OpenRouter'}模型 ${modelId}。`)
+  models.setProvider({ deepseek: deepseekProvider, openrouter: openrouterProvider, bigmodel: bigmodelProvider }[provider]())
+  const model = models.getModel(provider, getDirectorApiModelId(modelId))
+  if (!model) throw new Error(`Pi 未找到 ${provider} 模型 ${modelId}。`)
 
   const completeSimple = models.completeSimple.bind(models)
   models.completeSimple = (compactModel, compactContext, options) => completeSimple(
@@ -396,7 +424,7 @@ async function runPersistentDirector({
   ) => {
     activeProviderTurn = { turn: providerTurns.length + 1, startedAt: Date.now() }
     providerTurns.push(activeProviderTurn)
-    const policy = getDirectorStreamPolicy(modelId)
+    const policy = getDirectorStreamPolicy(modelId, thinkingEnabled)
     return models.streamSimple(
       streamModel,
       streamContext,
@@ -405,11 +433,14 @@ async function runPersistentDirector({
         ...policy,
         samplingParams: {
           ...policy.samplingParams,
-          tool_choice: { type: 'function', function: { name: forcedToolName } },
+          // 官方思考接口由模型选择工具；每个阶段只提供对应工具。
+          ...(provider !== 'openrouter' ? {} : {
+            tool_choice: { type: 'function', function: { name: forcedToolName } },
+          }),
         },
         apiKey,
         maxRetries: 2,
-        timeoutMs: DIRECTOR_TIMEOUT_MS,
+        timeoutMs: provider !== 'openrouter' ? 120_000 : DIRECTOR_TIMEOUT_MS,
         telemetryContext: telemetry,
       },
     )
@@ -430,9 +461,11 @@ async function runPersistentDirector({
     phaseTimings.compactionPrecheckMs = Date.now() - compactionPrecheckStartedAt
   }
 
+  const rawToolArguments = new Map<number, string>()
   const subscribeForPersistence = (agentInstance: Agent) => agentInstance.subscribe(async (event) => {
     const timestamp = Date.now()
     if (event.type === 'message_start' && event.message.role === 'assistant') {
+      rawToolArguments.clear()
       if (!activeProviderTurn) {
         activeProviderTurn = { turn: providerTurns.length + 1, startedAt: timestamp }
         providerTurns.push(activeProviderTurn)
@@ -443,6 +476,10 @@ async function runPersistentDirector({
     if (event.type === 'message_update' && event.message.role === 'assistant' && activeProviderTurn) {
       activeProviderTurn.firstTokenAt ??= timestamp
       activeProviderTurn.ttftMs ??= timestamp - activeProviderTurn.startedAt
+    }
+    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'toolcall_delta') {
+      const { contentIndex, delta } = event.assistantMessageEvent
+      rawToolArguments.set(contentIndex, (rawToolArguments.get(contentIndex) ?? '') + delta)
     }
     if (event.type === 'message_end' && event.message.role === 'assistant' && activeProviderTurn) {
       activeProviderTurn.endedAt = timestamp
@@ -469,8 +506,19 @@ async function runPersistentDirector({
       }
     }
     if (event.type === 'message_end') {
+      const argumentDiagnostics = event.message.role === 'assistant'
+        ? event.message.content.flatMap((content, index) => {
+            const raw = rawToolArguments.get(index)
+            return content.type === 'toolCall' && raw !== undefined
+              ? [{ toolCallId: content.id, toolName: content.name, ...inspectRawToolArguments(raw) }]
+              : []
+          })
+        : []
       try {
         await session.appendMessage(toDurableMessage(event.message))
+        for (const diagnostic of argumentDiagnostics) {
+          await session.appendCustomEntry('director_tool_arguments', diagnostic)
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         persistenceErrors.push({ message, timestamp: Date.now() })
@@ -502,6 +550,7 @@ async function runPersistentDirector({
 
   let videoPhaseStarted = false
   const orchestrationTraceEntries: AgentTraceEntry[] = []
+  const reviewMessages: AgentMessage[] = []
   const sendTrace = async (outcome: HarnessTraceSnapshot['outcome']) => {
     let entries: Entry[] = []
     try {
@@ -543,7 +592,7 @@ async function runPersistentDirector({
       durationMs: endedAt - startedAt,
       outcome,
       stopReason: finalMessage?.role === 'assistant' ? finalMessage.stopReason : undefined,
-      usage: summarizeAssistantUsage(currentRunMessages),
+      usage: summarizeAssistantUsage([...currentRunMessages, ...reviewMessages]),
       entries: [...systemPromptEntries, ...projectTraceEntries(traceId, entries), ...orchestrationTraceEntries]
         .sort((left, right) => left.timestamp - right.timestamp),
     }
@@ -573,17 +622,49 @@ async function runPersistentDirector({
   send({ type: 'trace_started', traceId, harnessSessionId: metadata.id, startedAt })
   send({ type: 'status', text: `Pi 故事导演正在通过 ${getDirectorModelLabel(modelId)} 构思下一幕。` })
 
+  const reviewNarrative = async (source: ScenePublish, finalVideo?: VideoGenerationRequest, referenceInput?: string) => {
+    const input = {
+      phase: finalVideo ? 'video' : 'scene',
+      ...source,
+      playerInput: context.input,
+      sources: narrativeSources(source.scene.narrative),
+      previousVisualState: context.hasPreviousTailFrame === false ? undefined : context.previousVisualState,
+      finalVideo, referenceInput,
+    }
+    send({ type: 'status', text: finalVideo ? '正在逐条核对最终分镜与本幕原文。' : '正在核对出场人物与剧情边界。' })
+    const reviewStartedAt = Date.now()
+    const result = await models.completeSimple(model, {
+      systemPrompt: NARRATIVE_REVIEW_PROMPT,
+      messages: [{ role: 'user', content: JSON.stringify(input), timestamp: Date.now() }],
+      tools: [narrativeReviewToolDefinition.function],
+    }, {
+      ...getDirectorStreamPolicy(modelId, thinkingEnabled), apiKey, signal,
+      timeoutMs: provider !== 'openrouter' ? 120_000 : DIRECTOR_TIMEOUT_MS, maxRetries: 0,
+      telemetryContext: telemetry,
+    })
+    reviewMessages.push(result)
+    const call = result.content.find((item) => item.type === 'toolCall' && item.name === 'review_narrative')
+    await session.appendCustomEntry('narrative_review', toDurableValue({
+      traceId, input, systemPrompt: NARRATIVE_REVIEW_PROMPT,
+      result: call?.type === 'toolCall' ? call.arguments : null,
+      usage: result.usage, durationMs: Date.now() - reviewStartedAt,
+    }))
+    if (result.stopReason === 'error' || result.stopReason === 'aborted') throw new Error(result.errorMessage ?? '原文核对调用失败。')
+    assertNarrativeReview(call?.type === 'toolCall' ? call.arguments : undefined, source, finalVideo)
+  }
+
   let scenePublish: ScenePublish | undefined
+  let lastPublishError: string | undefined
   const publishSceneTool = createPublishSceneTool((turn) => {
     scenePublish = toDurableValue(turn)
-  })
+  }, (turn) => reviewNarrative(turn))
   const sceneAgent = new Agent({
     initialState: {
       systemPrompt: DIRECTOR_SYSTEM_PROMPT,
       model,
       tools: [publishSceneTool],
-      messages: buildSessionContext(stripTrailingFailedTurns(persistedEntries)).messages,
-      thinkingLevel: 'off',
+      messages: context.input.type === 'start' ? [] : buildSessionContext(stripTrailingFailedTurns(persistedEntries)).messages,
+      thinkingLevel: getDirectorStreamPolicy(modelId, thinkingEnabled).reasoning ?? 'off',
     },
     convertToLlm,
     streamFn: createDirectorStreamFn('publish_scene'),
@@ -592,6 +673,7 @@ async function runPersistentDirector({
     shouldStopAfterTurn: createRetryingStopCondition(
       MAX_TOOL_ATTEMPTS,
       () => Boolean(scenePublish),
+      (message) => { lastPublishError = message },
     ),
   })
 
@@ -602,10 +684,14 @@ async function runPersistentDirector({
   try {
     await sceneAgent.prompt(buildStoryInputMessage(context.input, context.previousVisualState))
     if (sceneAgent.state.errorMessage) throw new Error(sceneAgent.state.errorMessage)
-    if (!scenePublish) throw new Error('Pi Agent 没有调用 publish_scene 发布场景。')
+    if (!scenePublish) {
+      throw new Error(lastPublishError
+        ? `publish_scene 连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastPublishError}`
+        : 'Pi Agent 没有调用 publish_scene 发布场景。')
+    }
 
     send({ type: 'scene', scene: scenePublish.scene, characters: scenePublish.characters })
-    send({ type: 'status', text: '场景已发布，正在并行选角和生成视频计划。' })
+    send({ type: 'status', text: '场景已发布，正在准备人物参考素材。' })
 
     let castingResult: SceneCastingResult | undefined
     let videoDraft: VideoGenerationRequest | undefined
@@ -653,37 +739,7 @@ async function runPersistentDirector({
         throw error
       })
 
-    videoPhaseStarted = true
-    const videoEntries = await session.findEntries({ order: 'oldestFirst' })
-    const videoPlanTool = createWriteVideoPromptTool(scenePublish.characters, (plan) => {
-      videoDraft = toDurableValue(plan.video)
-    })
-    const videoAgent = new Agent({
-      initialState: {
-        systemPrompt: DIRECTOR_VIDEO_SYSTEM_PROMPT,
-        model,
-        tools: [videoPlanTool],
-        messages: buildSessionContext(videoEntries).messages,
-        thinkingLevel: 'off',
-      },
-      convertToLlm,
-      streamFn: createDirectorStreamFn('write_video_prompt'),
-      sessionId: metadata.id,
-      maxRetryDelayMs: 5_000,
-      shouldStopAfterTurn: createRetryingStopCondition(
-        MAX_TOOL_ATTEMPTS,
-        () => Boolean(videoDraft),
-      ),
-    })
-    signal?.addEventListener('abort', () => videoAgent.abort(), { once: true })
-    subscribeForPersistence(videoAgent)
-
-    const videoPromise = videoAgent.continue().then(() => {
-      if (videoAgent.state.errorMessage) throw new Error(videoAgent.state.errorMessage)
-      if (!videoDraft) throw new Error('Pi Agent 没有调用 write_video_prompt 编写视频 Prompt。')
-    })
-
-    const [castingOutcome, videoOutcome] = await Promise.allSettled([castingPromise, videoPromise])
+    const [castingOutcome] = await Promise.allSettled([castingPromise])
     if (castingOutcome.status === 'rejected') {
       const message = castingOutcome.reason instanceof Error
         ? castingOutcome.reason.message
@@ -698,21 +754,55 @@ async function runPersistentDirector({
       })
       send({ type: 'cast_error', message })
     }
+    const videoInputMessage = buildVideoInputMessage(
+      scenePublish.characters, castingResult, actors, scenePublish.dialogues,
+      context.previousVisualState, context.hasPreviousTailFrame, scenePublish.scene,
+    )
+    send({ type: 'status', text: '参考素材已确认，正在编写分镜。' })
+
+    videoPhaseStarted = true
+    let lastVideoError: string | undefined
+    const videoPlanTool = createWriteVideoPromptTool(scenePublish.characters, scenePublish.dialogues, (plan) => {
+      videoDraft = toDurableValue(plan.video)
+    }, (video) => reviewNarrative(scenePublish!, video, videoInputMessage))
+    const videoAgent = new Agent({
+      initialState: {
+        systemPrompt: DIRECTOR_VIDEO_SYSTEM_PROMPT,
+        model,
+        tools: [videoPlanTool],
+        messages: [],
+        thinkingLevel: getDirectorStreamPolicy(modelId, thinkingEnabled).reasoning ?? 'off',
+      },
+      convertToLlm,
+      streamFn: createDirectorStreamFn('write_video_prompt'),
+      sessionId: metadata.id,
+      maxRetryDelayMs: 5_000,
+      shouldStopAfterTurn: createRetryingStopCondition(
+        MAX_TOOL_ATTEMPTS,
+        () => Boolean(videoDraft),
+        (message) => { lastVideoError = message },
+      ),
+    })
+    signal?.addEventListener('abort', () => videoAgent.abort(), { once: true })
+    subscribeForPersistence(videoAgent)
+
+    const videoPromise = videoAgent.prompt(videoInputMessage).then(() => {
+      if (videoAgent.state.errorMessage) throw new Error(videoAgent.state.errorMessage)
+      if (!videoDraft) {
+        throw new Error(lastVideoError
+          ? `write_video_prompt 连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastVideoError}`
+          : 'Pi Agent 没有调用 write_video_prompt 编写视频 Prompt。')
+      }
+    })
+
+    const [videoOutcome] = await Promise.allSettled([videoPromise])
     if (videoOutcome.status === 'rejected') {
       const message = videoOutcome.reason instanceof Error
         ? videoOutcome.reason.message
         : String(videoOutcome.reason)
       send({ type: 'video_plan_error', message })
     } else if (videoDraft) {
-      const matchedCharacterIds = new Set(
-        castingResult?.castings.map((casting) => casting.characterId) ?? [],
-      )
-      videoPlan = toDurableValue(compileVideoPlan(
-        videoDraft,
-        scenePublish.characters,
-        context.previousVisualState,
-        matchedCharacterIds,
-      ))
+      videoPlan = toDurableValue(compileVideoPlan(videoDraft))
       send({ type: 'video_plan', video: videoPlan })
     }
 

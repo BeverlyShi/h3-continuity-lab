@@ -2,7 +2,7 @@ export const directorModelOptions = [
   { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', provider: 'deepseek' },
   { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', provider: 'openrouter' },
   { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B', provider: 'openrouter' },
-  { id: 'z-ai/glm-5.3-flash', label: 'GLM-5.3-Flash', provider: 'openrouter' },
+  { id: 'z-ai/glm-5.3-flash', label: 'GLM-5.3-Flash', provider: 'bigmodel' },
 ] as const
 
 export type DirectorModelId = typeof directorModelOptions[number]['id']
@@ -19,3 +19,7 @@ export const getDirectorModelLabel = (modelId: DirectorModelId) =>
 
 export const getDirectorModelProvider = (modelId: DirectorModelId): DirectorModelProvider =>
   directorModelOptions.find((option) => option.id === modelId)?.provider ?? 'openrouter'
+
+// 保留已有模型选择的存储 ID，在发送给智谱时使用官方模型 ID。
+export const getDirectorApiModelId = (modelId: DirectorModelId) =>
+  modelId === 'z-ai/glm-5.3-flash' ? 'glm-5.3-flash' : modelId

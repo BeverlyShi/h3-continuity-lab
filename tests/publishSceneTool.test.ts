@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createPublishSceneTool } from '../server/publishSceneTool.ts'
+import { createPublishSceneTool, prepareScenePublishArguments } from '../server/publishSceneTool.ts'
 import type { ScenePublish } from '../src/types/story.ts'
 
 const turn: ScenePublish = {
+  dialogues: [],
   scene: {
     title: '宫门初雪',
     narrative: '宫门在身后缓缓合拢，沈清禾第一次听见深宫里的晨钟。细雪落在朱红宫墙下，教引嬷嬷催促秀女们向前，她却发现同行少女悄悄塞来一方绣帕。绣帕角落绣着禁军纹样，远处又有人停步回望。沈清禾把手藏进袖中，前方嬷嬷忽然点到她的名字，身旁少女低声让她千万别交出去。队伍即将转过宫门，再迟一步便会被人看见，她必须立刻决定如何应对。',
@@ -55,4 +56,77 @@ test('requires choice ids 1, 2 and 3 exactly once', async () => {
       choices: turn.scene.choices.map((choice) => ({ ...choice, id: '1' })),
     },
   }), /各使用一次 ID 1、2、3/)
+})
+
+test('accepts a narrative counted by Han characters even when punctuation pushes the string length past 250 (real trace: 219 Han chars, 253 total chars)', () => {
+  const narrative = `${'沈'.repeat(219)}${'，'.repeat(34)}`
+  assert.equal(narrative.length, 253)
+  const prepared = prepareScenePublishArguments({
+    ...turn,
+    scene: { ...turn.scene, narrative },
+  })
+  assert.equal(prepared.scene.narrative, narrative)
+})
+
+test('publishes the original 138-Han-character narrative from trace 418ef163 without padding', async () => {
+  const narrative = '初秋晨光透过雕花窗棂洒进储秀宫偏殿，江南织造嫡女沈吟霜刚到宫中，父亲因进献云锦有功送她入宫，盼她得圣眷光耀门楣。偏殿虽逼仄，还算清净。她正望着窗外陌生景致发怔，忽闻急促脚步声——昨日同入宫的秀女李婉如惊惶闯入，攥着一封泪湿信笺，颤声道家中父亲被人弹劾下狱。话音未落，院外传来掌事姑姑查房的脚步声，越来越近。'
+  assert.equal(narrative.match(/\p{Script=Han}/gu)?.length, 138)
+  let published: ScenePublish | undefined
+  const tool = createPublishSceneTool((value) => { published = value })
+  const prepared = prepareScenePublishArguments({
+    ...turn,
+    scene: { ...turn.scene, narrative },
+  })
+  await tool.execute('tool-short-narrative', prepared)
+  assert.equal(published?.scene.narrative, narrative)
+})
+
+test('accepts narratives outside the former Han and schema length bounds without rewriting', () => {
+  for (const narrative of ['宫门外响起脚步声，她握紧信笺。', '沈'.repeat(260), '沈'.repeat(500)]) {
+    const prepared = prepareScenePublishArguments({
+      ...turn,
+      scene: { ...turn.scene, narrative },
+    })
+    assert.equal(prepared.scene.narrative, narrative)
+  }
+})
+
+test('rejects empty and whitespace-only narratives', () => {
+  for (const narrative of ['', ' \n\t　']) {
+    assert.throws(() => prepareScenePublishArguments({
+      ...turn,
+      scene: { ...turn.scene, narrative },
+    }), /publish_scene 参数不符合 schema/)
+  }
+})
+
+test('reports a schema violation when required fields such as choices are missing', () => {
+  const sceneWithoutChoices: Record<string, unknown> = { ...turn.scene }
+  delete sceneWithoutChoices.choices
+  assert.throws(
+    () => prepareScenePublishArguments({ ...turn, scene: sceneWithoutChoices }),
+    /publish_scene 参数不符合 schema/,
+  )
+})
+
+test('explains the wrong nesting and missing choices from trace a942bf88 without fabricating a scene', () => {
+  const malformed = { scene: { ...turn.scene, choices: turn.scene.choices.slice(0, 1), characters: turn.characters } }
+  assert.throws(() => prepareScenePublishArguments(malformed), (error: unknown) => {
+    assert.ok(error instanceof Error)
+    assert.match(error.message, /characters 必须位于顶层，与 scene 同级/)
+    assert.match(error.message, /choices 当前为 1 项/)
+    assert.match(error.message, /重新提交完整 JSON/)
+    return true
+  })
+  assert.equal(malformed.scene.choices.length, 1)
+})
+
+test('asks for complete valid JSON when the SDK hands the tool an empty argument object', () => {
+  assert.throws(() => prepareScenePublishArguments({}), (error: unknown) => {
+    assert.ok(error instanceof Error)
+    assert.match(error.message, /收到空参数对象/)
+    assert.match(error.message, /重新提交完整 JSON/)
+    assert.match(error.message, /"scene":.*"characters":/s)
+    return true
+  })
 })

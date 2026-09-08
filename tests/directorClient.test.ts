@@ -178,3 +178,60 @@ test('sends the DeepSeek key when the selected model routes through DeepSeek', a
     globalThis.fetch = originalFetch
   }
 })
+
+test('sends an independent BigModel key for the official GLM route', async () => {
+  const originalFetch = globalThis.fetch
+  let requestHeaders = new Headers()
+  let requestBody: { model?: string } = {}
+  globalThis.fetch = async (_input, init) => {
+    requestHeaders = new Headers(init?.headers)
+    requestBody = JSON.parse(String(init?.body)) as { model?: string }
+    return new Response([
+      JSON.stringify({ type: 'scene', scene, characters }),
+      JSON.stringify({ type: 'done' }),
+    ].join('\n') + '\n', { status: 200 })
+  }
+
+  try {
+    await streamDirectorTurn({
+      openRouterApiKey: 'sk-or-test',
+      deepseekApiKey: 'sk-ds-test',
+      bigModelApiKey: 'sk-bigmodel-test',
+      context: {
+        ok: true,
+        sessionId: 'session-1',
+        turn: 1,
+        input: { type: 'start' },
+      },
+      traceId: 'trace-1',
+      model: 'z-ai/glm-5.3-flash',
+      onEvent: () => {},
+    })
+
+    assert.equal(requestHeaders.get('X-OpenRouter-Key'), 'sk-or-test')
+    assert.equal(requestHeaders.get('X-DeepSeek-Key'), 'sk-ds-test')
+    assert.equal(requestHeaders.get('X-BigModel-Key'), 'sk-bigmodel-test')
+    assert.equal(requestBody.model, 'z-ai/glm-5.3-flash')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+for (const thinkingEnabled of [undefined, false, true]) {
+  test(`forwards the thinking setting ${thinkingEnabled}, defaulting to off`, async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = async (_url, init) => {
+      assert.equal(JSON.parse(String(init?.body)).thinkingEnabled, thinkingEnabled ?? false)
+      return new Response(JSON.stringify({ type: 'scene', scene, characters }) + '\n')
+    }
+    try {
+      await streamDirectorTurn({
+        model: 'deepseek-v4-flash', thinkingEnabled,
+        context: { ok: true, sessionId: 'thinking-setting', turn: 1, input: { type: 'start' } },
+        traceId: 'thinking-setting', onEvent: () => {},
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+}

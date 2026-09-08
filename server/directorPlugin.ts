@@ -38,6 +38,7 @@ const isDirectorTurnContext = (context: DirectorTurnContext | undefined): contex
   Number.isInteger(context.turn) &&
   context.turn > 0 &&
   Check(storyInputSchema, context.input) &&
+  (context.hasPreviousTailFrame === undefined || typeof context.hasPreviousTailFrame === 'boolean') &&
   (context.previousVisualState === undefined || Check(tailFrameVisualStateSchema, context.previousVisualState))
 
 const isCastableActor = (value: unknown): value is CastableActor => {
@@ -116,10 +117,14 @@ export function directorPlugin(): Plugin {
             castings?: unknown
             agent?: string
             model?: unknown
+            thinkingEnabled?: unknown
           }>(req)
           if (!isDirectorTurnContext(body.context)) throw new Error('故事输入无效。')
           if (!body.traceId) throw new Error('缺少 Trace ID。')
           if (!isDirectorModelId(body.model)) throw new Error('不支持该模型。')
+          if (body.thinkingEnabled !== undefined && typeof body.thinkingEnabled !== 'boolean') {
+            throw new Error('思考模式设置无效。')
+          }
           if (!Array.isArray(body.actors) || !body.actors.every(isCastableActor)) {
             throw new Error('演员库数据无效。')
           }
@@ -128,15 +133,16 @@ export function directorPlugin(): Plugin {
           }
 
           const provider = getDirectorModelProvider(body.model)
-          const apiKey = provider === 'deepseek' ? deepseekKey : openRouterKey
+          const apiKey = { deepseek: deepseekKey, openrouter: openRouterKey, bigmodel: req.headers['x-bigmodel-key'] }[provider]
           if (typeof apiKey !== 'string' || !apiKey.trim()) {
-            throw new Error(provider === 'deepseek' ? '请先配置 DEEPSEEK_API_KEY。' : '请先配置 OPENROUTER_API_KEY。')
+            throw new Error(`请先配置 ${{ deepseek: 'DEEPSEEK_API_KEY', openrouter: 'OPENROUTER_API_KEY', bigmodel: 'BIGMODEL_API_KEY' }[provider]}。`)
           }
 
           const runTurn = body.agent === 'simple' ? runSimpleDirector : runDirectorAgent
           await runTurn({
             apiKey: apiKey.trim(),
             modelId: body.model,
+            thinkingEnabled: body.thinkingEnabled === true,
             context: body.context,
             actors: body.actors,
             castings: body.castings,

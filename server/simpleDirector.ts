@@ -1,6 +1,6 @@
 import { Check } from 'typebox/value'
 import type { TSchema } from 'typebox'
-import { getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
+import { getDirectorApiModelId, getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
 import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
 import type { DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
@@ -14,18 +14,22 @@ import {
 } from '../src/types/story.ts'
 import {
   buildStoryInputMessage,
+  buildVideoInputMessage,
   DIRECTOR_SYSTEM_PROMPT,
   DIRECTOR_VIDEO_SYSTEM_PROMPT,
 } from './directorPrompt.ts'
 import { createCastSceneTool } from './castSceneTool.ts'
-import { assertValidScenePublish } from './publishSceneTool.ts'
+import { assertValidScenePublish, PUBLISH_SCENE_DESCRIPTION, prepareScenePublishArguments } from './publishSceneTool.ts'
 import {
-  assertValidVideoDraft,
-  assertValidVideoPlan,
-  normalizeVideoPlan,
+  prepareVideoPlan,
   prepareVideoPlanArguments,
+  WRITE_VIDEO_PROMPT_DESCRIPTION,
 } from './videoPlanTool.ts'
 import { compileVideoPlan } from './videoPromptCompiler.ts'
+
+import { assertNarrativeReview, narrativeReviewToolDefinition, narrativeReviewSchema, narrativeSources, NARRATIVE_REVIEW_PROMPT, type NarrativeReview } from './narrativeReview.ts'
+import { withDirectorSession } from './directorSession.ts'
+import { BIGMODEL_BASE_URL } from './bigmodelProvider.ts'
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
@@ -37,10 +41,10 @@ const MAX_TOOL_ATTEMPTS = 2
 
 type ApiMessage =
   | { role: 'system' | 'user'; content: string }
-  | { role: 'assistant'; content: string | null; tool_calls?: OpenRouterToolCall[] }
+  | { role: 'assistant'; content: string | null; reasoning_content?: string; tool_calls?: OpenRouterToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string }
 
-type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string }
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string; reasoning_content?: string }
 
 type OpenRouterToolCall = { id?: string; type?: string; function?: { name?: string; arguments?: string } }
 
@@ -48,6 +52,7 @@ type OpenRouterResponse = {
   choices?: Array<{
     message?: {
       content?: string | null
+      reasoning_content?: string
       tool_calls?: OpenRouterToolCall[]
     }
   }>
@@ -67,7 +72,7 @@ const publishSceneToolDefinition = {
   type: 'function',
   function: {
     name: 'publish_scene',
-    description: '提交当前回合的场景和主要人物。本工具会本地发布场景，每回合只调用一次。',
+    description: PUBLISH_SCENE_DESCRIPTION,
     parameters: scenePublishSchema,
   },
 } as const
@@ -76,7 +81,7 @@ const submitVideoPlanToolDefinition = {
   type: 'function',
   function: {
     name: 'write_video_prompt',
-    description: '根据已发布场景和上一幕实测视觉状态，按模板编译本幕视频 Prompt。',
+    description: WRITE_VIDEO_PROMPT_DESCRIPTION,
     parameters: videoPlanSchema,
   },
 } as const
@@ -86,28 +91,30 @@ type ToolCallOutcome<T> = {
   usage: OpenRouterResponse['usage']
   requestMs: number
   messages: ApiMessage[]
+  reasoningContent?: string
 }
 
 async function requestToolCall<T>(
   apiKey: string,
   modelId: DirectorModelId,
+  thinkingEnabled: boolean,
   toolDefinition: { type: 'function'; function: { name: string; description: string; parameters: unknown } },
   schema: TSchema,
-  validate: (value: T) => void,
+  validate: (value: T) => void | Promise<void>,
   initialMessages: ApiMessage[],
   signal: AbortSignal | undefined,
   prepareArguments?: (value: unknown) => T,
 ): Promise<ToolCallOutcome<T>> {
   const toolName = toolDefinition.function.name
   const provider = getDirectorModelProvider(modelId)
-  const requestUrl = provider === 'deepseek' ? DEEPSEEK_URL : OPENROUTER_URL
+  const requestUrl = { deepseek: DEEPSEEK_URL, openrouter: OPENROUTER_URL, bigmodel: `${BIGMODEL_BASE_URL}/chat/completions` }[provider]
   let messages = initialMessages
   let totalRequestMs = 0
   let lastUsage: OpenRouterResponse['usage']
 
   for (let attempt = 1; attempt <= MAX_TOOL_ATTEMPTS; attempt += 1) {
     const startedAt = Date.now()
-    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    const timeout = AbortSignal.timeout(provider !== 'openrouter' ? 120_000 : REQUEST_TIMEOUT_MS)
     const response = await fetch(requestUrl, {
       method: 'POST',
       headers: {
@@ -115,12 +122,23 @@ async function requestToolCall<T>(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: modelId,
+        model: getDirectorApiModelId(modelId),
         ...(provider === 'openrouter' ? { reasoning: { effort: 'none' } } : {}),
-        messages,
+        ...(provider === 'deepseek' ? { thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' } } : {}),
+        // GLM-5.3-Flash 不支持关闭思考，用 low/high 对比耗时。
+        ...(provider === 'bigmodel' ? { thinking: { type: 'enabled', clear_thinking: false }, reasoning_effort: thinkingEnabled ? 'high' : 'low' } : {}),
+        ...(provider === 'deepseek' && thinkingEnabled ? { reasoning_effort: 'high' } : {}),
+        messages: provider !== 'openrouter'
+          ? messages.map((message) => message.role === 'assistant'
+            ? { ...message, reasoning_content: message.reasoning_content ?? '' }
+            : message)
+          : messages,
         tools: [toolDefinition],
-        tool_choice: { type: 'function', function: { name: toolName } },
-        max_tokens: MAX_OUTPUT_TOKENS,
+        // 官方思考接口由模型选择工具；每个阶段只提供对应工具。
+        ...(provider !== 'openrouter' ? {} : {
+          tool_choice: { type: 'function', function: { name: toolName } },
+        }),
+        max_tokens: provider !== 'openrouter' ? 16_384 : MAX_OUTPUT_TOKENS,
       }),
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     })
@@ -129,7 +147,7 @@ async function requestToolCall<T>(
     totalRequestMs += Date.now() - startedAt
     lastUsage = payload.usage
     if (!response.ok) {
-      throw new Error(payload.error?.message ?? `${provider === 'deepseek' ? 'DeepSeek' : 'OpenRouter'} 请求失败（${response.status}）。`)
+      throw new Error(payload.error?.message ?? `${{ deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' }[provider]} 请求失败（${response.status}）。`)
     }
 
     const assistantMessage = payload.choices?.[0]?.message
@@ -140,14 +158,14 @@ async function requestToolCall<T>(
       const raw = JSON.parse(toolCall.function.arguments) as unknown
       const parsed = prepareArguments ? prepareArguments(raw) : raw as T
       if (!Check(schema, parsed)) throw new Error(`模型输出的 ${toolName} 参数不符合 schema。`)
-      validate(parsed)
-      return { result: parsed, usage: lastUsage, requestMs: totalRequestMs, messages }
+      await validate(parsed)
+      return { result: parsed, usage: lastUsage, requestMs: totalRequestMs, messages, reasoningContent: assistantMessage?.reasoning_content }
     } catch (error) {
       if (attempt >= MAX_TOOL_ATTEMPTS) throw error
       const message = error instanceof Error ? error.message : String(error)
       messages = [
         ...messages,
-        { role: 'assistant', content: assistantMessage?.content ?? null, tool_calls: assistantMessage?.tool_calls },
+        { role: 'assistant', content: assistantMessage?.content ?? null, reasoning_content: assistantMessage?.reasoning_content, tool_calls: assistantMessage?.tool_calls },
         { role: 'tool', tool_call_id: toolCall.id ?? toolName, content: message },
       ]
     }
@@ -159,6 +177,7 @@ async function requestToolCall<T>(
 export type SimpleDirectorRequest = {
   apiKey: string
   modelId: DirectorModelId
+  thinkingEnabled?: boolean
   context: DirectorTurnContext
   actors: CastableActor[]
   castings: CharacterCasting[]
@@ -167,9 +186,14 @@ export type SimpleDirectorRequest = {
   send: (event: DirectorStreamEvent) => void
 }
 
-export async function runSimpleDirector({
+export async function runSimpleDirector(request: SimpleDirectorRequest) {
+  return withDirectorSession(request.context.sessionId, () => runSimpleDirectorTurn(request))
+}
+
+async function runSimpleDirectorTurn({
   apiKey,
   modelId,
+  thinkingEnabled = false,
   context,
   actors,
   castings,
@@ -216,18 +240,46 @@ export async function runSimpleDirector({
     },
   ]
 
+  const reviewUsage: NonNullable<OpenRouterResponse['usage']>[] = []
+  const reviewNarrative = async (source: ScenePublish, finalVideo?: VideoGenerationRequest, referenceInput?: string) => {
+    const input = {
+      phase: finalVideo ? 'video' : 'scene', ...source,
+      playerInput: context.input, sources: narrativeSources(source.scene.narrative),
+      previousVisualState: context.hasPreviousTailFrame === false ? undefined : context.previousVisualState,
+      finalVideo, referenceInput,
+    }
+    send({ type: 'status', text: finalVideo ? '正在逐条核对最终分镜与本幕原文。' : '正在核对出场人物与剧情边界。' })
+    const reviewId = `${traceId}:review-${traceEntries.length}`
+    traceEntries.push({ id: `${reviewId}:input`, kind: 'input', title: '原文一致性核对输入', timestamp: Date.now(), data: input, text: NARRATIVE_REVIEW_PROMPT })
+    const outcome = await requestToolCall<NarrativeReview>(
+      apiKey, modelId, thinkingEnabled, narrativeReviewToolDefinition, narrativeReviewSchema,
+      () => {}, [
+        { role: 'system', content: NARRATIVE_REVIEW_PROMPT },
+        { role: 'user', content: JSON.stringify(input) },
+      ], signal,
+    )
+    if (outcome.usage) reviewUsage.push(outcome.usage)
+    traceEntries.push({ id: reviewId, kind: 'tool_result', title: '原文一致性核对结果', timestamp: Date.now(), data: { result: outcome.result, usage: outcome.usage, durationMs: outcome.requestMs } })
+    assertNarrativeReview(outcome.result, source, finalVideo)
+  }
+
   try {
     const sceneOutcome = await requestToolCall<ScenePublish>(
       apiKey,
       modelId,
+      thinkingEnabled,
       publishSceneToolDefinition,
       scenePublishSchema,
-      assertValidScenePublish,
+      async (source) => {
+        assertValidScenePublish(source)
+        await reviewNarrative(source)
+      },
       sceneMessages,
       signal,
+      prepareScenePublishArguments,
     )
     const scenePublish = sceneOutcome.result
-    history.push(userMessage, { role: 'assistant', content: JSON.stringify(scenePublish) })
+    history.push(userMessage, { role: 'assistant', content: JSON.stringify(scenePublish), reasoning_content: sceneOutcome.reasoningContent })
     sessionHistories.set(context.sessionId, history)
 
     traceEntries.push({
@@ -239,7 +291,7 @@ export async function runSimpleDirector({
     })
 
     send({ type: 'scene', scene: scenePublish.scene, characters: scenePublish.characters })
-    send({ type: 'status', text: '场景已发布，正在并行选角和生成视频计划。' })
+    send({ type: 'status', text: '场景已发布，正在准备人物参考素材。' })
 
     let castingResult: SceneCastingResult | undefined
     let videoDraft: VideoGenerationRequest | undefined
@@ -269,38 +321,7 @@ export async function runSimpleDirector({
         send({ type: 'cast', casting: castingResult })
       })
 
-    const videoPromise = (async () => {
-      const videoMessages: ApiMessage[] = [
-        { role: 'system', content: DIRECTOR_VIDEO_SYSTEM_PROMPT },
-        ...sceneOutcome.messages.filter((message) => message.role !== 'system'),
-        { role: 'assistant', content: JSON.stringify(scenePublish) },
-        { role: 'user', content: '场景已发布，请调用 write_video_prompt 提交本幕视频计划。' },
-      ]
-      const videoOutcome = await requestToolCall<VideoPlan>(
-        apiKey,
-        modelId,
-        submitVideoPlanToolDefinition,
-        videoPlanSchema,
-        (plan) => {
-          assertValidVideoDraft(plan, scenePublish.characters)
-          assertValidVideoPlan(normalizeVideoPlan(plan), scenePublish.characters)
-        },
-        videoMessages,
-        signal,
-        prepareVideoPlanArguments,
-      )
-      videoDraft = normalizeVideoPlan(videoOutcome.result)
-      videoRequestMs = videoOutcome.requestMs
-      traceEntries.push({
-        id: `${traceId}:video-system-prompt`,
-        kind: 'input',
-        title: `Simple Agent 视频计划阶段 System Prompt · ${modelId}`,
-        timestamp: Date.now(),
-        text: DIRECTOR_VIDEO_SYSTEM_PROMPT,
-      })
-    })()
-
-    const [castingOutcome, videoOutcome] = await Promise.allSettled([castingPromise, videoPromise])
+    const [castingOutcome] = await Promise.allSettled([castingPromise])
     if (castingOutcome.status === 'rejected') {
       const message = castingOutcome.reason instanceof Error
         ? castingOutcome.reason.message
@@ -315,6 +336,50 @@ export async function runSimpleDirector({
       })
       send({ type: 'cast_error', message })
     }
+    const videoInputMessage = buildVideoInputMessage(
+      scenePublish.characters, castingResult, actors, scenePublish.dialogues,
+      context.previousVisualState, context.hasPreviousTailFrame, scenePublish.scene,
+    )
+    send({ type: 'status', text: '参考素材已确认，正在编写分镜。' })
+
+    traceEntries.push({
+      id: `${traceId}:video-input`,
+      kind: 'input',
+      title: '视频参考素材',
+      timestamp: Date.now(),
+      text: videoInputMessage,
+    })
+    const videoPromise = (async () => {
+      const videoMessages: ApiMessage[] = [
+        { role: 'system', content: DIRECTOR_VIDEO_SYSTEM_PROMPT },
+        { role: 'user', content: videoInputMessage },
+      ]
+      const videoOutcome = await requestToolCall<VideoPlan>(
+        apiKey,
+        modelId,
+        thinkingEnabled,
+        submitVideoPlanToolDefinition,
+        videoPlanSchema,
+        async (plan) => {
+          const prepared = prepareVideoPlan(plan, scenePublish.characters, scenePublish.dialogues).video
+          await reviewNarrative(scenePublish, compileVideoPlan(prepared), videoInputMessage)
+          videoDraft = prepared
+        },
+        videoMessages,
+        signal,
+        prepareVideoPlanArguments,
+      )
+      videoRequestMs = videoOutcome.requestMs
+      traceEntries.push({
+        id: `${traceId}:video-system-prompt`,
+        kind: 'input',
+        title: `Simple Agent 视频计划阶段 System Prompt · ${modelId}`,
+        timestamp: Date.now(),
+        text: DIRECTOR_VIDEO_SYSTEM_PROMPT,
+      })
+    })()
+
+    const [videoOutcome] = await Promise.allSettled([videoPromise])
     if (videoOutcome.status === 'rejected') {
       const error = videoOutcome.reason
       const message = error instanceof Error ? error.message : String(error)
@@ -328,15 +393,7 @@ export async function runSimpleDirector({
       })
       send({ type: 'video_plan_error', message })
     } else if (videoDraft) {
-      const matchedCharacterIds = new Set(
-        castingResult?.castings.map((casting) => casting.characterId) ?? [],
-      )
-      videoPlan = compileVideoPlan(
-        videoDraft,
-        scenePublish.characters,
-        context.previousVisualState,
-        matchedCharacterIds,
-      )
+      videoPlan = compileVideoPlan(videoDraft)
       traceEntries.push({
         id: `${traceId}:video-tool-call`,
         kind: 'tool_call',
@@ -358,6 +415,7 @@ export async function runSimpleDirector({
         castingRequestMs,
         videoRequestMs,
         modelId,
+        thinkingEnabled,
         totalMs: endedAt - startedAt,
       },
     })
@@ -371,10 +429,10 @@ export async function runSimpleDirector({
       outcome: castingResult && videoPlan ? 'completed' : 'degraded',
       stopReason: 'toolUse',
       usage: {
-        input: (sceneOutcome.usage?.prompt_tokens ?? 0),
-        output: (sceneOutcome.usage?.completion_tokens ?? 0),
-        cacheRead: (sceneOutcome.usage?.prompt_cache_hit_tokens ?? 0),
-        totalTokens: (sceneOutcome.usage?.total_tokens ?? 0),
+        input: (sceneOutcome.usage?.prompt_tokens ?? 0) + reviewUsage.reduce((sum, usage) => sum + (usage.prompt_tokens ?? 0), 0),
+        output: (sceneOutcome.usage?.completion_tokens ?? 0) + reviewUsage.reduce((sum, usage) => sum + (usage.completion_tokens ?? 0), 0),
+        cacheRead: (sceneOutcome.usage?.prompt_cache_hit_tokens ?? 0) + reviewUsage.reduce((sum, usage) => sum + (usage.prompt_cache_hit_tokens ?? 0), 0),
+        totalTokens: (sceneOutcome.usage?.total_tokens ?? 0) + reviewUsage.reduce((sum, usage) => sum + (usage.total_tokens ?? 0), 0),
         cost: 0,
       },
       entries: traceEntries,

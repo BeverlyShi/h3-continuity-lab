@@ -44,7 +44,8 @@ Pi Agent 通过 OpenRouter 调用用户选择的模型续写故事
 - `inspect_tail_frame` 只调用 DeepSeek Vision，将整幕最终尾帧转换成下一回合使用的实测视觉状态。
 - 工具使用 TypeBox 校验场景结构，并要求每回合提供三个选择。
 - 工具成功后以结构化 `details` 返回场景与模板编译结果。
-- 可在 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 与 GLM-5.3-Flash 之间切换，thinking 保持关闭。
+- 可在 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 与 GLM-5.3-Flash 之间切换；DeepSeek V4 Flash 在 Pi 和极简导演中均默认关闭思考模式，可通过模型下方的开关开启 high 模式。
+- GLM-5.3-Flash 使用独立 `BIGMODEL_API_KEY` 直连智谱官方通用按量 API，GLM-5.3-Flash 不支持完全关闭思考，Pi 与极简导演默认使用 low，可通过开关切换 high。
 - 工具参数不符合 schema 时会把错误反馈给模型，并在有限次数内重试。
 
 ### 会话与连续性

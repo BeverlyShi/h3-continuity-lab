@@ -70,9 +70,10 @@ test('uses low reasoning and avoids Darkbloom for GPT-OSS', () => {
   })
 })
 
-test('gives DeepSeek enough output budget for structured tool arguments', () => {
-  assert.deepEqual(getDirectorStreamPolicy('deepseek-v4-flash'), {
-    maxTokens: 4_096,
+test('enables DeepSeek reasoning with room for thinking and structured tool arguments', () => {
+  assert.deepEqual(getDirectorStreamPolicy('deepseek-v4-flash', true), {
+    maxTokens: 16_384,
+    reasoning: 'high',
   })
 })
 
@@ -134,6 +135,16 @@ test('retries a failed tool call up to the configured attempt count before stopp
   assert.equal(shouldStop(toolResultContext(true)), true, 'third failure exhausts retries and stops')
 })
 
+test('surfaces the failing tool result text through onToolError before exhausting retries', () => {
+  const receivedErrors: string[] = []
+  const shouldStop = createRetryingStopCondition(3, () => false, (message) => receivedErrors.push(message))
+
+  assert.equal(shouldStop(toolResultContext(true)), false)
+  assert.equal(shouldStop(toolResultContext(true)), false)
+  assert.equal(shouldStop(toolResultContext(true)), true, 'stops after the third consecutive failure')
+  assert.deepEqual(receivedErrors, ['invalid', 'invalid', 'invalid'])
+})
+
 test('continues after publish_scene and stops after the whole agent turn is complete', () => {
   let complete = false
   const shouldStop = createRetryingStopCondition(3, () => complete)
@@ -154,3 +165,14 @@ test('keeps a non-trailing failed turn', () => {
 
   assert.strictEqual(stripTrailingFailedTurns(entries), entries)
 })
+
+test('enables GLM thinking with enough output budget', () => {
+  assert.deepEqual(getDirectorStreamPolicy('z-ai/glm-5.3-flash', true), { maxTokens: 16_384, reasoning: 'high' })
+})
+
+for (const modelId of ['deepseek-v4-flash', 'z-ai/glm-5.3-flash'] as const) {
+  test(`${modelId} defaults to its fastest supported thinking mode`, () => {
+    assert.deepEqual(getDirectorStreamPolicy(modelId), { maxTokens: 16_384, reasoning: modelId === 'z-ai/glm-5.3-flash' ? 'low' : undefined })
+    assert.deepEqual(getDirectorStreamPolicy(modelId, false), getDirectorStreamPolicy(modelId))
+  })
+}

@@ -4,6 +4,7 @@ import {
   DEFAULT_DIRECTOR_MODEL,
   directorModelOptions,
   getDirectorModelProvider,
+  getDirectorApiModelId,
   isDirectorModelId,
 } from '../src/config/directorModels.ts'
 
@@ -23,9 +24,15 @@ test('validates director model ids against the server allowlist', () => {
   assert.equal(isDirectorModelId(undefined), false)
 })
 
-test('routes DeepSeek through the official API and everything else through OpenRouter', () => {
+test('routes DeepSeek and GLM through their official providers', () => {
   assert.equal(getDirectorModelProvider('deepseek-v4-flash'), 'deepseek')
   assert.equal(getDirectorModelProvider('google/gemini-2.5-flash-lite'), 'openrouter')
   assert.equal(getDirectorModelProvider('openai/gpt-oss-20b'), 'openrouter')
-  assert.equal(getDirectorModelProvider('z-ai/glm-5.3-flash'), 'openrouter')
+  assert.equal(getDirectorModelProvider('z-ai/glm-5.3-flash'), 'bigmodel')
+})
+
+test('maps the saved GLM selection to the official model id', () => {
+  assert.equal(getDirectorApiModelId('z-ai/glm-5.3-flash'), 'glm-5.3-flash')
+  assert.equal(getDirectorApiModelId('deepseek-v4-flash'), 'deepseek-v4-flash')
+  assert.equal(getDirectorApiModelId('google/gemini-2.5-flash-lite'), 'google/gemini-2.5-flash-lite')
 })

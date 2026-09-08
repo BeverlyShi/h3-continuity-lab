@@ -8,6 +8,7 @@ import type { StoryChoice } from '../../types/story'
 type GameInteractionProps = {
   session: GameSession
   directorStatus: DirectorStatus
+  mediaBusy?: boolean
   onChoose: (choice: StoryChoice) => boolean
   onSubmitFreeform: (text: string) => boolean
   onRetry: () => void
@@ -16,6 +17,7 @@ type GameInteractionProps = {
 export function GameInteraction({
   session,
   directorStatus,
+  mediaBusy,
   onChoose,
   onSubmitFreeform,
   onRetry,
@@ -52,13 +54,15 @@ export function GameInteraction({
     )
   }
 
-  if (session.status === 'awaiting_media') {
+  if (session.status === 'awaiting_media' || mediaBusy) {
     return (
       <section className="game-interaction-card waiting" aria-live="polite">
         <LoaderCircle className="spin" size={20} />
         <div>
           <h2>正在完成这一幕</h2>
-          <p>视频生成并完成 DeepSeek 尾帧识别后，将开放新的选择。</p>
+          <p>{session.currentScene?.videoMode === 'manual'
+            ? '请逐段上传视频；最后一段完成尾帧识别后，将开放新的选择。'
+            : '视频生成并完成 DeepSeek 尾帧识别后，将开放新的选择。'}</p>
         </div>
       </section>
     )

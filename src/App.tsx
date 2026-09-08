@@ -9,9 +9,11 @@ import { useActorLibrary } from './hooks/useActorLibrary'
 import { useAgentTraces } from './hooks/useAgentTraces'
 import {
   loadApiKey,
+  loadBigModelApiKey,
   loadDeepSeekApiKey,
   loadOpenRouterApiKey,
   saveApiKey,
+  saveBigModelApiKey,
   saveDeepSeekApiKey,
   saveOpenRouterApiKey,
 } from './services/localStorage'
@@ -23,11 +25,14 @@ function App() {
   const [savedApiKey, setSavedApiKey] = useState(loadApiKey)
   const [savedOpenRouterApiKey, setSavedOpenRouterApiKey] = useState(loadOpenRouterApiKey)
   const [savedDeepSeekApiKey, setSavedDeepSeekApiKey] = useState(loadDeepSeekApiKey)
+  const [savedBigModelApiKey, setSavedBigModelApiKey] = useState(loadBigModelApiKey)
   const [isApiDialogOpen, setIsApiDialogOpen] = useState(false)
   const { traces, updateTrace } = useAgentTraces()
   const actorLibrary = useActorLibrary()
 
-  const updateApiKeys = (falApiKey: string, openRouterApiKey: string, deepSeekApiKey: string) => {
+  const updateApiKeys = (falApiKey: string, openRouterApiKey: string, deepSeekApiKey: string, bigModelApiKey: string) => {
+    setSavedBigModelApiKey(bigModelApiKey)
+    saveBigModelApiKey(bigModelApiKey)
     setSavedApiKey(falApiKey)
     setSavedOpenRouterApiKey(openRouterApiKey)
     setSavedDeepSeekApiKey(deepSeekApiKey)
@@ -95,7 +100,7 @@ function App() {
           onClick={() => setIsApiDialogOpen(true)}
         >
           {allKeysConfigured ? <Check size={16} /> : <KeyRound size={16} />}
-          <span>{allKeysConfigured ? 'API 已配置' : savedApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey ? 'API 待补充' : '设置 API Key'}</span>
+          <span>{allKeysConfigured ? 'API 已配置' : savedApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey || savedBigModelApiKey ? 'API 待补充' : '设置 API Key'}</span>
         </button>
       </header>
 
@@ -119,6 +124,7 @@ function App() {
           savedFalApiKey={savedApiKey}
           savedOpenRouterApiKey={savedOpenRouterApiKey}
           savedDeepSeekApiKey={savedDeepSeekApiKey}
+          savedBigModelApiKey={savedBigModelApiKey}
           onTraceUpdate={updateTrace}
           onRequestApiKey={() => setIsApiDialogOpen(true)}
           actors={actorLibrary.actors}
@@ -133,9 +139,10 @@ function App() {
           savedFalApiKey={savedApiKey}
           savedOpenRouterApiKey={savedOpenRouterApiKey}
           savedDeepSeekApiKey={savedDeepSeekApiKey}
+          savedBigModelApiKey={savedBigModelApiKey}
           onClose={() => setIsApiDialogOpen(false)}
           onSave={updateApiKeys}
-          onClear={() => updateApiKeys('', '', '')}
+          onClear={() => updateApiKeys('', '', '', '')}
         />
       )}
     </div>

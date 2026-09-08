@@ -9,6 +9,15 @@ export const toDurableValue = <T>(value: T): T =>
 export const toDurableMessage = (message: AgentMessage): AgentMessage =>
   toDurableValue(message)
 
+export const inspectRawToolArguments = (rawArguments: string) => {
+  try {
+    JSON.parse(rawArguments)
+    return { rawArguments, jsonParseError: null }
+  } catch (error) {
+    return { rawArguments, jsonParseError: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export const summarizeAssistantUsage = (messages: AgentMessage[]): TraceUsage | undefined => {
   const assistants = messages.filter((message): message is AssistantAgentMessage =>
     message.role === 'assistant' && 'usage' in message && message.usage.totalTokens > 0,

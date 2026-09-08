@@ -42,13 +42,21 @@ npm run build
 ### 游戏互动（Pi 导演与场景视频）
 
 - 游戏初始页展示《后宫》的简单背景与玩家身份。
-- 点击“请开始故事”后，Pi Agent 会主动决定女主、入宫缘由和第一幕，并在视频开关开启时提交 fal 场景视频。
-- 故事续写需要所选导演模型对应的 Key；开启场景视频后还需要 `FAL_KEY` 和用于尾帧识别的 `DEEPSEEK_API_KEY`。
+- 点击“请开始故事”后，Pi Agent 会主动决定女主、入宫缘由和第一幕；视频方式通过“上传视频 / API 生成”两个入口选择，另保留“仅文字”入口。首次使用默认上传视频，已有选择会保留。
+- 上传视频：复制 Prompt 和下载参考图，使用外部平台的额度生成，再逐段上传。API 生成：直接调用已接入的 fal 自动生成视频。
+- 故事续写需要所选导演模型对应的 Key；API 生成需要 `FAL_KEY`，上传视频不需要；尾帧识别使用 `DEEPSEEK_API_KEY`。视觉反馈当前只分析最终尾帧，不理解整段视频的动作或音频。
 - 每一幕提供三个选择，也支持自由行动；玩家输入会直接作为下一条 user message 进入同一 Pi Session。
-- 页面内置 Pi Agent Core，并通过本地 `/api/director/turn` 调用 OpenRouter；右侧下拉框可选择 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 或 GLM-5.3-Flash，模型 thinking 保持关闭。
-- Agent 每回合使用确定性的两阶段编排：场景模型只调用 `publish_scene` 发布叙事、选项和人物；随后程序选角与视频模型的 `write_video_prompt` 并行执行。
-- 视频模型提交镜头节拍、结构化台词和预测性的 `endFrame` 文字；程序按每秒 3.5 个汉字计算时间块，并生成 sequence、起止时间和总时长。
+- 页面内置 Pi Agent Core，并通过本地 `/api/director/turn` 调用所选模型；右侧下拉框可选择 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 或 GLM-5.3-Flash。DeepSeek V4 Flash 直连官方 API，Pi 和极简导演均默认关闭思考模式，可在模型下方的“思考模式”开关开启 high 模式，场景与视频提示词阶段的输出上限为 16,384 tokens（包含思考），单次请求超时为 120 秒。
+- GLM-5.3-Flash 通过智谱官方通用按量接口 `https://open.bigmodel.cn/api/paas/v4` 调用，API 模型 ID 为 `glm-5.3-flash`。在设置中填写独立的 `BIGMODEL_API_KEY`，再选择该模型；GLM-5.3-Flash 不支持关闭思考，Pi 和极简导演默认使用 low，可通过模型下方开关切换 high；使用 16,384 tokens 输出上限和 120 秒超时，保留工具重试的思考内容。Pi 同时开启 `tool_stream`。已有 GLM 模型选择会自动走官方接口。
+- 智谱调用的 Trace 记录 token 用量；SDK 的美元费用字段未配置国内人民币价格，请以 BigModel 账单为准。
+- Agent 每回合使用确定性的两阶段编排：场景模型调用 `publish_scene` 发布叙事、选项、人物及 `dialogues` 台词清单；随后程序完成选角，将实际参考素材和原始台词交给视频模型调用 `write_video_prompt`。
+- narrative 的人物对白用成对双引号，心声、书信和称谓使用叙述或单引号。发布时逐句校验台词清单与 narrative 一致；视频镜头通过 `dialogueIds` 引用，并在正文实际说话处插入 `{{line_1}}` 占位符；程序填入人物姓名和完整原文，拒绝角色 ID 泄漏、遗漏、重复和乱序。时长按原台词加 `actionSeconds` 动作预算逐镜向上取整，超出分段上限时报告冲突，不删台词。
+- 视频模型加载项目内 `skills/video-shot-prompt/SKILL.md` 写作规范，每个镜头提交具体机位、动作、结构化台词及对应声音，`endFrame` 仅用于内部连续性。最终 Prompt 只保留风格、具体小场景、必要的人物参考对应和分时镜头，开场和结尾融入镜头，不追加三视图介绍或独立布局、开场、结尾、音频段落。
+- 场景发布前核对出场人物与玩家行动边界；视频阶段只接收本幕原文、未选择选项和实际参考状态，编译后再逐条核对原文事件、发声、持物、镜头逻辑及结尾。两次语义核对均使用所选导演模型并增加调用耗时，失败会进入有限次定向修复；核对输入、覆盖证据、问题和用量可在 Trace 查看。语义核对依赖模型判断，不能保证视频模型的实际演出。
+- 程序按每秒 3.5 个汉字加动作预算计算时间块，并生成 sequence、起止时间和总时长。自动拆段要求边界镜头提供 `endFrame`，不会把动作过程当成末帧状态。手动上传与 API 生成共用参考图说明，人物图按实际顺序编号，起始尾帧约束写入首镜。
 - 每幕视频由 2～3 个 5～10 秒的片段组成，总时长 15～30 秒；片段按顺序生成，后一片段以及下一幕首段使用上一尾帧作为起始参考。
+- 手动模式提前展示每段 Prompt 和参考图，可复制 Prompt、下载图片后在外部工具生成，再上传至对应片段。第一段上传并提取尾帧后，才能准备并上传下一段；上传视频按实际时长播放，不要求与计划时长相同。
+- 上传后自动提取尾帧，最后一段继续进行视觉识别。识别失败会保留视频和错误提示，可单独重试识别；替换前段会清除后续片段和本幕旧视觉状态，需要依据新尾帧重新上传后续片段。
 - 整幕最终尾帧只通过 `inspect_tail_frame` 调用 `deepseek-v4-flash-vision-exp`；实测状态保存完成后才开放用户选择，并注入下一回合。
 - 场景标题下方展示 `cast_scene` 从演员库选出的演员参考图；游戏播放器下方的时间轴按真实时长展示片段、生成状态、尾帧依赖和对应 Prompt，Prompt 下方继续展示该次生成实际发送的人物参考图或起始尾帧。
 - 不存在导演台账、宿籍数值或外围确定性裁决链；长对话由 Pi JSONL Session 与原生 Compaction 保持连续。
@@ -56,12 +64,13 @@ npm run build
 - 文字场景下方保留全部幕次，可随时回看；回看不会推进剧情或调用 API。
 - OpenRouter 单次导演请求最多输出 2,500 tokens、关闭自动重试并设置 45 秒超时。
 - 当前场景、幕次历史、视频计划和片段状态保存在当前浏览器的 `localStorage` 中。
+- 手动上传的视频和尾帧保存在当前浏览器的 IndexedDB 中，刷新页面后恢复播放与尾帧依赖；重新开始故事会清理这局上传的本地视频。
 
 ### Trace
 
 - 同一局游戏持续使用同一个 Pi Session，并在本地 `.agent-traces` 写入 JSONL 记录。
 - Trace 页面按回合展示完整模型输入、所选模型与 thinking、Tool Call、Tool Result、Token、耗时与停止原因。
-- `publish_scene`、程序选角、`write_video_prompt` 及其结果会出现在同一次 Agent Trace 中；视频或选角失败但剧情已发布时，Trace 标记为 `degraded`，游戏降级到文字模式继续。
+- `publish_scene`、程序选角、`write_video_prompt` 及其结果会出现在同一次 Agent Trace 中；视频或选角失败但剧情已发布时，Trace 标记为 `degraded`，游戏降级到文字模式继续。Pi 与极简导演共享会话防重入锁，Vite 模块重载期间仍保留锁；锁仅在当前服务进程内生效。
 - 当前锁定的 `pi-agent-core@0.84.4` 尚未实现 `AgentHarness.prompt()`；本版本使用可运行的基础 `Agent`，并接入同包的 JSONL Session 与 Telemetry。待 Harness 执行层发布后可在服务端单点替换。
 
 ## API 接入边界

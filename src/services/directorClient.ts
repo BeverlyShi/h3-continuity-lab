@@ -24,12 +24,14 @@ export type DirectorAgentKind = 'pi' | 'simple'
 type StreamDirectorTurnOptions = {
   openRouterApiKey?: string
   deepseekApiKey?: string
+  bigModelApiKey?: string
   context: DirectorTurnContext
   traceId: string
   actors?: CastableActor[]
   castings?: CharacterCasting[]
   agent?: DirectorAgentKind
   model: DirectorModelId
+  thinkingEnabled?: boolean
   signal?: AbortSignal
   onEvent: (event: DirectorStreamEvent) => void
 }
@@ -37,23 +39,26 @@ type StreamDirectorTurnOptions = {
 export async function streamDirectorTurn({
   openRouterApiKey,
   deepseekApiKey,
+  bigModelApiKey,
   context,
   traceId,
   actors = [],
   castings = [],
   agent = 'pi',
   model,
+  thinkingEnabled = false,
   signal,
   onEvent,
 }: StreamDirectorTurnOptions): Promise<StreamedDirectorTurn> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (openRouterApiKey) headers['X-OpenRouter-Key'] = openRouterApiKey
   if (deepseekApiKey) headers['X-DeepSeek-Key'] = deepseekApiKey
+  if (bigModelApiKey) headers['X-BigModel-Key'] = bigModelApiKey
 
   const response = await fetch('/api/director/turn', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ context, traceId, actors, castings, agent, model }),
+    body: JSON.stringify({ context, traceId, actors, castings, agent, model, thinkingEnabled }),
     signal,
   })
 

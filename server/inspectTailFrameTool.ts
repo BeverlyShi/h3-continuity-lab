@@ -4,7 +4,7 @@ import { sceneCharacterSchema, type TailFrameVisualState } from '../src/types/st
 import { analyzeTailFrame } from './tailFrameVision.ts'
 
 export const inspectTailFrameSchema = Type.Object({
-  imageUrl: Type.String({ minLength: 1, maxLength: 8192 }),
+  imageUrl: Type.String({ minLength: 1, maxLength: 1_000_000 }),
   characters: Type.Array(sceneCharacterSchema, { maxItems: 8 }),
 }, { additionalProperties: false })
 

@@ -17,6 +17,8 @@ type AgentChatProps = {
   onAgentKindChange: (kind: DirectorAgentKind) => void
   modelId: DirectorModelId
   onModelChange: (modelId: DirectorModelId) => void
+  thinkingEnabled: boolean
+  onThinkingChange: (enabled: boolean) => void
   messages: DirectorChatMessage[]
   status: DirectorStatus
   hasApiKey: boolean
@@ -38,6 +40,8 @@ export function AgentChat({
   onAgentKindChange,
   modelId,
   onModelChange,
+  thinkingEnabled,
+  onThinkingChange,
   messages,
   status,
   hasApiKey,
@@ -81,7 +85,28 @@ export function AgentChat({
                 <option key={option.id} value={option.id}>{option.label}</option>
               ))}
             </select>
-            <p>{agentOptions.find((option) => option.value === agentKind)?.caption}</p>
+            <p>{modelId === 'z-ai/glm-5.3-flash'
+              ? '智谱官方'
+              : modelId === 'deepseek-v4-flash'
+              ? 'DeepSeek 官方'
+              : agentOptions.find((option) => option.value === agentKind)?.caption}</p>
+            {(modelId === 'deepseek-v4-flash' || modelId === 'z-ai/glm-5.3-flash') && (
+              <button
+                type="button"
+                className="agent-thinking-toggle"
+                role="switch"
+                aria-label={modelId === 'z-ai/glm-5.3-flash' ? '增强思考' : '思考模式'}
+                aria-checked={thinkingEnabled}
+                disabled={isDirectorActive(status)}
+                onClick={() => onThinkingChange(!thinkingEnabled)}
+              >
+                <span className="agent-thinking-track" aria-hidden="true"><span /></span>
+                {modelId === 'z-ai/glm-5.3-flash'
+                  ? `思考强度：${thinkingEnabled ? '增强（high）' : '轻量（low）'}`
+                  : `思考模式：${thinkingEnabled ? '开启（high）' : '关闭'}`}
+              </button>
+            )}
+            {modelId === 'z-ai/glm-5.3-flash' && <p>此模型不支持完全关闭思考</p>}
           </div>
         </div>
         <span className={`agent-status ${status}`}>

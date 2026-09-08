@@ -1,6 +1,7 @@
 import { createFalClient } from '@fal-ai/client'
 import type { VideoGenerator } from '../types/video'
 import { extractVideoTailFrame } from './videoTailFrame'
+import { buildVideoReferencePrompt } from './videoReferencePrompt'
 
 const H3_MAX_TEXT_TO_VIDEO = 'minimax/h3-max/text-to-video'
 const H3_MAX_IMAGE_TO_VIDEO = 'minimax/h3-max/image-to-video'
@@ -21,11 +22,13 @@ export const createFalVideoGenerator = (apiKey: string): VideoGenerator => {
   return {
     async generate(prompt, duration, _sequence, conditioning) {
       const startImageUrl = conditioning?.startImageUrl
-      const characterReferences = conditioning?.characterReferences ?? []
+      const characterReferences = startImageUrl ? [] : conditioning?.characterReferences ?? []
       const referenceImageUrls = characterReferences.map((reference) => reference.imageUrl)
-      const referencePrompt = characterReferences.map((reference, index) => {
-        return `Image ${index + 1} 是包含同一位演员三视图的合成图，该演员扮演${reference.characterName}；保持这个角色的面部身份一致。`
-      }).join('\n')
+      const referenceImages = startImageUrl
+        ? [{ type: 'start_frame' as const, imageUrl: startImageUrl, label: '起始尾帧' }]
+        : characterReferences.map((reference) => ({
+            type: 'character' as const, imageUrl: reference.imageUrl, label: reference.characterName,
+          }))
       const endpoint = startImageUrl
         ? H3_MAX_IMAGE_TO_VIDEO
         : referenceImageUrls.length
@@ -35,7 +38,7 @@ export const createFalVideoGenerator = (apiKey: string): VideoGenerator => {
         endpoint,
         {
           input: {
-            prompt: referencePrompt ? `${referencePrompt}\n${prompt}` : prompt,
+            prompt: buildVideoReferencePrompt(prompt, referenceImages),
             duration,
             resolution: '768P',
             prompt_expansion_mode: 'balanced',

@@ -5,8 +5,9 @@ type ApiKeyDialogProps = {
   savedFalApiKey: string
   savedOpenRouterApiKey: string
   savedDeepSeekApiKey: string
+  savedBigModelApiKey: string
   onClose: () => void
-  onSave: (falApiKey: string, openRouterApiKey: string, deepSeekApiKey: string) => void
+  onSave: (falApiKey: string, openRouterApiKey: string, deepSeekApiKey: string, bigModelApiKey: string) => void
   onClear: () => void
 }
 
@@ -14,6 +15,7 @@ export function ApiKeyDialog({
   savedFalApiKey,
   savedOpenRouterApiKey,
   savedDeepSeekApiKey,
+  savedBigModelApiKey,
   onClose,
   onSave,
   onClear,
@@ -21,10 +23,11 @@ export function ApiKeyDialog({
   const [falApiKey, setFalApiKey] = useState(savedFalApiKey)
   const [openRouterApiKey, setOpenRouterApiKey] = useState(savedOpenRouterApiKey)
   const [deepSeekApiKey, setDeepSeekApiKey] = useState(savedDeepSeekApiKey)
+  const [bigModelApiKey, setBigModelApiKey] = useState(savedBigModelApiKey)
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    onSave(falApiKey.trim(), openRouterApiKey.trim(), deepSeekApiKey.trim())
+    onSave(falApiKey.trim(), openRouterApiKey.trim(), deepSeekApiKey.trim(), bigModelApiKey.trim())
   }
 
   return (
@@ -32,11 +35,11 @@ export function ApiKeyDialog({
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="api-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="dialog-heading">
           <div className="dialog-icon"><KeyRound size={18} /></div>
-          <div><h2 id="api-title">API 连接设置</h2><p>fal 用于视频生成，OpenRouter/DeepSeek 用于导演，DeepSeek 还负责尾帧识别</p></div>
+          <div><h2 id="api-title">API 连接设置</h2><p>上传视频模式无需 fal Key；OpenRouter/DeepSeek/智谱用于导演，DeepSeek 还负责尾帧识别</p></div>
           <button className="icon-button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
         </div>
         <form onSubmit={submit}>
-          <label htmlFor="fal-api-key">FAL_KEY</label>
+          <label htmlFor="fal-api-key">FAL_KEY（仅 API 生成需要）</label>
           <div className="input-with-icon">
             <LockKeyhole size={15} />
             <input
@@ -73,11 +76,23 @@ export function ApiKeyDialog({
               autoComplete="off"
             />
           </div>
+          <label htmlFor="bigmodel-api-key">BIGMODEL_API_KEY（智谱官方 GLM）</label>
+          <div className="input-with-icon">
+            <LockKeyhole size={15} />
+            <input
+              id="bigmodel-api-key"
+              type="password"
+              value={bigModelApiKey}
+              onChange={(event) => setBigModelApiKey(event.target.value)}
+              placeholder="粘贴智谱 BigModel 通用 API Key"
+              autoComplete="off"
+            />
+          </div>
           <div className="security-note">实验版会把 Key 明文保存在浏览器 localStorage；DeepSeek Vision 只在尾帧识别时调用。共享设备上请及时清除，正式产品应改为服务端密钥。</div>
           <div className="dialog-actions">
-            {(savedFalApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey) && <button className="button button-danger" type="button" onClick={onClear}>清除 Keys</button>}
+            {(savedFalApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey || savedBigModelApiKey) && <button className="button button-danger" type="button" onClick={onClear}>清除 Keys</button>}
             <button className="button button-ghost" type="button" onClick={onClose}>取消</button>
-            <button className="button button-primary" type="submit" disabled={!falApiKey.trim() && !openRouterApiKey.trim() && !deepSeekApiKey.trim()}>保存设置</button>
+            <button className="button button-primary" type="submit" disabled={!falApiKey.trim() && !openRouterApiKey.trim() && !deepSeekApiKey.trim() && !bigModelApiKey.trim()}>保存设置</button>
           </div>
         </form>
       </div>

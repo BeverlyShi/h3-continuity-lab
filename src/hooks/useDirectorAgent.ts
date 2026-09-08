@@ -33,9 +33,11 @@ export function useDirectorAgent(
   game: GameController,
   openRouterApiKey: string,
   deepseekApiKey: string,
+  bigModelApiKey: string,
   onTraceUpdate: (update: AgentTraceUpdate) => void,
   agentKind: DirectorAgentKind,
   modelId: DirectorModelId,
+  thinkingEnabled: boolean,
   actors: Actor[],
   submitSceneVideo?: SubmitSceneVideo,
 ) {
@@ -50,10 +52,10 @@ export function useDirectorAgent(
   const runTurn = useCallback(async (context: DirectorTurnContext) => {
     if (runningRef.current) return false
     const provider = getDirectorModelProvider(modelId)
-    const requiredApiKey = provider === 'deepseek' ? deepseekApiKey : openRouterApiKey
+    const requiredApiKey = { deepseek: deepseekApiKey, openrouter: openRouterApiKey, bigmodel: bigModelApiKey }[provider]
     if (!requiredApiKey) {
       setStatus('error')
-      append('error', provider === 'deepseek' ? '缺少 DeepSeek API Key，请先打开 API 设置。' : '缺少 OpenRouter API Key，请先打开 API 设置。')
+      append('error', `缺少 ${{ deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' }[provider]} API Key，请先打开 API 设置。`)
       return false
     }
 
@@ -150,6 +152,7 @@ export function useDirectorAgent(
       await streamDirectorTurn({
         openRouterApiKey,
         deepseekApiKey,
+        bigModelApiKey,
         context,
         traceId,
         actors: actors.map(({ id, name, gender, minAge, maxAge }) => ({
@@ -162,6 +165,7 @@ export function useDirectorAgent(
         castings: game.getCastings(),
         agent: agentKind,
         model: modelId,
+        thinkingEnabled,
         onEvent: handleEvent,
       })
       if (!scenePublished) throw new Error('当前回合已经变化，无法发布这个场景。')
@@ -177,7 +181,7 @@ export function useDirectorAgent(
     } finally {
       runningRef.current = false
     }
-  }, [actors, openRouterApiKey, deepseekApiKey, agentKind, append, game, modelId, onTraceUpdate, submitSceneVideo])
+  }, [actors, openRouterApiKey, deepseekApiKey, bigModelApiKey, agentKind, append, game, modelId, thinkingEnabled, onTraceUpdate, submitSceneVideo])
 
   const startStory = useCallback(() => {
     if (runningRef.current) return false

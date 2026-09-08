@@ -38,11 +38,13 @@ test('rejects extra scene fields', () => {
   }), false)
 })
 
-test('requires narrative to contain 150–250 characters', () => {
-  assert.equal(Check(storySceneSchema, { ...makeScene(3), narrative: 'a'.repeat(149) }), false)
-  assert.equal(Check(storySceneSchema, { ...makeScene(3), narrative: 'a'.repeat(150) }), true)
-  assert.equal(Check(storySceneSchema, { ...makeScene(3), narrative: 'a'.repeat(250) }), true)
-  assert.equal(Check(storySceneSchema, { ...makeScene(3), narrative: 'a'.repeat(251) }), false)
+test('requires a nonblank narrative without imposing a length range', () => {
+  for (const narrative of ['', ' \n\t　']) {
+    assert.equal(Check(storySceneSchema, { ...makeScene(3), narrative }), false)
+  }
+  for (const narrative of ['宫门开了。', 'a'.repeat(99), '沈'.repeat(138), '沈'.repeat(500)]) {
+    assert.equal(Check(storySceneSchema, { ...makeScene(3), narrative }), true)
+  }
 })
 
 const makeVideoRequest = () => ({
@@ -50,7 +52,6 @@ const makeVideoRequest = () => ({
   visualContext: {
     style: '写实电影质感，暖色柔光，稳定自然的宫廷叙事风格。',
     scene: '清晨的宫墙甬道，朱红高墙夹着青石路，远处宫门关闭。',
-    layout: '画面左侧是朱红宫墙，中央是青石甬道，右后方可见宫门。',
   },
   videoPrompts: [
     {
@@ -79,18 +80,16 @@ const makeVideoPlanDraft = () => ({
   videoPrompts: [
     {
       characterIds: ['heroine'],
-      beats: [{ visual: '固定中景，少女站在朱红宫墙前，抬头听见远处晨钟。' }],
+      beats: [{ visual: '固定中景，少女站在朱红宫墙前，抬头听见远处晨钟。', audio: '轻微风声。' }],
       endFrame: '中景，少女站在朱红宫墙前，双手收进袖中，保持静止。',
-      audio: '远处晨钟和衣料摩擦声',
     },
     {
       characterIds: ['heroine'],
       beats: [{
-        visual: '镜头推近，少女坐到木椅上，攥紧袖口并望向关闭的木门。',
-        dialogue: [{ characterId: 'heroine', text: '这里究竟藏着什么？' }],
+        visual: '镜头推近，少女坐到木椅上，攥紧袖口并望向关闭的木门。', audio: '轻微风声。',
+        dialogueIds: ['line_1'],
       }],
       endFrame: '中近景，少女坐在木椅上攥紧袖口，望向关闭的木门。',
-      audio: '木门轻响和脚步声',
     },
   ],
 })
@@ -103,17 +102,22 @@ test('accepts a well formed video generation request', () => {
   assert.equal(Check(videoGenerationRequestSchema, makeVideoRequest()), true)
 })
 
-test('accepts a scene publish with scene and characters only', () => {
+test('requires scene, characters and a dialogue catalogue at publication', () => {
   assert.equal(Check(scenePublishSchema, {
+    dialogues: [],
     scene: makeScene(3),
     characters: [{ id: 'heroine', name: '沈清禾', gender: 'female', minAge: 16, maxAge: 20 }],
   }), true)
   assert.equal(Check(scenePublishSchema, { scene: makeScene(3) }), false)
   assert.equal(Check(scenePublishSchema, { characters: [] }), false)
+  assert.equal(Check(scenePublishSchema, {
+    scene: makeScene(3), characters: [{ id: 'heroine', name: '沈清禾', gender: 'female', minAge: 16, maxAge: 20 }],
+  }), false)
 })
 
 test('rejects a scene publish carrying a video field', () => {
   assert.equal(Check(scenePublishSchema, {
+    dialogues: [],
     scene: makeScene(3),
     characters: [{ id: 'heroine', name: '沈清禾', gender: 'female', minAge: 16, maxAge: 20 }],
     video: makeVideoRequest(),
@@ -126,6 +130,21 @@ test('accepts a video plan submitted on its own', () => {
   assert.equal(Check(videoPlanSchema, {
     ...makeVideoPlanDraft(),
     scene: makeScene(2),
+  }), false)
+})
+
+test('requires shot-specific sound and rejects separate layout or segment sound', () => {
+  const draft = makeVideoPlanDraft()
+  assert.equal(Check(videoPlanSchema, {
+    ...draft, visualContext: { ...draft.visualContext, layout: '女主在左，嬷嬷在右。' },
+  }), false)
+  assert.equal(Check(videoPlanSchema, {
+    ...draft, videoPrompts: draft.videoPrompts.map((segment) => ({ ...segment, audio: '脚步声。' })),
+  }), false)
+  assert.equal(Check(videoPlanSchema, {
+    ...draft, videoPrompts: draft.videoPrompts.map((segment) => ({
+      ...segment, beats: segment.beats.map((beat) => ({ visual: beat.visual })),
+    })),
   }), false)
 })
 

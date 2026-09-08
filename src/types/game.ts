@@ -10,7 +10,9 @@ import type {
 } from './story'
 
 export type SceneVideoClip = VideoPromptSegment & {
-  status: 'waiting' | 'generating' | 'extracting' | 'analyzing' | 'ready' | 'failed' | 'skipped'
+  status: 'waiting' | 'awaiting_upload' | 'generating' | 'extracting' | 'analyzing' | 'ready' | 'failed' | 'skipped'
+  uploadId?: string
+  actualDuration?: number
   videoUrl?: string
   startImageUrl?: string
   referenceImages?: VideoInputReferenceImage[]
@@ -28,6 +30,7 @@ export type GameScene = StoryScene & {
   castingError?: string
   videoRequest?: VideoGenerationRequest
   videoClips?: SceneVideoClip[]
+  videoMode?: 'auto' | 'manual' | 'off'
   tailFrameUrl?: string
   tailVisualState?: TailFrameVisualState
   visualAnalysisError?: string
@@ -56,4 +59,5 @@ export type DirectorTurnContext = {
   turn: number
   input: StoryInput
   previousVisualState?: TailFrameVisualState
+  hasPreviousTailFrame?: boolean
 }
