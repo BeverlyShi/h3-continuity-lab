@@ -54,31 +54,15 @@ export function GameInteraction({
     )
   }
 
-  if (session.status === 'awaiting_media' || mediaBusy) {
-    return (
-      <section className="game-interaction-card waiting" aria-live="polite">
-        <LoaderCircle className="spin" size={20} />
-        <div>
-          <h2>正在完成这一幕</h2>
-          <p>{session.currentScene?.videoMode === 'manual'
-            ? '请逐段上传视频；最后一段完成尾帧识别后，将开放新的选择。'
-            : '视频生成并完成 DeepSeek 尾帧识别后，将开放新的选择。'}</p>
-        </div>
-      </section>
-    )
-  }
-
-  if (isDirectorActive(directorStatus)) {
-    return (
-      <section className="game-interaction-card waiting" aria-live="polite">
-        <LoaderCircle className="spin" size={20} />
-        <div>
-          <h2>下一幕已经发布</h2>
-          <p>Pi Agent 正在保存本回合记录，完成后即可继续选择。</p>
-        </div>
-      </section>
-    )
-  }
+  // 场景一发布就展示三个选项；视频与尾帧识别完成前只读，不能提交。
+  const lockedReason = session.status === 'awaiting_media' || mediaBusy
+    ? (session.currentScene?.videoMode === 'manual'
+        ? '请逐段上传视频；最后一段完成尾帧识别后即可选择。'
+        : '视频生成并完成尾帧识别后即可选择。')
+    : isDirectorActive(directorStatus)
+      ? 'Pi Agent 正在保存本回合记录，完成后即可选择。'
+      : ''
+  const locked = Boolean(lockedReason)
 
   const choices = session.currentScene?.choices ?? []
   return (
@@ -87,25 +71,31 @@ export function GameInteraction({
         <div><Bot size={17} /><span>你准备怎么做？</span></div>
         <small>第 {session.currentScene?.turn ?? 1} 幕</small>
       </div>
-      <div className="game-choice-grid">
+      <div className={`game-choice-grid${locked ? ' locked' : ''}`} aria-disabled={locked}>
         {choices.map((choice) => (
-          <button key={choice.id} onClick={() => onChoose(choice)}>
+          <button key={choice.id} disabled={locked} onClick={() => onChoose(choice)}>
             <strong>{choice.text}</strong>
           </button>
         ))}
       </div>
+      {locked && (
+        <p className="game-choice-locked" aria-live="polite">
+          <LoaderCircle className="spin" size={13} />{lockedReason}
+        </p>
+      )}
       <form onSubmit={submit}>
         <label htmlFor="player-action">或者自由行动</label>
         <textarea
           id="player-action"
           value={text}
           maxLength={500}
+          disabled={locked}
           placeholder="例如：我没有立刻回答，而是先观察她袖口沾着的香灰……"
           onChange={(event) => setText(event.target.value)}
         />
         <div className="game-action-footer">
           <span>{text.length} / 500</span>
-          <button className="button button-primary" disabled={!text.trim()} type="submit">
+          <button className="button button-primary" disabled={locked || !text.trim()} type="submit">
             <Send size={15} />提交行动
           </button>
         </div>

@@ -19,6 +19,8 @@
 .game-choice-grid { margin-top: 12px; display: grid; grid-template-columns: 1fr; gap: 8px; }
 .game-choice-grid button { min-height: 48px; padding: 8px 10px; display: flex; align-items: center; border: 1px solid #cbd5e1; border-radius: 7px; color: #475569; background: white; font-size: 12px; line-height: 17px; text-align: left; cursor: pointer; transition: border .15s, background .15s, color .15s; }
 .game-choice-grid button > strong { font-weight: 600; }
+.game-choice-grid button:disabled { color: #94a3b8; border-color: #e2e8f0; background: #f8fafc; cursor: not-allowed; }
+.game-choice-locked { margin: 8px 0 0; display: flex; align-items: center; gap: 6px; color: #64748b; font-size: 12px; line-height: 16px; }
 .game-choice-grid button:hover { border-color: #fda4af; color: #881337; background: #fff1f2; }
 .game-choice-grid button:focus-visible { outline: 0; border-color: #9f1239; box-shadow: 0 0 0 3px rgba(159,18,57,.12); }
 .game-interaction-card form label { margin-top: 12px; }
