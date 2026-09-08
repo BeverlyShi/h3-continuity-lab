@@ -37,6 +37,7 @@ test('builds one composite three-view reference for each cast character', () => 
   assert.deepEqual(references, {
     girl: {
       characterName: '圆脸少女',
+      actorId: 'actor-young-woman',
       imageUrl: 'three-view-a',
     },
   })

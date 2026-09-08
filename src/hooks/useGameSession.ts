@@ -16,6 +16,9 @@ import { deleteUploadedVideo, loadUploadedVideo } from '../services/uploadedVide
 
 const now = () => Date.now()
 
+const uploadIds = (session: GameSession | null) => [...new Set((session?.sceneHistory ?? []).flatMap((scene) =>
+  (scene.videoClips ?? []).flatMap((clip) => clip.uploadId ? [clip.uploadId] : [])))]
+
 const toTurnContext = (session: GameSession): DirectorTurnContext | null => session.pendingInput
   ? {
       ok: true,
@@ -45,66 +48,104 @@ const makeNewSession = (): GameSession => {
 }
 
 export function useGameSession() {
-  const [session, setSession] = useState<GameSession | null>(loadGameSession)
-  const sessionRef = useRef(session)
+  const [session, setSession] = useState<GameSession | null>(null)
+  const sessionRef = useRef<GameSession | null>(null)
+  const [loading, setLoading] = useState(true)
   const [storageError, setStorageError] = useState('')
-  const [restoringVideos, setRestoringVideos] = useState(() => Boolean(session?.sceneHistory.some((scene) => scene.videoClips?.some((clip) => clip.uploadId))))
+  const [storageNotice, setStorageNotice] = useState('')
+  const [restoringVideos, setRestoringVideos] = useState(false)
+  // 保存串行执行，避免并发写入把旧会话覆盖回 localStorage。
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve())
+  const objectUrls = useRef<string[]>([])
 
-  const replaceSession = useCallback((next: GameSession | null, requirePersistence = false) => {
-    try {
-      if (next) saveGameSession(next)
-      else clearGameSession()
+  const persistSession = useCallback((next: GameSession | null) => {
+    const task = saveQueue.current
+      .catch(() => {})
+      .then(() => next
+        ? saveGameSession(next)
+        : clearGameSession().then(() => ({ degraded: false, droppedScenes: 0 })))
+    saveQueue.current = task.catch(() => {})
+    return task.then((result) => {
       setStorageError('')
-    } catch (error) {
+      setStorageNotice(result.degraded
+        ? `本地空间紧张，已释放最早 ${result.droppedScenes} 幕的图片。`
+        : '')
+    }, (error: unknown) => {
       setStorageError(error instanceof Error ? error.message : '无法保存当前场景。')
-      if (requirePersistence) throw error
-    }
-    sessionRef.current = next
-    setSession(next)
+      throw error
+    })
   }, [])
 
-  const retrySaveSession = useCallback(() => {
-    replaceSession(sessionRef.current)
+  const replaceSession = useCallback((next: GameSession | null, requirePersistence = false) => {
+    const apply = () => {
+      sessionRef.current = next
+      setSession(next)
+    }
+    if (requirePersistence) return persistSession(next).then(apply)
+    apply()
+    return persistSession(next).catch(() => {})
+  }, [persistSession])
+
+  const retrySaveSession = useCallback(() => replaceSession(sessionRef.current), [replaceSession])
+
+  const restoreUploadedVideos = useCallback(async () => {
+    const stored = sessionRef.current
+    const ids = uploadIds(stored)
+    if (!stored || !ids.length) return
+    const results = await Promise.allSettled(ids.map((id) => loadUploadedVideo(id)))
+    if (sessionRef.current?.id !== stored.id) return
+    const assets = new Map(results.map((result, index) => {
+      const asset = result.status === 'fulfilled' ? result.value : undefined
+      const videoUrl = asset ? URL.createObjectURL(asset.file) : undefined
+      if (videoUrl) objectUrls.current.push(videoUrl)
+      return [ids[index], { asset, videoUrl }]
+    }))
+    const current: GameSession = JSON.parse(JSON.stringify(sessionRef.current), (_key, value) =>
+      typeof value === 'string' && value.startsWith('upload-tail:')
+        ? assets.get(value.slice('upload-tail:'.length))?.asset?.tailFrameUrl : value)
+    const patch = (item: GameScene): GameScene => ({
+      ...item,
+      videoClips: item.videoClips?.map((clip) => {
+        if (!clip.uploadId) return clip
+        const saved = assets.get(clip.uploadId)
+        const interrupted = ['extracting', 'analyzing'].includes(clip.status)
+        return {
+          ...clip,
+          videoUrl: saved?.videoUrl,
+          status: !saved?.asset || interrupted ? 'failed' : clip.status,
+          error: !saved?.asset ? '本地视频无法读取，请重新上传。'
+            : interrupted ? '处理已中断，请重试尾帧识别或重新上传。' : clip.error,
+        }
+      }),
+    })
+    void replaceSession({ ...current, currentScene: current.currentScene ? patch(current.currentScene) : undefined, sceneHistory: current.sceneHistory.map(patch) })
+    setRestoringVideos(false)
   }, [replaceSession])
+
+  const boot = async () => {
+    const stored = await loadGameSession()
+    sessionRef.current = stored
+    setSession(stored)
+    setLoading(false)
+    if (uploadIds(stored).length) setRestoringVideos(true)
+  }
+
+  // 首次渲染就开始读存档，图片改由 IndexedDB 异步取回。
+  const booted = useRef<Promise<void> | null>(null)
+  booted.current ??= boot().catch(() => {
+    setLoading(false)
+    setRestoringVideos(false)
+  })
 
   useEffect(() => {
     let cancelled = false
-    const urls: string[] = []
-    const stored = sessionRef.current
-    const ids = [...new Set((stored?.sceneHistory ?? []).flatMap((scene) =>
-      (scene.videoClips ?? []).flatMap((clip) => clip.uploadId ? [clip.uploadId] : [])))]
-    if (!ids.length) return
-    void Promise.allSettled(ids.map((id) => loadUploadedVideo(id))).then((results) => {
-      if (cancelled || sessionRef.current?.id !== stored?.id) return
-      const assets = new Map(results.map((result, index) => {
-        const asset = result.status === 'fulfilled' ? result.value : undefined
-        const videoUrl = asset ? URL.createObjectURL(asset.file) : undefined
-        if (videoUrl) urls.push(videoUrl)
-        return [ids[index], { asset, videoUrl }]
-      }))
-      const current: GameSession = JSON.parse(JSON.stringify(sessionRef.current), (_key, value) =>
-        typeof value === 'string' && value.startsWith('upload-tail:')
-          ? assets.get(value.slice('upload-tail:'.length))?.asset?.tailFrameUrl : value)
-      const patch = (item: GameScene): GameScene => ({
-        ...item,
-        videoClips: item.videoClips?.map((clip) => {
-          if (!clip.uploadId) return clip
-          const saved = assets.get(clip.uploadId)
-          const interrupted = ['extracting', 'analyzing'].includes(clip.status)
-          return {
-            ...clip,
-            videoUrl: saved?.videoUrl,
-            status: !saved?.asset || interrupted ? 'failed' : clip.status,
-            error: !saved?.asset ? '本地视频无法读取，请重新上传。'
-              : interrupted ? '处理已中断，请重试尾帧识别或重新上传。' : clip.error,
-          }
-        }),
-      })
-      replaceSession({ ...current, currentScene: current.currentScene ? patch(current.currentScene) : undefined, sceneHistory: current.sceneHistory.map(patch) })
-      setRestoringVideos(false)
-    })
-    return () => { cancelled = true; urls.forEach((url) => URL.revokeObjectURL(url)) }
-  }, [replaceSession])
+    void booted.current?.then(() => cancelled ? undefined : restoreUploadedVideos())
+    return () => {
+      cancelled = true
+      objectUrls.current.forEach((url) => URL.revokeObjectURL(url))
+      objectUrls.current = []
+    }
+  }, [restoreUploadedVideos])
 
   const startStory = useCallback(() => {
     if (sessionRef.current) return null
@@ -325,7 +366,7 @@ export function useGameSession() {
     })
   }, [replaceSession])
 
-  const completeManualUpload = useCallback((
+  const completeManualUpload = useCallback(async (
     sceneId: string,
     sequence: number,
     clip: Required<Pick<SceneVideoClip, 'uploadId' | 'videoUrl' | 'tailFrameUrl' | 'actualDuration'>>,
@@ -335,7 +376,7 @@ export function useGameSession() {
     const scene = applyManualClip(invalidateManualClipsFrom(current.currentScene, sequence), sequence, {
       ...clip, status: 'ready', error: undefined,
     })
-    replaceSession({
+    await replaceSession({
       ...current,
       status: 'awaiting_media',
       currentScene: scene,
@@ -391,12 +432,14 @@ export function useGameSession() {
         if (clip.videoUrl?.startsWith('blob:')) URL.revokeObjectURL(clip.videoUrl)
       }
     }
-    replaceSession(null)
+    void replaceSession(null)
   }, [replaceSession])
 
   return {
     session,
+    loading,
     storageError,
+    storageNotice,
     retrySaveSession,
     restoringVideos,
     startStory,

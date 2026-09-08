@@ -34,6 +34,7 @@ export type GeneratedVideo = {
 
 export type VideoCharacterReference = {
   characterName: string
+  actorId: string
   imageUrl: string
 }
 
@@ -42,10 +43,12 @@ export type VideoGenerationConditioning = {
   characterReferences?: VideoCharacterReference[]
 }
 
+// character 参考图只持久化 actorId，imageUrl 在运行时按演员库解析。
 export type VideoInputReferenceImage = {
   type: 'start_frame' | 'character'
-  imageUrl: string
+  imageUrl?: string
   label: string
+  actorId?: string
 }
 
 export interface VideoGenerator {

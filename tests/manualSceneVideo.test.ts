@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { applyManualClip, buildManualPrompt, invalidateManualClipsFrom, prepareManualScene } from '../src/services/manualSceneVideo.ts'
-import { saveGameSession, loadGameSession } from '../src/services/gameStorage.ts'
+import { clearGameSession, saveGameSession, loadGameSession } from '../src/services/gameStorage.ts'
+import { installMemorySessionImages } from './helpers/memorySessionImages.ts'
 import type { GameScene, GameSession } from '../src/types/game.ts'
 
 const scene: GameScene = {
@@ -11,13 +12,13 @@ const scene: GameScene = {
     characterIds: ['heroine'], prompt: '人物停步回望，保持构图稳定。', endFrame: '少女站定。', audio: '脚步声', status: 'skipped',
   })),
 }
-const references = { heroine: { characterName: '沈清禾', imageUrl: 'actor.jpg' } }
+const references = { heroine: { characterName: '沈清禾', actorId: 'actor-heroine', imageUrl: 'actor.jpg' } }
 
 test('manual mode prepares character images without starting generation and waits for real preceding tails', () => {
   const prepared = prepareManualScene(scene, references)
   assert.equal(prepared.videoMode, 'manual')
   assert.deepEqual(prepared.videoClips?.map((clip) => clip.status), ['awaiting_upload', 'waiting', 'waiting'])
-  assert.deepEqual(prepared.videoClips?.[0].referenceImages, [{ type: 'character', imageUrl: 'actor.jpg', label: '人物参考 · 沈清禾' }])
+  assert.deepEqual(prepared.videoClips?.[0].referenceImages, [{ type: 'character', imageUrl: 'actor.jpg', label: '人物参考 · 沈清禾', actorId: 'actor-heroine' }])
   assert.deepEqual(prepared.videoClips?.[1].referenceImages, [])
   assert.match(buildManualPrompt(prepared.videoClips![0]), /沈清禾外观与图1一致/)
 })
@@ -66,31 +67,35 @@ test('switching into manual mode retains existing completed videos', () => {
   assert.equal(prepared.videoClips?.[1].startImageUrl, 'tail1.jpg')
 })
 
-test('localStorage keeps durable upload ids rather than blob URLs and repeated inline tail images', () => {
+test('localStorage keeps durable upload ids rather than blob URLs and repeated inline tail images', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const sessionImages = installMemorySessionImages()
   let stored = ''
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
     setItem: (_key: string, value: string) => { stored = value },
     getItem: () => stored,
+    removeItem: () => { stored = '' },
   } })
   try {
     const prepared = applyManualClip(prepareManualScene(scene, references), 1, {
       status: 'ready', uploadId: 'uploaded-1', videoUrl: 'blob:temporary', tailFrameUrl: 'data:image/jpeg;base64,tail', actualDuration: 7,
     })
     const session = { schemaVersion: 8, id: 'game', storyId: 'palace-validation', status: 'awaiting_media', currentScene: prepared, sceneHistory: [prepared] } as GameSession
-    saveGameSession(session)
+    await saveGameSession(session)
     assert.doesNotMatch(stored, /blob:temporary|data:image/)
-    const restored = loadGameSession()!
+    const restored = (await loadGameSession())!
     assert.equal(restored.currentScene?.videoClips?.[0].uploadId, 'uploaded-1')
     assert.equal(restored.currentScene?.videoClips?.[1].startImageUrl, 'upload-tail:uploaded-1')
     assert.equal(prepared.videoClips?.[0].videoUrl, 'blob:temporary')
   } finally {
+    await clearGameSession()
+    sessionImages.restore()
     if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor)
     else Reflect.deleteProperty(globalThis, 'localStorage')
   }
 })
 
-test('reload recovers a stranded manual extraction without changing automatic generation', () => {
+test('reload recovers a stranded manual extraction without changing automatic generation', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
   const manual = invalidateManualClipsFrom(prepareManualScene(scene, references), 1)
   const automatic = { ...manual, id: 'automatic', videoMode: 'auto' }
@@ -98,7 +103,7 @@ test('reload recovers a stranded manual extraction without changing automatic ge
     status: 'awaiting_media', currentScene: manual, sceneHistory: [automatic, manual] })
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => stored } })
   try {
-    const restored = loadGameSession()!
+    const restored = (await loadGameSession())!
     assert.equal(restored.currentScene?.videoClips?.[0].status, 'failed')
     assert.match(restored.currentScene?.videoClips?.[0].error ?? '', /重新上传/)
     assert.equal(restored.sceneHistory[1].videoClips?.[0].status, 'failed')
@@ -110,27 +115,34 @@ test('reload recovers a stranded manual extraction without changing automatic ge
   }
 })
 
-test('large reference images are stored once and restored across current and historical scenes', () => {
+test('large images stay out of localStorage and are shared by current and historical scenes', async () => {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const sessionImages = installMemorySessionImages()
   const imageUrl = `data:image/jpeg;base64,${'a'.repeat(3_000_000)}`
-  const prepared = prepareManualScene(scene, { heroine: { characterName: '沈清禾', imageUrl } })
+  const prepared = applyManualClip(prepareManualScene(scene, references), 1, { status: 'ready', tailFrameUrl: imageUrl })
   const nextScene = { ...prepared, id: 'next-scene', turn: 2 }
   const session = { schemaVersion: 8, id: 'game', storyId: 'palace-validation', status: 'awaiting_media',
     currentScene: nextScene, sceneHistory: [prepared, nextScene] } as GameSession
   let stored = ''
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
     getItem: () => stored,
+    removeItem: () => { stored = '' },
     setItem: (_key: string, value: string) => {
       if (value.length > 5_000_000) throw new DOMException('Quota exceeded', 'QuotaExceededError')
       stored = value
     },
   } })
   try {
-    assert.doesNotThrow(() => saveGameSession(session))
-    assert.ok(stored.length < 3_100_000, 'history and current scene must share one stored image')
-    assert.deepEqual(loadGameSession(), JSON.parse(JSON.stringify(session)))
-    assert.equal(prepared.videoClips?.[0].referenceImages?.[0].imageUrl, imageUrl)
+    await saveGameSession(session)
+    assert.doesNotMatch(stored, /data:image/)
+    assert.equal(sessionImages.images.size, 1, 'history and current scene must share one stored image')
+    const restored = (await loadGameSession())!
+    assert.equal(restored.currentScene?.videoClips?.[0].tailFrameUrl, imageUrl)
+    assert.equal(restored.sceneHistory[0].videoClips?.[1].startImageUrl, imageUrl)
+    assert.equal(prepared.videoClips?.[0].referenceImages?.[0].imageUrl, 'actor.jpg')
   } finally {
+    await clearGameSession()
+    sessionImages.restore()
     if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor)
     else Reflect.deleteProperty(globalThis, 'localStorage')
   }

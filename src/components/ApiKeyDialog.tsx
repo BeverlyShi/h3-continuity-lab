@@ -1,5 +1,6 @@
-import { KeyRound, LockKeyhole, X } from 'lucide-react'
+import { KeyRound, LockKeyhole, Trash2, X } from 'lucide-react'
 import { FormEvent, useState } from 'react'
+import { clearLocalMedia } from '../services/localData'
 
 type ApiKeyDialogProps = {
   savedFalApiKey: string
@@ -24,6 +25,18 @@ export function ApiKeyDialog({
   const [openRouterApiKey, setOpenRouterApiKey] = useState(savedOpenRouterApiKey)
   const [deepSeekApiKey, setDeepSeekApiKey] = useState(savedDeepSeekApiKey)
   const [bigModelApiKey, setBigModelApiKey] = useState(savedBigModelApiKey)
+  const [clearing, setClearing] = useState(false)
+
+  const clearMedia = async () => {
+    if (clearing || !window.confirm('确定清理本地视频与存档吗？此操作无法撤销。')) return
+    setClearing(true)
+    try {
+      await clearLocalMedia()
+      location.reload()
+    } finally {
+      setClearing(false)
+    }
+  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -87,6 +100,13 @@ export function ApiKeyDialog({
               placeholder="粘贴智谱 BigModel 通用 API Key"
               autoComplete="off"
             />
+          </div>
+          <div className="dialog-section">
+            <strong>本地数据</strong>
+            <p>删除游戏存档、视频项目和上传的视频；保留 API Key、模型设置和演员库。</p>
+            <button className="button button-secondary" type="button" disabled={clearing} onClick={() => { void clearMedia() }}>
+              <Trash2 size={15} />{clearing ? '清理中…' : '清理本地视频与存档'}
+            </button>
           </div>
           <div className="security-note">实验版会把 Key 明文保存在浏览器 localStorage；DeepSeek Vision 只在尾帧识别时调用。共享设备上请及时清除，正式产品应改为服务端密钥。</div>
           <div className="dialog-actions">

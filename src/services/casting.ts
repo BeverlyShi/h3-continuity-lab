@@ -16,6 +16,7 @@ export const buildCharacterReferences = (
     if (!actor?.referenceImageUrl) return []
     const reference: VideoCharacterReference = {
       characterName: character.name,
+      actorId: actor.id,
       imageUrl: actor.referenceImageUrl,
     }
     return [[character.id, reference]]

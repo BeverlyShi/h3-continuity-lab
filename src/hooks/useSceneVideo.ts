@@ -30,7 +30,7 @@ type UseSceneVideoParams = {
     sceneId: string,
     sequence: number,
     clip: Required<Pick<SceneVideoClip, 'uploadId' | 'videoUrl' | 'tailFrameUrl' | 'actualDuration'>>,
-  ) => boolean
+  ) => Promise<boolean>
   onTailFrameAnalyzed: (
     sceneId: string,
     tailFrameUrl: string,
@@ -86,7 +86,7 @@ export function useSceneVideo({
         reader.readAsDataURL(frame)
       })
       await saveUploadedVideo(uploadId, file, tailFrameUrl)
-      if (!onManualUploadComplete(scene.id, sequence, {
+      if (!await onManualUploadComplete(scene.id, sequence, {
         uploadId, videoUrl, actualDuration: duration, tailFrameUrl,
       })) throw new Error('当前幕次已变化，请返回当前幕上传。')
       committed = true

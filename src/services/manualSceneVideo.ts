@@ -18,7 +18,7 @@ export const prepareManualScene = (
         ? [{ type: 'start_frame', imageUrl: startImageUrl, label: '起始尾帧' }]
         : index === 0 ? clip.characterIds.flatMap((id) => {
             const reference = characterReferences[id]
-            return reference ? [{ type: 'character' as const, imageUrl: reference.imageUrl, label: `人物参考 · ${reference.characterName}` }] : []
+            return reference ? [{ type: 'character' as const, imageUrl: reference.imageUrl, label: `人物参考 · ${reference.characterName}`, actorId: reference.actorId }] : []
           }) : []
       return { ...clip, status: index === 0 || startImageUrl ? 'awaiting_upload' : 'waiting', startImageUrl, referenceImages, error: undefined }
     }),

@@ -191,6 +191,7 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
     game.restart()
   }
 
+  if (game.loading) return <main className="game-workspace"><p role="status">正在读取本地存档…</p></main>
   if (game.restoringVideos) return <main className="game-workspace"><p role="status">正在恢复本地视频…</p></main>
 
   return (
@@ -223,7 +224,13 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
       {game.storageError && (
         <section className="game-storage-notice" role="alert">
           <p>{game.storageError} 当前剧情与 Prompt 仍保留在页面中；保存成功前请勿刷新或关闭页面。</p>
-          <button type="button" className="button button-secondary" onClick={game.retrySaveSession}>重试保存</button>
+          <button type="button" className="button button-secondary" onClick={() => { void game.retrySaveSession() }}>重试保存</button>
+        </section>
+      )}
+
+      {!game.storageError && game.storageNotice && (
+        <section className="game-storage-notice" role="status">
+          <p>{game.storageNotice} 剧情与 Prompt 不受影响，早期分镜的参考图与尾帧将不再随刷新恢复。</p>
         </section>
       )}
 

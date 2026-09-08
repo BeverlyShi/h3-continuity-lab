@@ -217,6 +217,9 @@ textarea:focus, input:focus { border-color: #64748b; box-shadow: 0 0 0 3px rgba(
 .input-with-icon input { height: 38px; padding: 0 11px 0 34px; font-size: 12px; }
 .dialog form > input { height: 38px; padding: 0 11px; font-size: 12px; }
 .security-note { margin-top: 8px; color: #94a3b8; font-size: 11px; line-height: 17px; }
+.dialog-section { margin-top: 14px; padding-top: 14px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; border-top: 1px solid #e2e8f0; }
+.dialog-section strong { color: #475569; font-size: 12px; font-weight: 650; }
+.dialog-section p { color: #94a3b8; font-size: 11px; line-height: 17px; }
 .dialog-actions { margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px; }
 .spin { animation: spin 1s linear infinite; }
 

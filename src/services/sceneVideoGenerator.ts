@@ -55,6 +55,7 @@ export const generateSceneVideoSegments = async (
           type: 'character',
           imageUrl: reference.imageUrl,
           label: `人物参考 · ${reference.characterName}`,
+          actorId: reference.actorId,
         }))
     onResult({ sequence: segment.sequence, status: 'generating', startImageUrl, referenceImages })
     let videoUrl: string | undefined

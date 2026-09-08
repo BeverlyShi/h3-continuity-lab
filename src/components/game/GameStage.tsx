@@ -21,6 +21,7 @@ import { isDirectorActive } from '../../services/directorStatus'
 import type { DirectorStatus } from '../../types/director'
 import type { GameScene, GameSession, SceneVideoClip } from '../../types/game'
 import type { Actor } from '../../types/actor'
+import type { VideoInputReferenceImage } from '../../types/video'
 import { buildManualPrompt } from '../../services/manualSceneVideo'
 
 type GameStageProps = {
@@ -365,6 +366,9 @@ export function GameStage(props: GameStageProps) {
     } catch (error) { setActionMessage(error instanceof Error ? error.message : '参考图下载失败') }
   }
   const actorsById = new Map(actors.map((actor) => [actor.id, actor]))
+  // 演员参考图只按 actorId 存档，展示时用当前演员库解析。
+  const resolveReferenceImage = (reference: VideoInputReferenceImage) => reference.imageUrl
+    ?? (reference.actorId ? actorsById.get(reference.actorId)?.referenceImageUrl : undefined)
   const charactersById = new Map((session?.characters ?? []).map((character) => [character.id, character]))
   const sceneCharacterIds = scene?.characterIds ?? [
     ...new Set(scene?.videoRequest?.videoPrompts.flatMap((segment) => segment.characterIds) ?? []),
@@ -772,20 +776,30 @@ export function GameStage(props: GameStageProps) {
                   </p>
                 ) : promptClip.referenceImages.length > 0 ? (
                   <div className="game-video-prompt-references">
-                    {promptClip.referenceImages.map((reference) => (
-                      <div className="game-video-reference" key={`${reference.type}:${reference.imageUrl}`}>
-                        <a
-                          href={reference.imageUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={`查看${reference.label}`}
-                        >
-                          <img src={reference.imageUrl} alt={reference.label} loading="lazy" decoding="async" />
-                          <span>{reference.label}</span>
-                        </a>
-                        <button type="button" className="game-video-action" onClick={() => { void downloadReference(reference.imageUrl, reference.label) }}><Download size={11} />下载参考图</button>
-                      </div>
-                    ))}
+                    {promptClip.referenceImages.map((reference, index) => {
+                      const imageUrl = resolveReferenceImage(reference)
+                      if (!imageUrl) {
+                        return (
+                          <div className="game-video-reference" key={`${reference.type}:${reference.actorId ?? index}`}>
+                            <span className="game-video-prompt-reference-status">{reference.label} · 演员已删除</span>
+                          </div>
+                        )
+                      }
+                      return (
+                        <div className="game-video-reference" key={`${reference.type}:${reference.actorId ?? imageUrl}`}>
+                          <a
+                            href={imageUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`查看${reference.label}`}
+                          >
+                            <img src={imageUrl} alt={reference.label} loading="lazy" decoding="async" />
+                            <span>{reference.label}</span>
+                          </a>
+                          <button type="button" className="game-video-action" onClick={() => { void downloadReference(imageUrl, reference.label) }}><Download size={11} />下载参考图</button>
+                        </div>
+                      )
+                    })}
                   </div>
                 ) : (
                   <p className="game-video-prompt-reference-status">{manualMode
