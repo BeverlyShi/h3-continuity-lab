@@ -25,19 +25,19 @@ export const VIDEO_PLAN_ARGUMENTS_EXAMPLE = JSON.stringify({
     {
       characters: ['heroine', 'steward'],
       seconds: 5,
-      prompt: '0–3秒：双人中景，平视，镜头固定。女主怀抱青色包袱站在画面左侧，身体朝右；四十余岁、着深青宫装的掌事姑姑站在画面右侧，面向左侧的女主开口，{{line_1}}安静。\n\n3–5秒：镜头硬切为双人中近景，平视，固定。女主在画面左侧抬起头面向右侧，双手仍抱着包袱；掌事姑姑在画面右侧看着她。画外传来轻微风声。',
+      prompt: '0–3秒：双人中景，平视，镜头固定。女主怀抱青色包袱站在画面左侧，身体朝右；四十余岁、着深青宫装的掌事姑姑站在画面右侧。两人面对面相对而立，相距一步，姑姑看着女主，女主垂着眼帘。掌事姑姑面向左侧的女主开口，{{line_1}}安静。\n\n3–5秒：镜头硬切为双人中近景，平视，固定。女主在画面左侧抬起头面向右侧，双手仍抱着包袱；掌事姑姑在画面右侧。两人面对面相距一步，姑姑看着女主，女主与她对视。画外传来轻微风声。',
     },
     {
       characters: ['heroine', 'steward'],
       seconds: 10,
-      prompt: '0–4秒：双人中近景，平视，固定，沿用上一段末镜的构图。女主在画面左侧抱着青色包袱，面向右侧垂下眼帘；四十余岁、着深青宫装的掌事姑姑在画面右侧，目光停在她脸上。安静。\n\n4–10秒：镜头硬切为女主近景，平视，缓缓推近。她直起身，面向画面右侧，双手仍抱着包袱。画外传来轻微风声。',
+      prompt: '0–4秒：双人中近景，平视，固定，沿用上一段末镜的构图。女主在画面左侧抱着青色包袱，面向右侧垂下眼帘；四十余岁、着深青宫装的掌事姑姑在画面右侧。两人面对面相对而立，相距一步，姑姑的目光停在女主脸上。安静。\n\n4–10秒：镜头硬切为女主近景，平视，缓缓推近。她直起身，面向画面右侧，双手仍抱着包袱。画外传来轻微风声。',
     },
   ],
 })
 
 export const VIDEO_PLAN_STRUCTURE_GUIDANCE = '顶层只包含 style 和 segments。每个 segment 只包含 characters、seconds、prompt。prompt 由“0–3秒：”形式的时间块组成，从 0 秒开始首尾相接，最后一块结束于 seconds；在实际说话位置写 {{台词ID}} 占位符，程序替换为姓名和原文。不提交 beats、audio、endFrame、dialogueIds 或任何时间字段。'
 
-export const WRITE_VIDEO_PROMPT_DESCRIPTION = `把已发布的 narrative 忠实转成 2–3 段可直接生成的视频 prompt，不发展剧情，不改台词。${VIDEO_PLAN_STRUCTURE_GUIDANCE}每段 5–15 秒，整幕 15–45 秒，seconds 不低于本段台词字数 ÷ ${SPEECH_RATE_HAN_PER_SECOND} 再加 1 秒。每个时间块可含一个或多个镜头，每个镜头按 [镜头][画面][台词][声音] 四层书写，方位只用画面坐标，切镜必须显式声明；每段首镜必须放进本段所有人物，后到的人物要写出入画动作；无参考图人物每段重复一句外观。全幕每句台词必须按原顺序恰好使用一次；正文用人物姓名，不出现人物 ID。重复调用视为重写，覆盖上一次提交。`
+export const WRITE_VIDEO_PROMPT_DESCRIPTION = `把已发布的 narrative 忠实转成 2–3 段可直接生成的视频 prompt，不发展剧情，不改台词。${VIDEO_PLAN_STRUCTURE_GUIDANCE}每段 5–15 秒，整幕 15–45 秒，seconds 不低于本段台词字数 ÷ ${SPEECH_RATE_HAN_PER_SECOND} 再加 1 秒。每个时间块可含一个或多个镜头，每个镜头按 [镜头][画面][台词][声音] 四层书写，多人镜头写出相对关系、距离和视线，方位只用画面坐标，切镜必须显式声明；每段首镜必须放进本段所有人物，后到的人物要写出入画动作；无参考图人物每段重复一句外观。全幕每句台词必须按原顺序恰好使用一次；正文用人物姓名，不出现人物 ID。重复调用视为重写，覆盖上一次提交。`
 
 export const prepareVideoPlanArguments = (args: unknown): VideoPlan => {
   if (Check(videoPlanSchema, args)) return args
