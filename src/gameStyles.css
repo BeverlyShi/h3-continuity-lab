@@ -38,9 +38,6 @@
 .agent-chat-heading h2 { color: #1e293b; font-size: 12px; line-height: 16px; font-weight: 680; }
 .agent-chat-heading p { color: #94a3b8; font-size: 10px; line-height: 14px; }
 .agent-selects { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
-.agent-kind-select { max-width: 150px; padding: 1px 2px; border: 1px solid transparent; border-radius: 5px; color: #1e293b; background: transparent; font-size: 12px; line-height: 16px; font-weight: 680; cursor: pointer; }
-.agent-kind-select:hover, .agent-kind-select:focus-visible { border-color: #e2e8f0; background: #f8fafc; }
-.agent-kind-select:disabled { color: #94a3b8; cursor: not-allowed; }
 .agent-model-select { max-width: 180px; padding: 1px 2px; border: 1px solid transparent; border-radius: 5px; color: #475569; background: transparent; font-size: 10px; line-height: 14px; cursor: pointer; }
 .agent-model-select:hover, .agent-model-select:focus-visible { border-color: #e2e8f0; background: #f8fafc; }
 .agent-model-select:disabled { color: #94a3b8; cursor: not-allowed; }

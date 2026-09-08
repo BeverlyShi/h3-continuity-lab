@@ -35,24 +35,30 @@ import type { DirectorTurnContext } from '../src/types/game.ts'
 import type { ScenePublish, VideoGenerationRequest } from '../src/types/story.ts'
 import {
   buildStoryInputMessage,
-  buildVideoInputMessage,
   DIRECTOR_COMPACTION_INSTRUCTIONS,
   DIRECTOR_SYSTEM_PROMPT,
-  DIRECTOR_VIDEO_SYSTEM_PROMPT,
+  type DirectorVideoMode,
 } from './directorPrompt.ts'
-import { createCastSceneTool } from './castSceneTool.ts'
+import {
+  createCastingBook,
+  createCastSceneTool,
+  createSearchActorsTool,
+  describeCastingStatus,
+  isCastingComplete,
+  pendingCastingCharacters,
+  resolveSceneCasting,
+} from './castSceneTool.ts'
 import { createPublishSceneTool } from './publishSceneTool.ts'
 import { createWriteVideoPromptTool } from './videoPlanTool.ts'
+import { createFinishTurnTool } from './finishTurnTool.ts'
 import { compileVideoPlan } from './videoPromptCompiler.ts'
 import { inspectRawToolArguments, summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
-
-import { assertNarrativeReview, narrativeReviewToolDefinition, narrativeSources, NARRATIVE_REVIEW_PROMPT } from './narrativeReview.ts'
 import { withDirectorSession } from './directorSession.ts'
 import { bigmodelProvider } from './bigmodelProvider.ts'
 
 const MAX_DIRECTOR_OUTPUT_TOKENS = 4_096
 const DIRECTOR_TIMEOUT_MS = 45_000
-// 每个确定性阶段允许有限次定向修复，避免完整内容反复重写。
+// 工具连续校验失败达到该次数后结束回合，避免模型反复重写。
 const MAX_TOOL_ATTEMPTS = 3
 const traceEnvironment = new NodeExecutionEnv({ cwd: process.cwd() })
 const traceRepo = new JsonlSessionRepo({
@@ -145,11 +151,6 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
         timestamp: entry.timestamp,
         data: entry.data,
       })
-      continue
-    }
-
-    if (entry.type === 'custom' && entry.customType === 'narrative_review') {
-      projected.push({ id: entryId(traceId, entry, 'review'), kind: 'tool_result', title: '原文一致性核对', timestamp: entry.timestamp, data: entry.data })
       continue
     }
 
@@ -335,6 +336,7 @@ export type DirectorAgentRequest = {
   actors: CastableActor[]
   castings: CharacterCasting[]
   traceId: string
+  videoMode?: DirectorVideoMode
   signal?: AbortSignal
   send: (event: DirectorStreamEvent) => void
 }
@@ -351,6 +353,7 @@ async function runPersistentDirector({
   actors,
   castings,
   traceId,
+  videoMode = 'auto',
   signal,
   send,
 }: DirectorAgentRequest) {
@@ -417,7 +420,7 @@ async function runPersistentDirector({
     { ...options, apiKey },
   )
 
-  const createDirectorStreamFn = (forcedToolName: string) => (
+  const directorStreamFn = (
     streamModel: Model<Api>,
     streamContext: Parameters<Models['streamSimple']>[1],
     options?: SimpleStreamOptions,
@@ -431,13 +434,6 @@ async function runPersistentDirector({
       {
         ...options,
         ...policy,
-        samplingParams: {
-          ...policy.samplingParams,
-          // 官方思考接口由模型选择工具；每个阶段只提供对应工具。
-          ...(provider !== 'openrouter' ? {} : {
-            tool_choice: { type: 'function', function: { name: forcedToolName } },
-          }),
-        },
         apiKey,
         maxRetries: 2,
         timeoutMs: provider !== 'openrouter' ? 120_000 : DIRECTOR_TIMEOUT_MS,
@@ -548,9 +544,7 @@ async function runPersistentDirector({
     }
   }
 
-  let videoPhaseStarted = false
   const orchestrationTraceEntries: AgentTraceEntry[] = []
-  const reviewMessages: AgentMessage[] = []
   const sendTrace = async (outcome: HarnessTraceSnapshot['outcome']) => {
     let entries: Entry[] = []
     try {
@@ -568,22 +562,6 @@ async function runPersistentDirector({
       entry.type === 'message' ? [entry.message] : [],
     )
     const finalMessage = [...currentRunMessages].reverse().find((message) => message.role === 'assistant')
-    const systemPromptEntries: AgentTraceEntry[] = [{
-      id: `${traceId}:system-prompt`,
-      kind: 'input',
-      title: `Pi 场景阶段 System Prompt · ${modelId}`,
-      timestamp: startedAt,
-      text: DIRECTOR_SYSTEM_PROMPT,
-    }]
-    if (videoPhaseStarted) {
-      systemPromptEntries.push({
-        id: `${traceId}:video-system-prompt`,
-        kind: 'input',
-        title: `Pi 视频阶段 System Prompt · ${modelId}`,
-        timestamp: startedAt,
-        text: DIRECTOR_VIDEO_SYSTEM_PROMPT,
-      })
-    }
     const trace: HarnessTraceSnapshot = {
       traceId,
       harnessSessionId: metadata.id,
@@ -592,9 +570,18 @@ async function runPersistentDirector({
       durationMs: endedAt - startedAt,
       outcome,
       stopReason: finalMessage?.role === 'assistant' ? finalMessage.stopReason : undefined,
-      usage: summarizeAssistantUsage([...currentRunMessages, ...reviewMessages]),
-      entries: [...systemPromptEntries, ...projectTraceEntries(traceId, entries), ...orchestrationTraceEntries]
-        .sort((left, right) => left.timestamp - right.timestamp),
+      usage: summarizeAssistantUsage(currentRunMessages),
+      entries: [
+        {
+          id: `${traceId}:system-prompt`,
+          kind: 'input' as const,
+          title: `Pi 导演 System Prompt · ${modelId}`,
+          timestamp: startedAt,
+          text: DIRECTOR_SYSTEM_PROMPT,
+        },
+        ...projectTraceEntries(traceId, entries),
+        ...orchestrationTraceEntries,
+      ].sort((left, right) => left.timestamp - right.timestamp),
     }
     persistenceErrors.forEach((error, index) => {
       trace.entries.push({
@@ -622,188 +609,153 @@ async function runPersistentDirector({
   send({ type: 'trace_started', traceId, harnessSessionId: metadata.id, startedAt })
   send({ type: 'status', text: `Pi 故事导演正在通过 ${getDirectorModelLabel(modelId)} 构思下一幕。` })
 
-  const reviewNarrative = async (source: ScenePublish, finalVideo?: VideoGenerationRequest, referenceInput?: string) => {
-    const input = {
-      phase: finalVideo ? 'video' : 'scene',
-      ...source,
-      playerInput: context.input,
-      sources: narrativeSources(source.scene.narrative),
-      previousVisualState: context.hasPreviousTailFrame === false ? undefined : context.previousVisualState,
-      finalVideo, referenceInput,
-    }
-    send({ type: 'status', text: finalVideo ? '正在逐条核对最终分镜与本幕原文。' : '正在核对出场人物与剧情边界。' })
-    const reviewStartedAt = Date.now()
-    const result = await models.completeSimple(model, {
-      systemPrompt: NARRATIVE_REVIEW_PROMPT,
-      messages: [{ role: 'user', content: JSON.stringify(input), timestamp: Date.now() }],
-      tools: [narrativeReviewToolDefinition.function],
-    }, {
-      ...getDirectorStreamPolicy(modelId, thinkingEnabled), apiKey, signal,
-      timeoutMs: provider !== 'openrouter' ? 120_000 : DIRECTOR_TIMEOUT_MS, maxRetries: 0,
-      telemetryContext: telemetry,
-    })
-    reviewMessages.push(result)
-    const call = result.content.find((item) => item.type === 'toolCall' && item.name === 'review_narrative')
-    await session.appendCustomEntry('narrative_review', toDurableValue({
-      traceId, input, systemPrompt: NARRATIVE_REVIEW_PROMPT,
-      result: call?.type === 'toolCall' ? call.arguments : null,
-      usage: result.usage, durationMs: Date.now() - reviewStartedAt,
-    }))
-    if (result.stopReason === 'error' || result.stopReason === 'aborted') throw new Error(result.errorMessage ?? '原文核对调用失败。')
-    assertNarrativeReview(call?.type === 'toolCall' ? call.arguments : undefined, source, finalVideo)
-  }
-
+  // 单个 agent 的回合状态：工具只在这里写入，程序据此守住前置条件。
+  const videoEnabled = videoMode !== 'off'
+  const book = createCastingBook(actors, castings)
   let scenePublish: ScenePublish | undefined
-  let lastPublishError: string | undefined
+  let castingResult: SceneCastingResult | undefined
+  let videoDraft: VideoGenerationRequest | undefined
+  let finished = false
+  let skipVideoReason: string | undefined
+  let lastToolError: string | undefined
+  const sceneCharacters = () => scenePublish?.characters ?? []
+
   const publishSceneTool = createPublishSceneTool((turn) => {
     scenePublish = toDurableValue(turn)
-  }, (turn) => reviewNarrative(turn))
-  const sceneAgent = new Agent({
+    send({ type: 'scene', scene: scenePublish.scene, characters: scenePublish.characters })
+    send({ type: 'status', text: '场景已发布，正在确定人物参考素材。' })
+  }, {
+    isPublished: () => Boolean(scenePublish),
+    describeCasting: (turn) => {
+      const status = describeCastingStatus(book, turn.characters)
+      const next = pendingCastingCharacters(book, turn.characters).length
+        ? ''
+        : `\n下一步：${videoEnabled ? '调用 write_video_prompt 编写分镜。' : '本局为仅文字模式，调用 finish_turn 结束回合。'}`
+      return `${status}${next}`
+    },
+  })
+  const searchActorsTool = createSearchActorsTool(book, sceneCharacters)
+  const castSceneTool = createCastSceneTool(book, sceneCharacters, (result) => {
+    castingResult = toDurableValue(result)
+    send({ type: 'status', text: '选角已确定，正在编写分镜。' })
+  })
+  const videoPlanTool = createWriteVideoPromptTool({
+    getCharacters: sceneCharacters,
+    getDialogues: () => scenePublish?.dialogues ?? [],
+    precondition: () => {
+      if (!scenePublish) return '必须先通过 publish_scene 发布场景。'
+      const pending = pendingCastingCharacters(book, scenePublish.characters)
+      return pending.length
+        ? `以下人物尚未选角：${pending.map((character) => `${character.name}（${character.id}）`).join('、')}；请先用 search_actors 查询候选并调用 cast_scene。`
+        : null
+    },
+    onPublish: (plan) => {
+      videoDraft = toDurableValue(plan.video)
+      send({ type: 'status', text: '分镜已提交，等待导演确认。' })
+    },
+  })
+  const finishTurnTool = createFinishTurnTool({
+    check: (input) => {
+      if (!scenePublish) return '尚未发布场景，请先调用 publish_scene。'
+      if (!isCastingComplete(book, scenePublish.characters)) {
+        return `以下人物尚未选角：${pendingCastingCharacters(book, scenePublish.characters).map((character) => character.name).join('、')}；请先调用 cast_scene。`
+      }
+      if (videoEnabled && !videoDraft && !input.skipVideo) {
+        return '尚未编写分镜，请先调用 write_video_prompt；无法完成时通过 skipVideo.reason 说明原因后再结束。'
+      }
+      return null
+    },
+    onFinish: (input) => {
+      finished = true
+      skipVideoReason = input.skipVideo?.reason
+    },
+  })
+
+  const agent = new Agent({
     initialState: {
       systemPrompt: DIRECTOR_SYSTEM_PROMPT,
       model,
-      tools: [publishSceneTool],
+      tools: [
+        publishSceneTool,
+        searchActorsTool,
+        castSceneTool,
+        ...(videoEnabled ? [videoPlanTool] : []),
+        finishTurnTool,
+      ],
       messages: context.input.type === 'start' ? [] : buildSessionContext(stripTrailingFailedTurns(persistedEntries)).messages,
       thinkingLevel: getDirectorStreamPolicy(modelId, thinkingEnabled).reasoning ?? 'off',
     },
     convertToLlm,
-    streamFn: createDirectorStreamFn('publish_scene'),
+    streamFn: directorStreamFn,
     sessionId: metadata.id,
     maxRetryDelayMs: 5_000,
-    shouldStopAfterTurn: createRetryingStopCondition(
-      MAX_TOOL_ATTEMPTS,
-      () => Boolean(scenePublish),
-      (message) => { lastPublishError = message },
-    ),
+    shouldStopAfterTurn: (() => {
+      const retrying = createRetryingStopCondition(
+        MAX_TOOL_ATTEMPTS,
+        () => finished,
+        (message) => { lastToolError = message },
+      )
+      return (turn: ShouldStopAfterTurnContext) => {
+        if (!turn.toolResults.some((result) => result.isError)) lastToolError = undefined
+        return retrying(turn)
+      }
+    })(),
   })
 
-  signal?.addEventListener('abort', () => sceneAgent.abort(), { once: true })
-  subscribeForPersistence(sceneAgent)
+  signal?.addEventListener('abort', () => agent.abort(), { once: true })
+  subscribeForPersistence(agent)
 
   const agentRunStartedAt = Date.now()
   try {
-    await sceneAgent.prompt(buildStoryInputMessage(context.input, context.previousVisualState))
-    if (sceneAgent.state.errorMessage) throw new Error(sceneAgent.state.errorMessage)
+    await agent.prompt(buildStoryInputMessage(context.input, context.previousVisualState, {
+      videoMode,
+      hasPreviousTailFrame: context.hasPreviousTailFrame ?? Boolean(context.previousVisualState),
+    }))
+    if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
+
+    // 模型停下来却没有结束回合：不是校验失败导致的就提醒一次，再不行按已有结果降级。
+    if (!finished && scenePublish && !lastToolError) {
+      const missing = videoEnabled && !videoDraft ? '还没有编写分镜' : '还没有调用 finish_turn'
+      send({ type: 'status', text: '导演尚未结束回合，正在提醒继续。' })
+      await agent.prompt(`本回合尚未结束：${missing}。请继续调用工具完成剩余步骤，最后调用 finish_turn。`)
+      if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
+    }
+
     if (!scenePublish) {
-      throw new Error(lastPublishError
-        ? `publish_scene 连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastPublishError}`
+      throw new Error(lastToolError
+        ? `publish_scene 连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastToolError}`
         : 'Pi Agent 没有调用 publish_scene 发布场景。')
     }
 
-    send({ type: 'scene', scene: scenePublish.scene, characters: scenePublish.characters })
-    send({ type: 'status', text: '场景已发布，正在准备人物参考素材。' })
-
-    let castingResult: SceneCastingResult | undefined
-    let videoDraft: VideoGenerationRequest | undefined
-    let videoPlan: VideoGenerationRequest | undefined
-
-    const castStartedAt = Date.now()
-    const castTiming = {
-      toolCallId: `${traceId}:cast-scene`,
-      toolName: 'cast_scene',
-      startedAt: castStartedAt,
-    }
-    toolCalls.push(castTiming)
+    castingResult = toDurableValue(resolveSceneCasting(book, scenePublish.characters))
     orchestrationTraceEntries.push({
-      id: `${traceId}:cast-call`,
-      kind: 'tool_call',
-      title: '调用工具 · cast_scene',
-      timestamp: castStartedAt,
-      data: {},
+      id: `${traceId}:cast-result`,
+      kind: 'tool_result',
+      title: '本幕最终选角',
+      timestamp: Date.now(),
+      data: castingResult,
     })
-    const castingPromise = createCastSceneTool(scenePublish.characters, actors, castings)
-      .execute(`${traceId}:cast-scene`, {})
-      .then((result) => {
-        const endedAt = Date.now()
-        Object.assign(castTiming, {
-          endedAt,
-          durationMs: endedAt - castStartedAt,
-          isError: false,
-        })
-        castingResult = toDurableValue(result.details)
-        orchestrationTraceEntries.push({
-          id: `${traceId}:cast-result`,
-          kind: 'tool_result',
-          title: '工具结果 · cast_scene',
-          timestamp: Date.now(),
-          data: castingResult,
-        })
-        send({ type: 'cast', casting: castingResult })
-      }, (error) => {
-        const endedAt = Date.now()
-        Object.assign(castTiming, {
-          endedAt,
-          durationMs: endedAt - castStartedAt,
-          isError: true,
-        })
-        throw error
-      })
+    send({ type: 'cast', casting: castingResult })
 
-    const [castingOutcome] = await Promise.allSettled([castingPromise])
-    if (castingOutcome.status === 'rejected') {
-      const message = castingOutcome.reason instanceof Error
-        ? castingOutcome.reason.message
-        : String(castingOutcome.reason)
+    let videoPlan: VideoGenerationRequest | undefined
+    if (videoDraft) {
+      videoPlan = toDurableValue(compileVideoPlan(videoDraft))
+      send({ type: 'video_plan', video: videoPlan })
+    } else if (videoEnabled) {
+      const message = skipVideoReason
+        ? `导演跳过了本幕视频：${skipVideoReason}`
+        : lastToolError
+          ? `视频计划连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastToolError}`
+          : '导演没有编写本幕视频计划。'
       orchestrationTraceEntries.push({
-        id: `${traceId}:cast-error`,
+        id: `${traceId}:video-plan-error`,
         kind: 'error',
-        title: '场景选角失败',
+        title: '视频计划未完成',
         timestamp: Date.now(),
         text: message,
         isError: true,
       })
-      send({ type: 'cast_error', message })
-    }
-    const videoInputMessage = buildVideoInputMessage(
-      scenePublish.characters, castingResult, actors, scenePublish.dialogues,
-      context.previousVisualState, context.hasPreviousTailFrame, scenePublish.scene,
-    )
-    send({ type: 'status', text: '参考素材已确认，正在编写分镜。' })
-
-    videoPhaseStarted = true
-    let lastVideoError: string | undefined
-    const videoPlanTool = createWriteVideoPromptTool(scenePublish.characters, scenePublish.dialogues, (plan) => {
-      videoDraft = toDurableValue(plan.video)
-    }, (video) => reviewNarrative(scenePublish!, video, videoInputMessage))
-    const videoAgent = new Agent({
-      initialState: {
-        systemPrompt: DIRECTOR_VIDEO_SYSTEM_PROMPT,
-        model,
-        tools: [videoPlanTool],
-        messages: [],
-        thinkingLevel: getDirectorStreamPolicy(modelId, thinkingEnabled).reasoning ?? 'off',
-      },
-      convertToLlm,
-      streamFn: createDirectorStreamFn('write_video_prompt'),
-      sessionId: metadata.id,
-      maxRetryDelayMs: 5_000,
-      shouldStopAfterTurn: createRetryingStopCondition(
-        MAX_TOOL_ATTEMPTS,
-        () => Boolean(videoDraft),
-        (message) => { lastVideoError = message },
-      ),
-    })
-    signal?.addEventListener('abort', () => videoAgent.abort(), { once: true })
-    subscribeForPersistence(videoAgent)
-
-    const videoPromise = videoAgent.prompt(videoInputMessage).then(() => {
-      if (videoAgent.state.errorMessage) throw new Error(videoAgent.state.errorMessage)
-      if (!videoDraft) {
-        throw new Error(lastVideoError
-          ? `write_video_prompt 连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastVideoError}`
-          : 'Pi Agent 没有调用 write_video_prompt 编写视频 Prompt。')
-      }
-    })
-
-    const [videoOutcome] = await Promise.allSettled([videoPromise])
-    if (videoOutcome.status === 'rejected') {
-      const message = videoOutcome.reason instanceof Error
-        ? videoOutcome.reason.message
-        : String(videoOutcome.reason)
       send({ type: 'video_plan_error', message })
-    } else if (videoDraft) {
-      videoPlan = toDurableValue(compileVideoPlan(videoDraft))
-      send({ type: 'video_plan', video: videoPlan })
     }
 
     phaseTimings.agentRunMs = Date.now() - agentRunStartedAt
@@ -822,7 +774,8 @@ async function runPersistentDirector({
     }
 
     await persistTiming()
-    await sendTrace(castingResult && videoPlan ? 'completed' : 'degraded')
+    const completed = finished && (!videoEnabled || Boolean(videoPlan))
+    await sendTrace(completed ? 'completed' : 'degraded')
     send({ type: 'done' })
     return {
       scene: scenePublish.scene,

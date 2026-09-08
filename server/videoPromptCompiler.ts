@@ -3,11 +3,7 @@ import type { VideoGenerationRequest, VideoPromptSegment } from '../src/types/st
 export const compileVideoPrompt = (
   segment: VideoPromptSegment,
   request: VideoGenerationRequest,
-) => [
-  request.visualContext.style,
-  request.visualContext.scene,
-  `${segment.prompt.trim()}无音乐，无旁白。`,
-].join('\n\n')
+) => `${request.style.trim()}\n\n${segment.prompt.trim()}无音乐，无旁白。`
 
 export const compileVideoPlan = (request: VideoGenerationRequest): VideoGenerationRequest => ({
   ...request,

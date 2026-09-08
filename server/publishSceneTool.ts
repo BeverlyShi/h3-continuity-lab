@@ -18,7 +18,7 @@ export const SCENE_PUBLISH_ARGUMENTS_EXAMPLE = JSON.stringify({
   dialogues: [{ id: 'line_1', characterId: 'steward', text: '你识字吗？' }],
 })
 
-export const PUBLISH_SCENE_DESCRIPTION = '提交完整 JSON 对象，顶层包含 scene、characters、dialogues。scene 内仅有 title、narrative、choices；choices 必须有 3 项，id 各为 1、2、3。人物对白用双引号，dialogues 按出现顺序逐句列出唯一 ID、characterId 和完整原文；无对白提交空数组。人物和台词数组不能嵌套在 scene 内。校验失败时重新提交完整参数。'
+export const PUBLISH_SCENE_DESCRIPTION = '提交完整 JSON 对象，顶层包含 scene、characters、dialogues。scene 内仅有 title、narrative、choices；choices 必须有 3 项，id 各为 1、2、3。人物对白用双引号，dialogues 按出现顺序逐句列出唯一 ID、characterId 和完整原文；无对白提交空数组。人物和台词数组不能嵌套在 scene 内。校验失败时重新提交完整参数。本回合只能发布一次。'
 
 export const prepareScenePublishArguments = (args: unknown): ScenePublish => {
   if (!Check(scenePublishSchema, args)) {
@@ -85,9 +85,16 @@ export const assertValidScenePublish = (turn: ScenePublish) => {
   }
 }
 
+export type PublishSceneToolOptions = {
+  // 已发布时返回 true，拒绝重复发布。
+  isPublished?: () => boolean
+  // 发布成功后附在工具结果里的选角状态说明。
+  describeCasting?: (turn: ScenePublish) => string
+}
+
 export const createPublishSceneTool = (
   onPublish?: (turn: ScenePublish) => void | Promise<void>,
-  review?: (turn: ScenePublish) => Promise<void>,
+  options: PublishSceneToolOptions = {},
 ): AgentTool<typeof scenePublishSchema, ScenePublish> => ({
   name: 'publish_scene',
   label: '发布故事场景',
@@ -96,11 +103,12 @@ export const createPublishSceneTool = (
   prepareArguments: prepareScenePublishArguments,
   executionMode: 'sequential',
   execute: async (_toolCallId, turn) => {
+    if (options.isPublished?.()) throw new Error('本回合场景已经发布，不能重复发布；请继续选角、编写分镜或结束回合。')
     assertValidScenePublish(turn)
-    await review?.(turn)
     await onPublish?.(turn)
+    const text = ['场景已发布。', options.describeCasting?.(turn)].filter(Boolean).join('\n')
     return {
-      content: [{ type: 'text', text: '场景已发布。' }],
+      content: [{ type: 'text', text }],
       details: turn,
       terminate: false,
     }

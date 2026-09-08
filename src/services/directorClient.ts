@@ -19,7 +19,7 @@ export type StreamedDirectorTurn = {
   video?: VideoGenerationRequest
 }
 
-export type DirectorAgentKind = 'pi' | 'simple'
+export type DirectorVideoMode = 'auto' | 'manual' | 'off'
 
 type StreamDirectorTurnOptions = {
   openRouterApiKey?: string
@@ -29,7 +29,7 @@ type StreamDirectorTurnOptions = {
   traceId: string
   actors?: CastableActor[]
   castings?: CharacterCasting[]
-  agent?: DirectorAgentKind
+  videoMode?: DirectorVideoMode
   model: DirectorModelId
   thinkingEnabled?: boolean
   signal?: AbortSignal
@@ -44,7 +44,7 @@ export async function streamDirectorTurn({
   traceId,
   actors = [],
   castings = [],
-  agent = 'pi',
+  videoMode,
   model,
   thinkingEnabled = false,
   signal,
@@ -58,7 +58,7 @@ export async function streamDirectorTurn({
   const response = await fetch('/api/director/turn', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ context, traceId, actors, castings, agent, model, thinkingEnabled }),
+    body: JSON.stringify({ context, traceId, actors, castings, model, thinkingEnabled, videoMode }),
     signal,
   })
 

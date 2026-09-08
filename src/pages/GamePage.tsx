@@ -7,7 +7,6 @@ import {
   isDirectorModelId,
   type DirectorModelId,
 } from '../config/directorModels'
-import type { DirectorAgentKind } from '../services/directorClient'
 import { GameInteraction } from '../components/game/GameInteraction'
 import { GameStage } from '../components/game/GameStage'
 import { useDirectorAgent } from '../hooks/useDirectorAgent'
@@ -31,19 +30,10 @@ type GamePageProps = {
   actors: Actor[]
 }
 
-const AGENT_KIND_STORAGE_KEY = 'palace-director-agent-kind'
 const DIRECTOR_MODEL_STORAGE_KEY = 'palace-director-model'
 const DIRECTOR_THINKING_STORAGE_KEY = 'palace-director-thinking-enabled'
 const VIDEO_GENERATION_STORAGE_KEY = 'palace-video-generation-enabled'
 const VIDEO_MODE_STORAGE_KEY = 'palace-video-mode'
-
-const loadAgentKind = (): DirectorAgentKind => {
-  try {
-    return localStorage.getItem(AGENT_KIND_STORAGE_KEY) === 'simple' ? 'simple' : 'pi'
-  } catch {
-    return 'pi'
-  }
-}
 
 const loadDirectorModel = (): DirectorModelId => {
   try {
@@ -74,7 +64,6 @@ const loadVideoMode = (): NonNullable<GameScene['videoMode']> => {
 
 export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors }: GamePageProps) {
   const game = useGameSession()
-  const [agentKind, setAgentKind] = useState<DirectorAgentKind>(loadAgentKind)
   const [modelId, setModelId] = useState<DirectorModelId>(loadDirectorModel)
   const [thinkingEnabled, setThinkingEnabled] = useState(loadDirectorThinking)
   const activeModelProvider = getDirectorModelProvider(modelId)
@@ -119,7 +108,7 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
     savedDeepSeekApiKey,
     savedBigModelApiKey,
     onTraceUpdate,
-    agentKind,
+    videoMode,
     modelId,
     thinkingEnabled,
     actors,
@@ -166,15 +155,6 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
   const retryTail = (sceneId: string) => {
     const scene = game.session?.currentScene
     if (scene?.id === sceneId) void retryUploadedTail(scene, game.session!.characters.filter((character) => scene.characterIds?.includes(character.id)))
-  }
-
-  const switchAgentKind = (next: DirectorAgentKind) => {
-    setAgentKind(next)
-    try {
-      localStorage.setItem(AGENT_KIND_STORAGE_KEY, next)
-    } catch {
-      // 存不进 localStorage 时仅影响刷新后的默认值
-    }
   }
 
   const switchThinking = (enabled: boolean) => {
@@ -282,8 +262,6 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
         <aside className="game-agent-column">
           <AgentChat
             session={game.session}
-            agentKind={agentKind}
-            onAgentKindChange={switchAgentKind}
             modelId={modelId}
             onModelChange={switchModel}
             thinkingEnabled={thinkingEnabled}

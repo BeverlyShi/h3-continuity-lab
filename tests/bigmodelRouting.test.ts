@@ -52,7 +52,7 @@ test('the director endpoint requires and forwards only the BigModel credential u
       assert.equal('tool_choice' in body, false)
       return new Response(JSON.stringify({ error: { message: 'TEST_BIGMODEL_RESPONSE' } }), { status: 401 })
     }
-    for (const agent of ['pi', 'simple']) {
+    for (const agent of ['pi']) {
       for (const key of ['', 'bigmodel-key']) {
         const previousCalls = upstreamCalls
         const response = await originalFetch(`http://127.0.0.1:${address.port}/api/director/turn`, {

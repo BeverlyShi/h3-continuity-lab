@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { streamDirectorTurn, type DirectorAgentKind } from '../services/directorClient'
+import { streamDirectorTurn, type DirectorVideoMode } from '../services/directorClient'
 import { getDirectorModelProvider, type DirectorModelId } from '../config/directorModels'
 import { describeStoryInput } from '../stories/palace'
 import type {
@@ -35,7 +35,7 @@ export function useDirectorAgent(
   deepseekApiKey: string,
   bigModelApiKey: string,
   onTraceUpdate: (update: AgentTraceUpdate) => void,
-  agentKind: DirectorAgentKind,
+  videoMode: DirectorVideoMode,
   modelId: DirectorModelId,
   thinkingEnabled: boolean,
   actors: Actor[],
@@ -163,7 +163,7 @@ export function useDirectorAgent(
           maxAge,
         })),
         castings: game.getCastings(),
-        agent: agentKind,
+        videoMode,
         model: modelId,
         thinkingEnabled,
         onEvent: handleEvent,
@@ -181,7 +181,7 @@ export function useDirectorAgent(
     } finally {
       runningRef.current = false
     }
-  }, [actors, openRouterApiKey, deepseekApiKey, bigModelApiKey, agentKind, append, game, modelId, thinkingEnabled, onTraceUpdate, submitSceneVideo])
+  }, [actors, openRouterApiKey, deepseekApiKey, bigModelApiKey, videoMode, append, game, modelId, thinkingEnabled, onTraceUpdate, submitSceneVideo])
 
   const startStory = useCallback(() => {
     if (runningRef.current) return false

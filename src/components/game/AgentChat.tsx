@@ -2,19 +2,11 @@ import { useEffect, useRef } from 'react'
 import { Bot, LoaderCircle, RotateCcw } from 'lucide-react'
 import type { DirectorChatMessage, DirectorStatus } from '../../types/director'
 import type { GameSession } from '../../types/game'
-import type { DirectorAgentKind } from '../../services/directorClient'
 import { directorModelOptions, type DirectorModelId } from '../../config/directorModels'
 import { isDirectorActive } from '../../services/directorStatus'
 
-const agentOptions: Array<{ value: DirectorAgentKind; label: string; caption: string }> = [
-  { value: 'pi', label: 'Pi 故事导演', caption: 'Pi Agent · OpenRouter · thinking off' },
-  { value: 'simple', label: '极简导演', caption: 'OpenRouter · 单次调用' },
-]
-
 type AgentChatProps = {
   session: GameSession | null
-  agentKind: DirectorAgentKind
-  onAgentKindChange: (kind: DirectorAgentKind) => void
   modelId: DirectorModelId
   onModelChange: (modelId: DirectorModelId) => void
   thinkingEnabled: boolean
@@ -36,8 +28,6 @@ const statusLabel: Record<DirectorStatus, string> = {
 
 export function AgentChat({
   session,
-  agentKind,
-  onAgentKindChange,
   modelId,
   onModelChange,
   thinkingEnabled,
@@ -64,17 +54,6 @@ export function AgentChat({
           <span className="agent-avatar"><Bot size={15} /></span>
           <div className="agent-selects">
             <select
-              className="agent-kind-select"
-              aria-label="切换导演 Agent"
-              value={agentKind}
-              disabled={['thinking', 'publishing'].includes(status)}
-              onChange={(event) => onAgentKindChange(event.target.value as DirectorAgentKind)}
-            >
-              {agentOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <select
               className="agent-model-select"
               aria-label="选择导演模型"
               value={modelId}
@@ -89,7 +68,7 @@ export function AgentChat({
               ? '智谱官方'
               : modelId === 'deepseek-v4-flash'
               ? 'DeepSeek 官方'
-              : agentOptions.find((option) => option.value === agentKind)?.caption}</p>
+              : 'OpenRouter'}</p>
             {(modelId === 'deepseek-v4-flash' || modelId === 'z-ai/glm-5.3-flash') && (
               <button
                 type="button"

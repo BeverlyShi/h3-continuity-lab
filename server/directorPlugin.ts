@@ -7,7 +7,7 @@ import type { DirectorStreamEvent } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
 import { sceneCharacterSchema, storyInputSchema, tailFrameVisualStateSchema, type SceneCharacter } from '../src/types/story.ts'
 import { runDirectorAgent } from './directorAgent.ts'
-import { runSimpleDirector } from './simpleDirector.ts'
+import type { DirectorVideoMode } from './directorPrompt.ts'
 import { createInspectTailFrameTool } from './inspectTailFrameTool.ts'
 
 const MAX_BODY_BYTES = 1_000_000
@@ -40,6 +40,9 @@ const isDirectorTurnContext = (context: DirectorTurnContext | undefined): contex
   Check(storyInputSchema, context.input) &&
   (context.hasPreviousTailFrame === undefined || typeof context.hasPreviousTailFrame === 'boolean') &&
   (context.previousVisualState === undefined || Check(tailFrameVisualStateSchema, context.previousVisualState))
+
+const isDirectorVideoMode = (value: unknown): value is DirectorVideoMode =>
+  value === 'auto' || value === 'manual' || value === 'off'
 
 const isCastableActor = (value: unknown): value is CastableActor => {
   if (!value || typeof value !== 'object') return false
@@ -115,15 +118,18 @@ export function directorPlugin(): Plugin {
             traceId?: string
             actors?: unknown
             castings?: unknown
-            agent?: string
             model?: unknown
             thinkingEnabled?: unknown
+            videoMode?: unknown
           }>(req)
           if (!isDirectorTurnContext(body.context)) throw new Error('故事输入无效。')
           if (!body.traceId) throw new Error('缺少 Trace ID。')
           if (!isDirectorModelId(body.model)) throw new Error('不支持该模型。')
           if (body.thinkingEnabled !== undefined && typeof body.thinkingEnabled !== 'boolean') {
             throw new Error('思考模式设置无效。')
+          }
+          if (body.videoMode !== undefined && !isDirectorVideoMode(body.videoMode)) {
+            throw new Error('视频模式设置无效。')
           }
           if (!Array.isArray(body.actors) || !body.actors.every(isCastableActor)) {
             throw new Error('演员库数据无效。')
@@ -138,8 +144,7 @@ export function directorPlugin(): Plugin {
             throw new Error(`请先配置 ${{ deepseek: 'DEEPSEEK_API_KEY', openrouter: 'OPENROUTER_API_KEY', bigmodel: 'BIGMODEL_API_KEY' }[provider]}。`)
           }
 
-          const runTurn = body.agent === 'simple' ? runSimpleDirector : runDirectorAgent
-          await runTurn({
+          await runDirectorAgent({
             apiKey: apiKey.trim(),
             modelId: body.model,
             thinkingEnabled: body.thinkingEnabled === true,
@@ -147,6 +152,7 @@ export function directorPlugin(): Plugin {
             actors: body.actors,
             castings: body.castings,
             traceId: body.traceId,
+            videoMode: body.videoMode,
             signal: controller.signal,
             send,
           })

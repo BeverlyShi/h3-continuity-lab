@@ -15,38 +15,37 @@
 
 互动故事讲述一名秀女初入宫闱后的经历。Pi Agent 担任故事导演，主动决定开场、创建人物与事件，并根据玩家反馈继续推进剧情。
 
-每个回合的流程为：
+每个回合由一个 Pi Agent 在同一个 Session 里通过工具调用完成：
 
 ```text
 玩家开始、选择选项或输入自由行动
                 ↓
-输入作为 user message 进入同一 Pi Session
+输入作为 user message 进入同一 Pi Session（附上一幕尾帧实测状态与本局视频模式）
                 ↓
-Pi Agent 通过 OpenRouter 调用用户选择的模型续写故事
+agent 调用 publish_scene 发布正文、三个选项、人物与台词清单
                 ↓
-场景阶段只调用 publish_scene
+有新人物时 agent 调用 search_actors 查候选，再调用 cast_scene 提交选角决定
                 ↓
-程序选角与视频草稿阶段并行执行并汇合
+agent 调用 write_video_prompt 提交 2～3 段分镜，程序校验台词、时间块与秒数
                 ↓
-页面生成 2～3 个视频片段，DeepSeek Vision 识别最终尾帧
+agent 调用 finish_turn 结束回合，程序把选角与视频计划推给页面
+                ↓
+页面生成或上传视频片段，DeepSeek Vision 识别最终尾帧
                 ↓
 开放新选择；下一回合读取用户选择与尾帧实测状态
 ```
 
 ### Agent 边界
 
-- 每回合使用确定性的两阶段编排：场景模型只调用 `publish_scene`，随后程序选角与视频模型的 `write_video_prompt` 并行执行。
-- `cast_scene` 只接收演员库元数据，根据性别、年龄和已有绑定完成选角；演员图片仍由前端根据演员 ID 从本地演员库解析，避免把大型图片数据发送给 Director 服务。
-- 前端等待选角结果与视频计划同时就绪后才提交生成，并把匹配演员的参考图传给 fal。
-- 视频计划根据 narrative 规划 15～30 秒的场景视频，拆成 2～3 个 5～10 秒的连续片段。
-- 视频模型只提交镜头节拍、结构化台词和预测性的 `endFrame` 文字；程序按台词长度生成每个时间块、sequence、起止时间与总时长。
+- 只有一个 Agent 实例、一个持久 Session。模型自己决定调用顺序，程序通过工具前置条件拦截跳步：未发布场景不能写分镜，未完成选角不能写分镜，未提交视频计划（或未说明跳过原因）不能结束回合。不使用强制 `tool_choice`。
+- 工具共五个：`publish_scene`、`search_actors`、`cast_scene`、`write_video_prompt`、`finish_turn`。视频模式为“仅文字”时不提供 `write_video_prompt`。
+- 选角由模型决定，程序保证连续性：老角色的演员绑定由程序沿用，模型更换必须显式 `recast: true`；同一幕两个人物不能使用同一演员；演员图片仍由前端按演员 ID 从本地演员库解析。
+- `write_video_prompt` 只提交 `style` 与每段的 `characters`、`seconds`、`prompt`。prompt 由 `0–4秒：` 形式的时间块组成，台词处写 `{{line_1}}` 占位符。程序替换为人物姓名与原文，校验每句台词恰好按序使用一次、时间块从 0 开始首尾相接、每段 5～10 秒且不低于台词所需、整幕 15～30 秒、正文不泄漏人物 ID。
+- 同一工具连续 3 次校验失败则结束回合；模型停下却没有调用 `finish_turn` 时程序提醒一次，再不行按已有结果降级为纯文字。
 - 同一幕片段按顺序生成，后续片段以及下一幕首段使用上一尾帧作为首帧参考。
 - `inspect_tail_frame` 只调用 DeepSeek Vision，将整幕最终尾帧转换成下一回合使用的实测视觉状态。
-- 工具使用 TypeBox 校验场景结构，并要求每回合提供三个选择。
-- 工具成功后以结构化 `details` 返回场景与模板编译结果。
-- 可在 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 与 GLM-5.3-Flash 之间切换；DeepSeek V4 Flash 在 Pi 和极简导演中均默认关闭思考模式，可通过模型下方的开关开启 high 模式。
-- GLM-5.3-Flash 使用独立 `BIGMODEL_API_KEY` 直连智谱官方通用按量 API，GLM-5.3-Flash 不支持完全关闭思考，Pi 与极简导演默认使用 low，可通过开关切换 high。
-- 工具参数不符合 schema 时会把错误反馈给模型，并在有限次数内重试。
+- 可在 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 与 GLM-5.3-Flash 之间切换；DeepSeek V4 Flash 默认关闭思考模式，可通过模型下方的开关开启 high 模式。
+- GLM-5.3-Flash 使用独立 `BIGMODEL_API_KEY` 直连智谱官方通用按量 API，不支持完全关闭思考，默认使用 low，可通过开关切换 high。
 
 ### 会话与连续性
 
@@ -62,8 +61,8 @@ Pi Agent 通过 OpenRouter 调用用户选择的模型续写故事
 Trace 页面用于查看互动故事 Agent 的运行详情，包括：
 
 - System Prompt 与玩家输入。
-- 场景阶段的 `publish_scene`、程序选角，以及视频阶段的 `write_video_prompt` 调用与结果。
-- ToolResult 的结构化场景与视频计划数据。
+- 同一回合内 `publish_scene`、`search_actors`、`cast_scene`、`write_video_prompt`、`finish_turn` 的调用与结果。
+- ToolResult 的结构化场景、选角与视频计划数据。
 - Pi Compaction、Token、耗时、停止原因和错误。
 
 Trace 数据来自本地 `.agent-traces` 中的 Pi JSONL Session，不与视频工作区状态混合。

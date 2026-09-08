@@ -49,48 +49,30 @@ test('requires a nonblank narrative without imposing a length range', () => {
 
 const makeVideoRequest = () => ({
   totalDuration: 15,
-  visualContext: {
-    style: '写实电影质感，暖色柔光，稳定自然的宫廷叙事风格。',
-    scene: '清晨的宫墙甬道，朱红高墙夹着青石路，远处宫门关闭。',
-  },
+  style: '写实电影质感，暖色柔光，稳定自然的宫廷叙事风格。',
   videoPrompts: [
     {
       sequence: 1,
       startTime: 0,
       endTime: 5,
       characterIds: ['heroine'],
-      prompt: '宫墙暮色场景，镜头缓慢推进朱红宫墙，宫灯在少女身后次第亮起。',
-      endFrame: '中景，少女站在朱红宫墙前，双手收进袖中，保持静止。',
-      audio: '远处晨钟和衣料摩擦声',
+      prompt: '0–5秒：宫墙暮色场景，镜头缓慢推进朱红宫墙，宫灯在少女身后次第亮起。',
     },
     {
       sequence: 2,
       startTime: 5,
       endTime: 15,
       characterIds: ['heroine'],
-      prompt: '偏院室内场景，少女坐在木椅上攥紧袖口，烛光在她脸上摇曳。',
-      endFrame: '中近景，少女坐在木椅上攥紧袖口，望向关闭的木门。',
-      audio: '木门轻响和脚步声',
+      prompt: '0–10秒：偏院室内场景，少女坐在木椅上攥紧袖口，烛光在她脸上摇曳。',
     },
   ],
 })
 
-const makeVideoPlanDraft = () => ({
-  visualContext: makeVideoRequest().visualContext,
-  videoPrompts: [
-    {
-      characterIds: ['heroine'],
-      beats: [{ visual: '固定中景，少女站在朱红宫墙前，抬头听见远处晨钟。', audio: '轻微风声。' }],
-      endFrame: '中景，少女站在朱红宫墙前，双手收进袖中，保持静止。',
-    },
-    {
-      characterIds: ['heroine'],
-      beats: [{
-        visual: '镜头推近，少女坐到木椅上，攥紧袖口并望向关闭的木门。', audio: '轻微风声。',
-        dialogueIds: ['line_1'],
-      }],
-      endFrame: '中近景，少女坐在木椅上攥紧袖口，望向关闭的木门。',
-    },
+const makeVideoPlan = () => ({
+  style: makeVideoRequest().style,
+  segments: [
+    { characters: ['heroine'], seconds: 5, prompt: '0–5秒：固定中景，少女站在朱红宫墙前，抬头听见远处晨钟。轻微风声。' },
+    { characters: ['heroine'], seconds: 10, prompt: '0–10秒：镜头推近，少女坐到木椅上，攥紧袖口并望向关闭的木门，{{line_1}}。轻微风声。' },
   ],
 })
 
@@ -124,49 +106,31 @@ test('rejects a scene publish carrying a video field', () => {
   }), false)
 })
 
-test('accepts a video plan submitted on its own', () => {
-  assert.equal(Check(videoPlanSchema, makeVideoPlanDraft()), true)
+test('accepts a video plan submitted on its own and rejects the removed nested structure', () => {
+  assert.equal(Check(videoPlanSchema, makeVideoPlan()), true)
   assert.equal(Check(videoPlanSchema, {}), false)
-  assert.equal(Check(videoPlanSchema, {
-    ...makeVideoPlanDraft(),
-    scene: makeScene(2),
-  }), false)
+  assert.equal(Check(videoPlanSchema, { ...makeVideoPlan(), scene: makeScene(2) }), false)
+  const plan = makeVideoPlan()
+  assert.equal(Check(videoPlanSchema, { visualContext: { style: plan.style, scene: '宫墙' }, videoPrompts: [] }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, endFrame: '少女站在宫墙前。' })) }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, beats: [] })) }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, audio: '脚步声。' })) }), false)
 })
 
-test('requires shot-specific sound and rejects separate layout or segment sound', () => {
-  const draft = makeVideoPlanDraft()
-  assert.equal(Check(videoPlanSchema, {
-    ...draft, visualContext: { ...draft.visualContext, layout: '女主在左，嬷嬷在右。' },
-  }), false)
-  assert.equal(Check(videoPlanSchema, {
-    ...draft, videoPrompts: draft.videoPrompts.map((segment) => ({ ...segment, audio: '脚步声。' })),
-  }), false)
-  assert.equal(Check(videoPlanSchema, {
-    ...draft, videoPrompts: draft.videoPrompts.map((segment) => ({
-      ...segment, beats: segment.beats.map((beat) => ({ visual: beat.visual })),
-    })),
-  }), false)
-})
-
-test('keeps mechanical timing out of the tool input schema', () => {
+test('keeps mechanical timing out of the tool input schema but bounds seconds per segment', () => {
+  const plan = makeVideoPlan()
+  assert.equal(Check(videoPlanSchema, { ...plan, totalDuration: 15 }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, startTime: 0 })) }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, seconds: 4 })) }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: plan.segments.map((segment) => ({ ...segment, seconds: 11 })) }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: [plan.segments[0]] }), false)
+  assert.equal(Check(videoPlanSchema, { ...plan, segments: [...plan.segments, ...plan.segments] }), false)
   const request = makeVideoRequest()
   assert.equal(Check(videoGenerationRequestSchema, {
     ...request,
     videoPrompts: request.videoPrompts.map((segment) => Object.fromEntries(
       Object.entries(segment).filter(([key]) => key !== 'characterIds'),
     )),
-  }), false)
-  assert.equal(Check(videoPlanSchema, makeVideoPlanDraft()), true)
-  assert.equal(Check(videoPlanSchema, {
-    ...makeVideoPlanDraft(),
-    totalDuration: 15,
-  }), false)
-  assert.equal(Check(videoPlanSchema, {
-    ...makeVideoPlanDraft(),
-    videoPrompts: makeVideoPlanDraft().videoPrompts.map((segment) => ({
-      ...segment,
-      duration: 8,
-    })),
   }), false)
 })
 
@@ -176,7 +140,7 @@ test('rejects video requests with unsupported total durations', () => {
   assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), totalDuration: 15 }), true)
   assert.equal(Check(videoGenerationRequestSchema, {
     totalDuration: 30,
-    visualContext: makeVideoRequest().visualContext,
+    style: makeVideoRequest().style,
     videoPrompts: [
       { ...makeVideoRequest().videoPrompts[0], endTime: 10 },
       { ...makeVideoRequest().videoPrompts[1], startTime: 10, endTime: 20 },
@@ -197,6 +161,11 @@ test('rejects video requests with a too short or too long prompt', () => {
   }), false)
 })
 
-test('rejects video requests with extra fields', () => {
-  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), style: 'cinematic' }), false)
+test('rejects video requests with extra or removed fields', () => {
+  assert.equal(Check(videoGenerationRequestSchema, { ...makeVideoRequest(), visualContext: { style: 'cinematic', scene: '宫墙' } }), false)
+  const request = makeVideoRequest()
+  assert.equal(Check(videoGenerationRequestSchema, {
+    ...request,
+    videoPrompts: request.videoPrompts.map((segment) => ({ ...segment, endFrame: '少女站在宫墙前。', audio: '风声' })),
+  }), false)
 })
