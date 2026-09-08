@@ -42,7 +42,6 @@ import {
 import {
   createCastingBook,
   createCastSceneTool,
-  createSearchActorsTool,
   describeCastingStatus,
   isCastingComplete,
   pendingCastingCharacters,
@@ -634,7 +633,6 @@ async function runPersistentDirector({
       return `${status}${next}`
     },
   })
-  const searchActorsTool = createSearchActorsTool(book, sceneCharacters)
   const castSceneTool = createCastSceneTool(book, sceneCharacters, (result) => {
     castingResult = toDurableValue(result)
     send({ type: 'status', text: '选角已确定，正在编写分镜。' })
@@ -646,7 +644,7 @@ async function runPersistentDirector({
       if (!scenePublish) return '必须先通过 publish_scene 发布场景。'
       const pending = pendingCastingCharacters(book, scenePublish.characters)
       return pending.length
-        ? `以下人物尚未选角：${pending.map((character) => `${character.name}（${character.id}）`).join('、')}；请先用 search_actors 查询候选并调用 cast_scene。`
+        ? `以下人物尚未选角：${pending.map((character) => `${character.name}（${character.id}）`).join('、')}；请先调用 cast_scene。`
         : null
     },
     onPublish: (plan) => {
@@ -677,7 +675,6 @@ async function runPersistentDirector({
       model,
       tools: [
         publishSceneTool,
-        searchActorsTool,
         castSceneTool,
         ...(videoEnabled ? [videoPlanTool] : []),
         finishTurnTool,

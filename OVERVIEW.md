@@ -24,7 +24,7 @@
                 ↓
 agent 调用 publish_scene 发布正文、三个选项、人物与台词清单
                 ↓
-有新人物时 agent 调用 search_actors 查候选，再调用 cast_scene 提交选角决定
+publish_scene 结果直接列出每个待选角人物的候选演员，agent 调用 cast_scene 提交选角决定
                 ↓
 agent 调用 write_video_prompt 提交 2～3 段分镜，程序校验台词、时间块与秒数
                 ↓
@@ -38,7 +38,7 @@ agent 调用 finish_turn 结束回合，程序把选角与视频计划推给页�
 ### Agent 边界
 
 - 只有一个 Agent 实例、一个持久 Session。模型自己决定调用顺序，程序通过工具前置条件拦截跳步：未发布场景不能写分镜，未完成选角不能写分镜，未提交视频计划（或未说明跳过原因）不能结束回合。不使用强制 `tool_choice`。
-- 工具共五个：`publish_scene`、`search_actors`、`cast_scene`、`write_video_prompt`、`finish_turn`。视频模式为“仅文字”时不提供 `write_video_prompt`。
+- 工具共四个：`publish_scene`、`cast_scene`、`write_video_prompt`、`finish_turn`。视频模式为“仅文字”时不提供 `write_video_prompt`。
 - 选角由模型决定，程序保证连续性：老角色的演员绑定由程序沿用，模型更换必须显式 `recast: true`；同一幕两个人物不能使用同一演员；演员图片仍由前端按演员 ID 从本地演员库解析。
 - `write_video_prompt` 只提交 `style` 与每段的 `characters`、`seconds`、`prompt`。prompt 由 `0–4秒：` 形式的时间块组成，台词处写 `{{line_1}}` 占位符。程序替换为人物姓名与原文，校验每句台词恰好按序使用一次、时间块从 0 开始首尾相接、每段 5～10 秒且不低于台词所需、整幕 15～30 秒、正文不泄漏人物 ID。
 - 同一工具连续 3 次校验失败则结束回合；模型停下却没有调用 `finish_turn` 时程序提醒一次，再不行按已有结果降级为纯文字。
@@ -61,7 +61,7 @@ agent 调用 finish_turn 结束回合，程序把选角与视频计划推给页�
 Trace 页面用于查看互动故事 Agent 的运行详情，包括：
 
 - System Prompt 与玩家输入。
-- 同一回合内 `publish_scene`、`search_actors`、`cast_scene`、`write_video_prompt`、`finish_turn` 的调用与结果。
+- 同一回合内 `publish_scene`、`cast_scene`、`write_video_prompt`、`finish_turn` 的调用与结果。
 - ToolResult 的结构化场景、选角与视频计划数据。
 - Pi Compaction、Token、耗时、停止原因和错误。
 

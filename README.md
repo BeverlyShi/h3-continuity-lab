@@ -49,7 +49,7 @@ npm run build
 - 页面内置 Pi Agent Core，并通过本地 `/api/director/turn` 调用所选模型；右侧下拉框可选择 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 或 GLM-5.3-Flash。DeepSeek V4 Flash 直连官方 API，默认关闭思考模式，可在模型下方的“思考模式”开关开启 high 模式，输出上限为 16,384 tokens（包含思考），单次请求超时为 120 秒。
 - GLM-5.3-Flash 通过智谱官方通用按量接口 `https://open.bigmodel.cn/api/paas/v4` 调用，API 模型 ID 为 `glm-5.3-flash`。在设置中填写独立的 `BIGMODEL_API_KEY`，再选择该模型；GLM-5.3-Flash 不支持关闭思考，默认使用 low，可通过模型下方开关切换 high。
 - 智谱调用的 Trace 记录 token 用量；SDK 的美元费用字段未配置国内人民币价格，请以 BigModel 账单为准。
-- 每回合由**一个 Agent** 在同一个 Pi Session 里自主调用工具完成：`publish_scene` 发布叙事、选项、人物及 `dialogues` 台词清单；有新人物时 `search_actors` 查询候选演员、`cast_scene` 提交选角决定；`write_video_prompt` 提交分镜；`finish_turn` 结束回合。不强制工具顺序，但程序用前置条件拦截跳步，并在工具结果末尾提示下一步。
+- 每回合由**一个 Agent** 在同一个 Pi Session 里自主调用工具完成：`publish_scene` 发布叙事、选项、人物及 `dialogues` 台词清单，结果直接列出每个待选角人物的候选演员；有新人物时 `cast_scene` 提交选角决定；`write_video_prompt` 提交分镜；`finish_turn` 结束回合。不强制工具顺序，但程序用前置条件拦截跳步，并在工具结果末尾提示下一步。
 - 选角由模型决定，程序保证不漂移：老角色的演员绑定由程序沿用，更换必须显式 `recast: true` 并说明理由；同一幕两个人物不能用同一演员；没有合适演员时可将人物设为 `null`，该人物不附参考图。
 - narrative 的人物对白用成对双引号，心声、书信和称谓使用叙述或单引号。发布时逐句校验台词清单与 narrative 一致。分镜正文在实际说话处写 `{{line_1}}` 占位符，程序填入人物姓名和完整原文，拒绝角色 ID 泄漏、台词遗漏、重复和乱序。
 - 分镜工具只提交 `style` 和每段的 `characters`、`seconds`、`prompt`。prompt 由 `0–4秒：` 形式的时间块组成（视频模型要求），从 0 秒开始首尾相接，最后一块结束于 `seconds`；每段 5～10 秒，整幕 15～30 秒，`seconds` 不得低于本段台词字数 ÷ 3.5 再加 1 秒。程序不再自动拆段，秒数不够时把所需秒数反馈给模型自行调整。
@@ -73,7 +73,7 @@ npm run build
 
 - 同一局游戏持续使用同一个 Pi Session，并在本地 `.agent-traces` 写入 JSONL 记录。
 - Trace 页面按回合展示完整模型输入、所选模型与 thinking、Tool Call、Tool Result、Token、耗时与停止原因。
-- `publish_scene`、`search_actors`、`cast_scene`、`write_video_prompt`、`finish_turn` 及其结果会出现在同一次 Agent Trace 中；剧情已发布但视频未完成时，Trace 标记为 `degraded`，游戏降级到文字模式继续。会话防重入锁在 Vite 模块重载期间仍保留；锁仅在当前服务进程内生效。
+- `publish_scene`、`cast_scene`、`write_video_prompt`、`finish_turn` 及其结果会出现在同一次 Agent Trace 中；剧情已发布但视频未完成时，Trace 标记为 `degraded`，游戏降级到文字模式继续。会话防重入锁在 Vite 模块重载期间仍保留；锁仅在当前服务进程内生效。
 - 当前锁定的 `pi-agent-core@0.84.4` 尚未实现 `AgentHarness.prompt()`；本版本使用可运行的基础 `Agent`，并接入同包的 JSONL Session 与 Telemetry。待 Harness 执行层发布后可在服务端单点替换。
 
 ## API 接入边界

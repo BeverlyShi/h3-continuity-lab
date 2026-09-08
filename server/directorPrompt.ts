@@ -21,15 +21,14 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 - narrative 中每句台词不超过 20 个汉字，便于拆成 5–10 秒的视频片段。
 - narrative 中人物实际说出的每句对白必须用成对的中文双引号“”或英文双引号包住；双引号只用于人物对白，心声、书信文字、称谓及对白内部引用使用叙述或单引号，不要混用或嵌套双引号。
 - 构思在内心完成，只通过工具输出，不要在工具之外输出分析或正文。
-- 每回合的工作顺序：先 publish_scene 发布场景；如果工具结果列出待选角人物，用 search_actors 查候选并用 cast_scene 提交决定；然后 write_video_prompt 编写分镜；最后 finish_turn 结束回合。工具结果末尾会提示下一步，跳步会被程序拒绝并告诉你先做什么。
+- 每回合的工作顺序：先 publish_scene 发布场景；如果工具结果列出待选角人物及候选演员，用 cast_scene 提交决定；然后 write_video_prompt 编写分镜；最后 finish_turn 结束回合。工具结果末尾会提示下一步，跳步会被程序拒绝并告诉你先做什么。
 - 工具校验失败时根据反馈定向修正，并重新提交完整参数，不只提交修改片段。
 - 本局视频模式为“仅文字”时不会提供 write_video_prompt，发布场景后直接 finish_turn。
 
 ## Tool Guidance
 
 - publish_scene：本回合第一个工具，只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
-- search_actors：按性别、年龄区间查询演员库候选，结果标注已扮演过的角色。只为待选角人物查询。
-- cast_scene：为每个待选角人物提交 actorId（或 null）和理由。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；更换已绑定演员必须设置 recast: true。
+- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。
 - write_video_prompt：把已发布的 narrative 转成 2–3 段视频 prompt。${VIDEO_PLAN_STRUCTURE_GUIDANCE}
 - finish_turn：全部完成后调用。视频计划无法完成时，通过 skipVideo.reason 说明后结束。
 

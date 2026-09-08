@@ -3,9 +3,9 @@ import test from 'node:test'
 import {
   createCastingBook,
   createCastSceneTool,
-  createSearchActorsTool,
   describeCastingStatus,
   isCastingComplete,
+  listCastingCandidates,
   resolveSceneCasting,
 } from '../server/castSceneTool.ts'
 import type { CastableActor } from '../src/types/actor.ts'
@@ -24,20 +24,32 @@ const characters: SceneCharacter[] = [
 
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) => result.content[0].text ?? ''
 
-test('search_actors filters by gender and age, marks actors already bound to a character and caps results', async () => {
-  const book = createCastingBook(actors, [{ characterId: 'heroine', actorId: 'actor-a' }])
-  const tool = createSearchActorsTool(book, () => characters)
-  assert.equal(tool.name, 'search_actors')
-  const women = await tool.execute('search-1', { gender: 'female' })
-  assert.deepEqual(women.details.actors.map((actor) => [actor.id, actor.usedBy]), [['actor-c', undefined], ['actor-a', '沈清禾']])
-  assert.match(textOf(women), /演员甲（actor-a，女，16–24 岁），已扮演：沈清禾/)
-  const elders = await tool.execute('search-2', { minAge: 45, maxAge: 60 })
-  assert.deepEqual(elders.details.actors.map((actor) => actor.id), ['actor-b', 'actor-c'])
-  const none = await tool.execute('search-3', { gender: 'male', maxAge: 20 })
-  assert.deepEqual(none.details.actors, [])
-  assert.match(textOf(none), /没有符合条件的演员/)
-  await assert.rejects(() => tool.execute('search-4', { minAge: 50, maxAge: 20 }), /minAge 不能大于 maxAge/)
-  assert.equal(women.terminate, false)
+test('listCastingCandidates filters by gender, ranks age-matched candidates by distance, backfills unmatched ones and caps at 8', () => {
+  const book = createCastingBook(actors, [{ characterId: 'emperor', actorId: 'actor-b' }])
+  const heroineCandidates = listCastingCandidates(book, characters[0], characters)
+  assert.deepEqual(heroineCandidates.map((candidate) => [candidate.id, candidate.ageMatch]), [
+    ['actor-a', true],
+    ['actor-c', false],
+  ])
+
+  const manyActors: CastableActor[] = Array.from({ length: 10 }, (_, index) => ({
+    id: `actor-${index}`,
+    name: `演员${index}`,
+    gender: 'female',
+    minAge: 16 + index,
+    maxAge: 20 + index,
+  }))
+  const bigBook = createCastingBook(manyActors, [])
+  const capped = listCastingCandidates(bigBook, characters[0], characters)
+  assert.equal(capped.length, 8)
+
+  const noneMatchingGender = listCastingCandidates(book, { id: 'x', name: '甲', gender: 'male', minAge: 60, maxAge: 70 }, characters)
+  assert.deepEqual(noneMatchingGender.map((candidate) => candidate.id), ['actor-b'])
+  assert.equal(noneMatchingGender[0].ageMatch, false)
+
+  const withUsage = listCastingCandidates(book, characters[1], characters)
+  const emperorEntry = withUsage.find((candidate) => candidate.id === 'actor-b')
+  assert.equal(emperorEntry?.usedBy, '皇帝')
 })
 
 test('cast_scene records the model decision for every scene character and reports reference availability', async () => {
@@ -57,18 +69,33 @@ test('cast_scene records the model decision for every scene character and report
   assert.equal(isCastingComplete(book, characters), true)
 })
 
-test('cast_scene keeps existing bindings, blocks silent recasts and allows an explicit recast', async () => {
+test('cast_scene allows overriding its own decision within the same turn, but cross-turn bindings need recast', async () => {
   const book = createCastingBook(actors, [{ characterId: 'heroine', actorId: 'actor-a' }])
   const tool = createCastSceneTool(book, () => [characters[0]])
   assert.equal(isCastingComplete(book, [characters[0]]), true)
+
+  // 跨回合绑定：无 recast 直接拒绝。
   await assert.rejects(() => tool.execute('cast-recast', { assignments: [{ characterId: 'heroine', actorId: 'actor-c', reason: '换个人' }] }),
     /沈清禾 已绑定演员 演员甲，不能更换；确需更换请设置 recast: true/)
   assert.equal(book.bindings.get('heroine'), 'actor-a')
-  const empty = await tool.execute('cast-empty', { assignments: [] })
-  assert.deepEqual(empty.details.castings, [{ characterId: 'heroine', actorId: 'actor-a' }])
+
+  // 显式 recast 后，本回合内可以再次覆盖，无需重复设置 recast。
   const recast = await tool.execute('cast-recast-ok', { assignments: [{ characterId: 'heroine', actorId: 'actor-c', reason: '剧情需要', recast: true }] })
   assert.deepEqual(recast.details.castings, [{ characterId: 'heroine', actorId: 'actor-c' }])
   assert.match(textOf(recast), /年龄区间不重叠/)
+})
+
+test('cast_scene lets a fresh binding made this turn be overridden or nulled without recast', async () => {
+  const book = createCastingBook(actors, [])
+  const tool = createCastSceneTool(book, () => [characters[0]])
+  const first = await tool.execute('cast-fresh-1', { assignments: [{ characterId: 'heroine', actorId: 'actor-a', reason: '初次决定' }] })
+  assert.deepEqual(first.details.castings, [{ characterId: 'heroine', actorId: 'actor-a' }])
+
+  const overridden = await tool.execute('cast-fresh-2', { assignments: [{ characterId: 'heroine', actorId: 'actor-c', reason: '改变主意' }] })
+  assert.deepEqual(overridden.details.castings, [{ characterId: 'heroine', actorId: 'actor-c' }])
+
+  const nulled = await tool.execute('cast-fresh-3', { assignments: [{ characterId: 'heroine', actorId: null, reason: '还是不用参考图' }] })
+  assert.deepEqual(nulled.details.castings, [])
 })
 
 test('cast_scene validates actors, gender, duplicates and completeness before changing the book', async () => {
@@ -99,13 +126,22 @@ test('cast_scene validates actors, gender, duplicates and completeness before ch
   await assert.rejects(() => emptyScene.execute('cast-none', { assignments: [] }), /必须先通过 publish_scene/)
 })
 
-test('describes casting status after publishing and resolves the final scene casting from the book', () => {
+test('describes casting status with candidates for each pending character and resolves the final scene casting from the book', () => {
   const book = createCastingBook(actors, [{ characterId: 'heroine', actorId: 'actor-a' }, { characterId: 'old', actorId: 'removed-actor' }])
   assert.equal(book.bindings.has('old'), false, '指向已删除演员的旧绑定被忽略')
   const status = describeCastingStatus(book, characters)
   assert.match(status, /沿用已有选角：沈清禾 → 演员甲/)
-  assert.match(status, /待选角人物：皇帝（emperor）/)
-  assert.match(status, /先用 search_actors 查看候选演员/)
+  assert.match(status, /待选角人物：/)
+  assert.match(status, /- 皇帝（emperor，男 30–42）：候选 演员乙（actor-b，35–50）/)
+  assert.match(status, /请调用 cast_scene 为每个待选角人物指定演员或设为 null；同一幕两个人物不能使用同一演员。/)
   assert.deepEqual(resolveSceneCasting(book, characters), { castings: [{ characterId: 'heroine', actorId: 'actor-a' }], unmatchedCharacterIds: ['emperor'] })
   assert.match(describeCastingStatus(createCastingBook([], []), characters), /演员库为空/)
+})
+
+test('describes casting status with no age-matched candidates and a fallback of unmatched ones', () => {
+  const elderOnly: CastableActor[] = [{ id: 'actor-c', name: '演员丙', gender: 'female', minAge: 40, maxAge: 55 }]
+  const teens: SceneCharacter[] = [{ id: 'steward', name: '掌事姑姑', gender: 'female', minAge: 15, maxAge: 18 }]
+  const book = createCastingBook(elderOnly, [])
+  const status = describeCastingStatus(book, teens)
+  assert.match(status, /- 掌事姑姑（steward，女 15–18）：无年龄相符的女演员；年龄不重叠的备选 演员丙（actor-c，40–55）/)
 })

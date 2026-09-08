@@ -43,7 +43,6 @@ test('one agent drives publish → search → cast → write → finish, self-co
     const script: ScriptedStep[] = [
       { tool: 'publish_scene', args: malformedScene },
       { tool: 'publish_scene', args: scene, reasoning: '先发布场景。' },
-      { tool: 'search_actors', args: { gender: 'female', minAge: 40, maxAge: 50 } },
       { tool: 'cast_scene', args: { assignments: [
         { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
         { characterId: 'steward', actorId: 'actor-elder', reason: '四十多岁，面相端严' },
@@ -64,22 +63,22 @@ test('one agent drives publish → search → cast → write → finish, self-co
 
       assert.equal(provider.remaining(), 0)
       const requests = provider.requests
-      assert.equal(requests.length, 7)
+      assert.equal(requests.length, 6)
       for (const request of requests) {
         assert.equal(request.url, 'https://api.deepseek.com/chat/completions')
-        assert.deepEqual(requestTools(request), ['publish_scene', 'search_actors', 'cast_scene', 'write_video_prompt', 'finish_turn'])
+        assert.deepEqual(requestTools(request), ['publish_scene', 'cast_scene', 'write_video_prompt', 'finish_turn'])
         assert.equal('tool_choice' in request.body, false)
       }
       assert.match(messageText(requests[0].body.messages.at(-1)), /本局视频模式：上传视频/)
       assert.match(messageText(requests[0].body.messages.at(-1)), /没有起始尾帧/)
       assert.match(lastToolResult(requests[1]), /characters 必须位于顶层/)
-      assert.match(lastToolResult(requests[2]), /待选角人物：女主（heroine）、掌事姑姑（steward）/)
-      assert.match(lastToolResult(requests[3]), /演员乙（actor-elder，女，40–55 岁）/)
-      assert.doesNotMatch(lastToolResult(requests[3]), /演员甲|演员丙/)
-      assert.match(lastToolResult(requests[4]), /女主：演员甲，有参考图/)
-      assert.match(lastToolResult(requests[5]), /尚未安排 line_1/)
-      assert.match(lastToolResult(requests[6]), /掌事姑姑说：“你识字吗？”/)
-      assert.match(lastToolResult(requests[6]), /下一步：确认无误后调用 finish_turn/)
+      assert.match(lastToolResult(requests[2]), /待选角人物：/)
+      assert.match(lastToolResult(requests[2]), /掌事姑姑（steward，女 40–50）：候选 演员乙（actor-elder，40–55）/)
+      assert.match(lastToolResult(requests[2]), /女主（heroine，女 16–20）：候选 演员甲（actor-young，16–22）/)
+      assert.match(lastToolResult(requests[3]), /女主：演员甲，有参考图/)
+      assert.match(lastToolResult(requests[4]), /尚未安排 line_1/)
+      assert.match(lastToolResult(requests[5]), /掌事姑姑说：“你识字吗？”/)
+      assert.match(lastToolResult(requests[5]), /下一步：确认无误后调用 finish_turn/)
 
       const types = events.map((event) => event.type)
       assert.ok(types.indexOf('scene') < types.indexOf('cast'))
@@ -101,7 +100,7 @@ test('one agent drives publish → search → cast → write → finish, self-co
       const trace = events.findLast((event) => event.type === 'harness_trace')
       assert.ok(trace?.type === 'harness_trace')
       assert.equal(trace.trace.outcome, 'completed')
-      assert.equal(trace.trace.entries.filter((entry) => entry.kind === 'tool_call').length, 7)
+      assert.equal(trace.trace.entries.filter((entry) => entry.kind === 'tool_call').length, 6)
       assert.equal(trace.trace.entries.filter((entry) => entry.kind === 'thinking').length, 1)
     } finally {
       provider.restore()
@@ -157,7 +156,7 @@ test('text-only mode removes write_video_prompt and finishes right after publish
         actors, castings: [], traceId: 'loop-text-only', videoMode: 'off',
         send: (event) => { events.push(event) },
       })
-      assert.deepEqual(requestTools(provider.requests[0]), ['publish_scene', 'search_actors', 'cast_scene', 'finish_turn'])
+      assert.deepEqual(requestTools(provider.requests[0]), ['publish_scene', 'cast_scene', 'finish_turn'])
       assert.match(messageText(provider.requests[0].body.messages.at(-1)), /仅文字/)
       assert.equal(result.video, undefined)
       assert.deepEqual(result.casting, { castings: [], unmatchedCharacterIds: ['heroine', 'steward'] })

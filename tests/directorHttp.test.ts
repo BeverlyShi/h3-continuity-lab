@@ -53,7 +53,7 @@ test('the director endpoint runs the single agent for both official providers wi
             if (isGlm) assert.equal(request.body.thinking?.clear_thinking, false)
             assert.equal(request.body.max_tokens, 16_384)
             assert.equal('tool_choice' in request.body, false)
-            assert.deepEqual(request.body.tools?.map((tool) => tool.function.name), ['publish_scene', 'search_actors', 'cast_scene', 'write_video_prompt', 'finish_turn'])
+            assert.deepEqual(request.body.tools?.map((tool) => tool.function.name), ['publish_scene', 'cast_scene', 'write_video_prompt', 'finish_turn'])
           }
           // 同一回合内后续请求回放了此前的思考内容。
           const assistants = provider.requests[2].body.messages.filter((message) => message.role === 'assistant')

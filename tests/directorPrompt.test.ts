@@ -14,12 +14,13 @@ test('the single system prompt covers story, casting and shot writing in a fixed
 
   assert.match(DIRECTOR_SYSTEM_PROMPT, /互动文字游戏《后宫》/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /主动决定故事开场/)
-  assert.match(DIRECTOR_SYSTEM_PROMPT, /先 publish_scene 发布场景.*search_actors.*cast_scene.*write_video_prompt.*finish_turn/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /先 publish_scene 发布场景.*cast_scene.*write_video_prompt.*finish_turn/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /"1"、"2"、"3"/)
-  assert.match(DIRECTOR_SYSTEM_PROMPT, /更换已绑定演员必须设置 recast: true/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /更换往回合已绑定的演员必须设置 recast: true/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /每个时间块就是一个镜头/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /skipVideo\.reason/)
   assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /actionSeconds|visualContext|videoPrompts|宿籍|数值|150|250/)
+  assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /search_actors/)
 })
 
 test('both structure examples in the prompt validate against each other', () => {
@@ -34,7 +35,7 @@ test('both structure examples in the prompt validate against each other', () => 
 
 test('the agent exposes every tool to one Agent instance without forcing tool choice', async () => {
   const source = await readFile(new URL('../server/directorAgent.ts', import.meta.url), 'utf8')
-  assert.match(source, /publishSceneTool,\s*searchActorsTool,\s*castSceneTool,\s*\.\.\.\(videoEnabled \? \[videoPlanTool\] : \[\]\),\s*finishTurnTool,/)
+  assert.match(source, /publishSceneTool,\s*castSceneTool,\s*\.\.\.\(videoEnabled \? \[videoPlanTool\] : \[\]\),\s*finishTurnTool,/)
   assert.equal((source.match(/new Agent\(/g) ?? []).length, 1)
   assert.doesNotMatch(source, /tool_choice|narrativeReview|DIRECTOR_VIDEO_SYSTEM_PROMPT/)
 })

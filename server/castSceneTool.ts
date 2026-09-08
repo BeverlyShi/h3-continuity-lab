@@ -3,7 +3,7 @@ import { Type, type Static } from 'typebox'
 import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
 import type { SceneCharacter } from '../src/types/story.ts'
 
-const MAX_SEARCH_RESULTS = 8
+export const MAX_CANDIDATES_PER_CHARACTER = 8
 
 // 本局的选角账本：绑定表由程序持有，跨回合沿用，模型只对新人物做决定。
 export type CastingBook = {
@@ -11,23 +11,51 @@ export type CastingBook = {
   bindings: Map<string, string>
   // 本幕已经显式决定“不给参考图”的人物。
   declined: Set<string>
+  // 跨回合沿用的绑定：只有这些人物更换演员才需要 recast。
+  lockedCharacterIds: Set<string>
 }
 
 export const createCastingBook = (actors: CastableActor[], existing: CharacterCasting[]): CastingBook => {
   const actorIds = new Set(actors.map((actor) => actor.id))
+  const validExisting = existing.filter((casting) => actorIds.has(casting.actorId))
   return {
     actors,
-    bindings: new Map(existing.filter((casting) => actorIds.has(casting.actorId)).map((casting) => [casting.characterId, casting.actorId])),
+    bindings: new Map(validExisting.map((casting) => [casting.characterId, casting.actorId])),
     declined: new Set(),
+    lockedCharacterIds: new Set(validExisting.map((casting) => casting.characterId)),
   }
 }
 
-const actorLabel = (actor: CastableActor) => `${actor.name}（${actor.id}，${actor.gender === 'female' ? '女' : '男'}，${actor.minAge}–${actor.maxAge} 岁）`
+const actorLabel = (actor: CastableActor) => `${actor.name}（${actor.id}，${actor.minAge}–${actor.maxAge}）`
 
 const rangesOverlap = (
   left: { minAge: number; maxAge: number },
   right: { minAge: number; maxAge: number },
 ) => left.minAge <= right.maxAge && left.maxAge >= right.minAge
+
+const ageCenter = (range: { minAge: number; maxAge: number }) => (range.minAge + range.maxAge) / 2
+
+export type CastingCandidate = CastableActor & { ageMatch: boolean; usedBy?: string }
+
+// 为待选角人物列出候选演员：同性别，年龄相符的排在前面，都按年龄区间中心距离升序，最多 8 个。
+export const listCastingCandidates = (book: CastingBook, character: SceneCharacter, characters: SceneCharacter[]): CastingCandidate[] => {
+  const characterNames = new Map(characters.map((item) => [item.id, item.name]))
+  const usedBy = new Map<string, string>()
+  for (const [characterId, actorId] of book.bindings) {
+    usedBy.set(actorId, characterNames.get(characterId) ?? characterId)
+  }
+  const sameGender = book.actors.filter((actor) => actor.gender === character.gender)
+  const byDistance = (left: CastableActor, right: CastableActor) =>
+    Math.abs(ageCenter(left) - ageCenter(character)) - Math.abs(ageCenter(right) - ageCenter(character))
+  const matched = sameGender.filter((actor) => rangesOverlap(character, actor)).sort(byDistance)
+  const unmatched = sameGender.filter((actor) => !rangesOverlap(character, actor)).sort(byDistance)
+  const candidates = [...matched, ...unmatched].slice(0, MAX_CANDIDATES_PER_CHARACTER)
+  return candidates.map((actor) => ({
+    ...actor,
+    ageMatch: rangesOverlap(character, actor),
+    ...(usedBy.has(actor.id) ? { usedBy: usedBy.get(actor.id) } : {}),
+  }))
+}
 
 export const pendingCastingCharacters = (book: CastingBook, characters: SceneCharacter[]) =>
   characters.filter((character) => !book.bindings.has(character.id) && !book.declined.has(character.id))
@@ -48,6 +76,8 @@ export const resolveSceneCasting = (book: CastingBook, characters: SceneCharacte
   }
 }
 
+const candidateLabel = (candidate: CastingCandidate) => `${actorLabel(candidate)}${candidate.usedBy ? `，已扮演：${candidate.usedBy}` : ''}`
+
 // 演员库为空时没有可挑的对象，直接把待选角人物记为无参考图，省去一次无意义的 cast_scene。
 export const describeCastingStatus = (book: CastingBook, characters: SceneCharacter[]) => {
   if (!book.actors.length) {
@@ -63,7 +93,22 @@ export const describeCastingStatus = (book: CastingBook, characters: SceneCharac
   const lines: string[] = []
   if (reused.length) lines.push(`沿用已有选角：${reused.join('；')}。`)
   if (pending.length) {
-    lines.push(`待选角人物：${pending.map((character) => `${character.name}（${character.id}）`).join('、')}。请先用 search_actors 查看候选演员，再用 cast_scene 为每个待选角人物指定演员或设为 null。`)
+    lines.push('待选角人物：')
+    for (const character of pending) {
+      const candidates = listCastingCandidates(book, character, characters)
+      const matched = candidates.filter((candidate) => candidate.ageMatch)
+      const unmatched = candidates.filter((candidate) => !candidate.ageMatch)
+      const genderLabel = character.gender === 'female' ? '女' : '男'
+      const body = matched.length && unmatched.length
+        ? `候选 ${matched.map(candidateLabel).join('、')}；年龄不重叠的备选 ${unmatched.map(candidateLabel).join('、')}`
+        : matched.length
+          ? `候选 ${matched.map(candidateLabel).join('、')}`
+          : unmatched.length
+            ? `无年龄相符的${genderLabel}演员；年龄不重叠的备选 ${unmatched.map(candidateLabel).join('、')}`
+            : '无同性别演员'
+      lines.push(`- ${character.name}（${character.id}，${genderLabel} ${character.minAge}–${character.maxAge}）：${body}`)
+    }
+    lines.push('请调用 cast_scene 为每个待选角人物指定演员或设为 null；同一幕两个人物不能使用同一演员。')
   } else if (book.actors.length) {
     lines.push('本幕人物均已有选角决定，无需调用 cast_scene。')
   } else {
@@ -71,60 +116,6 @@ export const describeCastingStatus = (book: CastingBook, characters: SceneCharac
   }
   return lines.join('\n')
 }
-
-export const searchActorsSchema = Type.Object({
-  gender: Type.Optional(Type.Union([Type.Literal('female'), Type.Literal('male')])),
-  minAge: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
-  maxAge: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
-  keywords: Type.Optional(Type.String({ maxLength: 100, description: '按演员姓名或描述做包含匹配的关键词。' })),
-}, { additionalProperties: false })
-
-export type SearchActorsInput = Static<typeof searchActorsSchema>
-
-export type SearchActorsResult = {
-  actors: Array<CastableActor & { usedBy?: string }>
-}
-
-export const createSearchActorsTool = (
-  book: CastingBook,
-  getCharacters: () => SceneCharacter[],
-): AgentTool<typeof searchActorsSchema, SearchActorsResult> => ({
-  name: 'search_actors',
-  label: '查询候选演员',
-  description: `按性别和年龄区间查询演员库，返回最多 ${MAX_SEARCH_RESULTS} 个候选，并标注已经扮演过哪个角色。为待选角人物挑选演员前先调用；结果为空时可放宽条件，或在 cast_scene 中把该人物设为 null。`,
-  parameters: searchActorsSchema,
-  executionMode: 'parallel',
-  execute: async (_toolCallId, input) => {
-    if (input.minAge !== undefined && input.maxAge !== undefined && input.minAge > input.maxAge) {
-      throw new Error('minAge 不能大于 maxAge。')
-    }
-    const characterNames = new Map(getCharacters().map((character) => [character.id, character.name]))
-    const usedBy = new Map<string, string>()
-    for (const [characterId, actorId] of book.bindings) {
-      usedBy.set(actorId, characterNames.get(characterId) ?? characterId)
-    }
-    const keyword = input.keywords?.trim().toLowerCase()
-    const matches = book.actors
-      .filter((actor) => !input.gender || actor.gender === input.gender)
-      .filter((actor) => rangesOverlap(
-        { minAge: input.minAge ?? 0, maxAge: input.maxAge ?? 100 },
-        actor,
-      ))
-      .filter((actor) => !keyword || actor.name.toLowerCase().includes(keyword))
-      .sort((left, right) => Number(usedBy.has(left.id)) - Number(usedBy.has(right.id)))
-      .slice(0, MAX_SEARCH_RESULTS)
-      .map((actor) => ({ ...actor, ...(usedBy.has(actor.id) ? { usedBy: usedBy.get(actor.id) } : {}) }))
-    const text = matches.length
-      ? `找到 ${matches.length} 位候选演员：\n${matches.map((actor) =>
-        `- ${actorLabel(actor)}${actor.usedBy ? `，已扮演：${actor.usedBy}` : ''}`).join('\n')}\n请用 cast_scene 提交决定；同一幕两个人物不能使用同一演员。`
-      : '没有符合条件的演员。可放宽性别或年龄条件再查，或在 cast_scene 中把该人物的 actorId 设为 null。'
-    return {
-      content: [{ type: 'text', text }],
-      details: { actors: matches },
-      terminate: false,
-    }
-  },
-})
 
 export const castSceneSchema = Type.Object({
   assignments: Type.Array(Type.Object({
@@ -144,7 +135,7 @@ export const createCastSceneTool = (
 ): AgentTool<typeof castSceneSchema, SceneCastingResult> => ({
   name: 'cast_scene',
   label: '为场景选择演员',
-  description: '为本幕待选角人物提交演员决定：每项包含 characterId、actorId（或 null）和 reason。已绑定的老角色由程序沿用，不必重复提交；要更换必须设置 recast: true。提交后本幕所有人物都必须有选角决定。',
+  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。提交后本幕所有人物都必须有选角决定。',
   parameters: castSceneSchema,
   executionMode: 'sequential',
   execute: async (_toolCallId, input) => {
@@ -170,7 +161,7 @@ export const createCastSceneTool = (
       }
       seenCharacterIds.add(character.id)
       const existingActorId = book.bindings.get(character.id)
-      if (existingActorId && existingActorId !== assignment.actorId && !assignment.recast) {
+      if (existingActorId && existingActorId !== assignment.actorId && book.lockedCharacterIds.has(character.id) && !assignment.recast) {
         issues.push(`人物 ${character.name} 已绑定演员 ${actorsById.get(existingActorId)?.name ?? existingActorId}，不能更换；确需更换请设置 recast: true 并说明理由`)
         continue
       }
@@ -181,7 +172,7 @@ export const createCastSceneTool = (
       }
       const actor = actorsById.get(assignment.actorId)
       if (!actor) {
-        issues.push(`演员 ${assignment.actorId} 不存在，请先用 search_actors 查询`)
+        issues.push(`演员 ${assignment.actorId} 不存在，请从 publish_scene 结果列出的候选中选择`)
         continue
       }
       if (actor.gender !== character.gender) {
