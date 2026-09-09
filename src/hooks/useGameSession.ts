@@ -1,19 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { clearGameSession, loadGameSession, saveGameSession } from '../services/gameStorage'
 import { palaceStory } from '../stories/palace'
+import type { DirectorTurnStateResponse } from '../services/directorClient'
+import {
+  addWrittenSegment as addWrittenSegmentReducer,
+  adoptServerTurnState as adoptServerTurnStateReducer,
+  commitSegmentMedia as commitSegmentMediaReducer,
+  completeSegment as completeSegmentReducer,
+  failSegment as failSegmentReducer,
+  finishTurn as finishTurnReducer,
+  markAwaitingUpload as markAwaitingUploadReducer,
+  setSceneVideoPlan as setSceneVideoPlanReducer,
+  setSceneVisualState as setSceneVisualStateReducer,
+  type CommitSegmentMediaInput,
+  type CompleteSegmentInput,
+  type MarkAwaitingUploadInput,
+  type ResolveReferenceContext,
+  type ResolvedSegmentReferences,
+} from '../services/sessionSegments'
 import type { DirectorTurnContext, GameScene, GameSession, SceneVideoClip } from '../types/game'
 import type {
   ScenePublish,
   StoryChoice,
   StoryInput,
+  TailFrameVisualState,
   VideoGenerationRequest,
+  VideoPromptSegment,
+  VideoReferenceDescriptor,
 } from '../types/story'
 import type { Actor } from '../types/actor'
 import type { SceneCastingResult } from '../types/actor'
 import { buildCharacterReferences } from '../services/casting'
-import { applyManualClip, invalidateManualClipsFrom, prepareManualScene } from '../services/manualSceneVideo'
 import { deleteUploadedVideo, loadUploadedVideo } from '../services/uploadedVideoStorage'
-import { ALLOW_CHOICE_BEFORE_MEDIA } from '../config/debugFlags'
 
 const now = () => Date.now()
 
@@ -34,7 +52,7 @@ const toTurnContext = (session: GameSession): DirectorTurnContext | null => sess
 const makeNewSession = (): GameSession => {
   const createdAt = now()
   return {
-    schemaVersion: 8,
+    schemaVersion: 9,
     id: crypto.randomUUID(),
     storyId: palaceStory.id,
     status: 'awaiting_agent',
@@ -109,13 +127,13 @@ export function useGameSession() {
       videoClips: item.videoClips?.map((clip) => {
         if (!clip.uploadId) return clip
         const saved = assets.get(clip.uploadId)
-        const interrupted = ['extracting', 'analyzing'].includes(clip.status)
+        const interrupted = clip.status === 'generating' || clip.status === 'analyzing'
         return {
           ...clip,
           videoUrl: saved?.videoUrl,
           status: !saved?.asset || interrupted ? 'failed' : clip.status,
           error: !saved?.asset ? '本地视频无法读取，请重新上传。'
-            : interrupted ? '处理已中断，请重试尾帧识别或重新上传。' : clip.error,
+            : interrupted ? '处理已中断，请重试。' : clip.error,
         }
       }),
     })
@@ -157,10 +175,7 @@ export function useGameSession() {
 
   const queueInput = useCallback((input: StoryInput) => {
     const current = sessionRef.current
-    if (!current) return null
-    const canAct = current.status === 'awaiting_action'
-      || (ALLOW_CHOICE_BEFORE_MEDIA && current.status === 'awaiting_media')
-    if (!canAct) return null
+    if (!current || current.status !== 'awaiting_action') return null
     const next: GameSession = {
       ...current,
       status: 'awaiting_agent',
@@ -199,10 +214,9 @@ export function useGameSession() {
       characterIds: published.characters.map((character) => character.id),
       castingStatus: 'selecting' as const,
     }
-    const previousTailFrameUrl = current.currentScene?.tailFrameUrl
     replaceSession({
       ...current,
-      status: 'awaiting_media',
+      status: 'awaiting_agent',
       turn: current.turn + 1,
       updatedAt: now(),
       currentScene: scene,
@@ -211,10 +225,7 @@ export function useGameSession() {
       castings: current.castings,
       pendingInput: undefined,
     })
-    return {
-      sceneId: scene.id,
-      previousTailFrameUrl,
-    }
+    return { sceneId: scene.id }
   }, [replaceSession])
 
   const applySceneCasting = useCallback((
@@ -267,83 +278,24 @@ export function useGameSession() {
     return current ? buildCharacterReferences(current.characters, actors, current.castings) : {}
   }, [])
 
-  const setSceneVideoPlan = useCallback((
-    sceneId: string,
-    request: VideoGenerationRequest,
-    status: SceneVideoClip['status'],
-  ) => {
-    const current = sessionRef.current
-    if (!current) return
-    const videoClips: SceneVideoClip[] = request.videoPrompts.map((segment) => ({
-      ...segment,
-      status: status === 'generating' && segment.sequence > 1 ? 'waiting' : status,
-    }))
-    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
-      ? { ...scene, videoRequest: request, videoClips }
-      : scene
-    const nextStatus = status === 'skipped' && current.currentScene?.id === sceneId
-      ? 'awaiting_action'
-      : current.status
-    replaceSession({
-      ...current,
-      status: nextStatus,
-      currentScene: current.currentScene ? applyPatch(current.currentScene) : current.currentScene,
-      sceneHistory: current.sceneHistory.map(applyPatch),
-    })
-  }, [replaceSession])
+  const getPreviousSceneTailFrameUrl = useCallback((sceneId: string) => {
+    const history = sessionRef.current?.sceneHistory ?? []
+    const index = history.findIndex((scene) => scene.id === sceneId)
+    return index > 0 ? history[index - 1].tailFrameUrl : undefined
+  }, [])
 
-  const completeTailFrameAnalysis = useCallback((
+  const getSessionSnapshot = useCallback(() => sessionRef.current, [])
+
+  // 通用的 clip 字段补丁，用于 fal 生成过程中的过渡状态（如 'generating'），不经过纯函数 reducer。
+  const updateSceneVideoClip = useCallback((
     sceneId: string,
-    tailFrameUrl: string,
-    state?: GameScene['tailVisualState'],
-    error?: string,
+    sequence: number,
+    patch: Partial<SceneVideoClip>,
   ) => {
     const current = sessionRef.current
     if (!current) return
     const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
       ? {
-          ...scene,
-          tailFrameUrl,
-          tailVisualState: state,
-          visualAnalysisError: error,
-        }
-      : scene
-    replaceSession({
-      ...current,
-      status: current.currentScene?.id === sceneId ? 'awaiting_action' : current.status,
-      currentScene: current.currentScene ? applyPatch(current.currentScene) : current.currentScene,
-      sceneHistory: current.sceneHistory.map(applyPatch),
-      updatedAt: now(),
-    })
-  }, [replaceSession])
-
-  const releaseSceneChoices = useCallback((sceneId: string, error?: string) => {
-    const current = sessionRef.current
-    if (!current || current.currentScene?.id !== sceneId) return
-    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
-      ? { ...scene, visualAnalysisError: error }
-      : scene
-    replaceSession({
-      ...current,
-      status: 'awaiting_action',
-      currentScene: applyPatch(current.currentScene),
-      sceneHistory: current.sceneHistory.map(applyPatch),
-      updatedAt: now(),
-    })
-  }, [replaceSession])
-
-  const updateSceneVideoClip = useCallback((
-    sceneId: string,
-    sequence: number,
-    patch: Partial<Pick<
-      SceneVideoClip,
-      'status' | 'videoUrl' | 'startImageUrl' | 'referenceImages' | 'tailFrameUrl' | 'error' | 'uploadId' | 'actualDuration'
-    >>,
-  ) => {
-    const current = sessionRef.current
-    if (!current) return
-    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
-      ? scene.videoMode === 'manual' ? applyManualClip(scene, sequence, patch) : {
           ...scene,
           videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
             ? { ...clip, ...patch }
@@ -357,69 +309,69 @@ export function useGameSession() {
     })
   }, [replaceSession])
 
-  const prepareManualVideo = useCallback((sceneId: string, references: ReturnType<typeof buildCharacterReferences>) => {
-    const current = sessionRef.current
-    if (!current || current.currentScene?.id !== sceneId || current.status === 'awaiting_agent') return
-    const index = current.sceneHistory.findIndex((scene) => scene.id === sceneId)
-    const prepared = prepareManualScene(current.currentScene, references, current.sceneHistory[index - 1]?.tailFrameUrl)
-    replaceSession({
-      ...current,
-      status: prepared.videoClips?.every((clip) => clip.status === 'ready') ? 'awaiting_action' : 'awaiting_media',
-      currentScene: prepared,
-      sceneHistory: current.sceneHistory.map((scene) => scene.id === sceneId ? prepared : scene),
-    })
-  }, [replaceSession])
-
-  const completeManualUpload = useCallback(async (
+  const addWrittenSegment = useCallback((
     sceneId: string,
-    sequence: number,
-    clip: Required<Pick<SceneVideoClip, 'uploadId' | 'videoUrl' | 'tailFrameUrl' | 'actualDuration'>>,
+    segment: VideoPromptSegment,
+    descriptors: VideoReferenceDescriptor[],
+    references: ResolvedSegmentReferences,
   ) => {
     const current = sessionRef.current
-    if (!current || current.currentScene?.id !== sceneId || current.status === 'awaiting_agent') return false
-    const scene = applyManualClip(invalidateManualClipsFrom(current.currentScene, sequence), sequence, {
-      ...clip, status: 'ready', error: undefined,
-    })
-    await replaceSession({
-      ...current,
-      status: 'awaiting_media',
-      currentScene: scene,
-      sceneHistory: current.sceneHistory.map((item) => item.id === sceneId ? scene : item),
-    }, true)
-    return true
+    if (!current) return
+    replaceSession(addWrittenSegmentReducer(current, sceneId, segment, descriptors, references))
   }, [replaceSession])
 
-  const resetSceneVideoFrom = useCallback((sceneId: string, startSequence: number, endSequence = Number.POSITIVE_INFINITY) => {
+  const markAwaitingUpload = useCallback((sceneId: string, input: MarkAwaitingUploadInput) => {
     const current = sessionRef.current
     if (!current) return
-    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
-      ? {
-          ...scene,
-          tailFrameUrl: undefined,
-          tailVisualState: undefined,
-          visualAnalysisError: undefined,
-          videoMode: 'auto',
-          videoClips: scene.videoClips?.map((clip) => clip.sequence < startSequence || clip.sequence > endSequence
-            ? clip
-            : {
-                ...clip,
-                status: clip.sequence === startSequence ? 'generating' : 'waiting',
-                videoUrl: undefined,
-                uploadId: undefined,
-                actualDuration: undefined,
-                startImageUrl: undefined,
-                referenceImages: undefined,
-                tailFrameUrl: undefined,
-                error: undefined,
-              }),
-        }
-      : scene
-    replaceSession({
-      ...current,
-      status: current.currentScene?.id === sceneId ? 'awaiting_media' : current.status,
-      currentScene: current.currentScene ? applyPatch(current.currentScene) : current.currentScene,
-      sceneHistory: current.sceneHistory.map(applyPatch),
-    })
+    replaceSession(markAwaitingUploadReducer(current, sceneId, input))
+  }, [replaceSession])
+
+  const commitSegmentMedia = useCallback((sceneId: string, sequence: number, input: CommitSegmentMediaInput) => {
+    const current = sessionRef.current
+    if (!current) return Promise.resolve()
+    // 上传成功一定要落盘：失败要抛错，让调用方回滚刚保存的本地视频。
+    return replaceSession(commitSegmentMediaReducer(current, sceneId, sequence, input), true)
+  }, [replaceSession])
+
+  const failSegment = useCallback((sceneId: string, sequence: number, error: string) => {
+    const current = sessionRef.current
+    if (!current) return
+    replaceSession(failSegmentReducer(current, sceneId, sequence, error))
+  }, [replaceSession])
+
+  const completeSegment = useCallback((sceneId: string, sequence: number, input: CompleteSegmentInput) => {
+    const current = sessionRef.current
+    if (!current) return
+    replaceSession(completeSegmentReducer(current, sceneId, sequence, input))
+  }, [replaceSession])
+
+  const setSceneVideoPlan = useCallback((sceneId: string, video: VideoGenerationRequest) => {
+    const current = sessionRef.current
+    if (!current) return
+    replaceSession(setSceneVideoPlanReducer(current, sceneId, video))
+  }, [replaceSession])
+
+  const setSceneVisualState = useCallback((sceneId: string, visualState: TailFrameVisualState) => {
+    const current = sessionRef.current
+    if (!current) return
+    replaceSession(setSceneVisualStateReducer(current, sceneId, visualState))
+  }, [replaceSession])
+
+  const finishTurn = useCallback((sceneId: string, skippedReason?: string) => {
+    const current = sessionRef.current
+    if (!current) return
+    replaceSession(finishTurnReducer(current, sceneId, skippedReason))
+  }, [replaceSession])
+
+  const adoptServerTurnState = useCallback((
+    serverState: DirectorTurnStateResponse,
+    references: Omit<ResolveReferenceContext, 'currentClips'>,
+  ) => {
+    const current = sessionRef.current
+    if (!current) return { needsRetry: false }
+    const result = adoptServerTurnStateReducer(current, serverState, references)
+    if (result.session !== current) replaceSession(result.session)
+    return { needsRetry: result.needsRetry }
   }, [replaceSession])
 
   const getPendingContext = useCallback(() => {
@@ -453,13 +405,18 @@ export function useGameSession() {
     applySceneCasting,
     setSceneCastingError,
     getCharacterReferences,
-    setSceneVideoPlan,
+    getPreviousSceneTailFrameUrl,
+    getSessionSnapshot,
     updateSceneVideoClip,
-    completeTailFrameAnalysis,
-    releaseSceneChoices,
-    resetSceneVideoFrom,
-    prepareManualVideo,
-    completeManualUpload,
+    addWrittenSegment,
+    markAwaitingUpload,
+    commitSegmentMedia,
+    failSegment,
+    completeSegment,
+    setSceneVideoPlan,
+    setSceneVisualState,
+    finishTurn,
+    adoptServerTurnState,
     getPendingContext,
     getCastings,
     restart,

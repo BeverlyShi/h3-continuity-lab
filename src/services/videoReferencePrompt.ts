@@ -1,3 +1,4 @@
+import type { SceneVideoClip } from '../types/game.ts'
 import type { VideoInputReferenceImage } from '../types/video.ts'
 
 export const buildVideoReferencePrompt = (prompt: string, references: VideoInputReferenceImage[]) => {
@@ -17,3 +18,6 @@ export const buildVideoReferencePrompt = (prompt: string, references: VideoInput
     ? `${prompt.slice(0, shotIndex)}${characterText}\n\n${prompt.slice(shotIndex)}`
     : `${characterText}\n\n${prompt}`
 }
+
+export const buildClipPrompt = (clip: SceneVideoClip) =>
+  buildVideoReferencePrompt(clip.prompt, clip.referenceImages ?? [])

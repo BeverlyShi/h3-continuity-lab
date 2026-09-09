@@ -6,11 +6,18 @@ import type { CastableActor, CharacterCasting } from '../src/types/actor.ts'
 import type { DirectorStreamEvent } from '../src/types/director.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'
 import { sceneCharacterSchema, storyInputSchema, tailFrameVisualStateSchema, type SceneCharacter } from '../src/types/story.ts'
-import { runDirectorAgent } from './directorAgent.ts'
+import { getAwaitingModelId, getDirectorTurnStatus, resumeDirectorAgent, runDirectorAgent } from './directorAgent.ts'
 import type { DirectorVideoMode } from './directorPrompt.ts'
 import { createInspectTailFrameTool } from './inspectTailFrameTool.ts'
+import type { analyzeTailFrame } from './tailFrameVision.ts'
 
-const MAX_BODY_BYTES = 1_000_000
+export type DirectorPluginOptions = {
+  // 测试注入假的尾帧识别；生产环境省略，走 DeepSeek Vision。
+  analyzeTailFrame?: typeof analyzeTailFrame
+}
+
+// 尾帧 data URL 走 JSON body（/turn 只带元数据，/resume 还要带一张完整尾帧图片）。
+const MAX_BODY_BYTES = 8_000_000
 
 async function readJson<T>(req: IncomingMessage): Promise<T> {
   let body = ''
@@ -68,7 +75,7 @@ const isCharacterCasting = (value: unknown): value is CharacterCasting => {
     && Boolean(casting.actorId)
 }
 
-export function directorPlugin(): Plugin {
+export function directorPlugin(options: DirectorPluginOptions = {}): Plugin {
   return {
     name: 'local-pi-director',
     configureServer(server) {
@@ -163,6 +170,93 @@ export function directorPlugin(): Plugin {
           send({ type: 'error', error: message })
         } finally {
           if (!res.writableEnded) res.end()
+        }
+      })
+
+      server.middlewares.use('/api/director/resume', async (req, res, next) => {
+        if (req.method !== 'POST') {
+          next()
+          return
+        }
+
+        const openRouterKey = req.headers['x-openrouter-key']
+        const deepseekKey = req.headers['x-deepseek-key']
+
+        const controller = new AbortController()
+        req.on('aborted', () => controller.abort())
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-cache, no-transform')
+        res.setHeader('X-Content-Type-Options', 'nosniff')
+
+        const send = (event: DirectorStreamEvent) => {
+          if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`)
+        }
+
+        try {
+          const body = await readJson<{
+            sessionId?: unknown
+            sequence?: unknown
+            toolCallId?: unknown
+            tailFrameDataUrl?: unknown
+            durationSeconds?: unknown
+          }>(req)
+          if (typeof body.sessionId !== 'string' || !body.sessionId.trim()) throw new Error('缺少会话 ID。')
+          if (!Number.isInteger(body.sequence) || (body.sequence as number) < 1) throw new Error('段号无效。')
+          if (typeof body.toolCallId !== 'string' || !body.toolCallId.trim()) throw new Error('缺少工具调用 ID。')
+          if (typeof body.tailFrameDataUrl !== 'string' || !body.tailFrameDataUrl.startsWith('data:image/')) {
+            throw new Error('尾帧图片必须是 data:image/ 开头的 data URL。')
+          }
+          if (typeof body.durationSeconds !== 'number' || !Number.isFinite(body.durationSeconds) || body.durationSeconds <= 0) {
+            throw new Error('视频实际时长无效。')
+          }
+          if (typeof deepseekKey !== 'string' || !deepseekKey.trim()) {
+            throw new Error('尾帧视觉识别需要 DEEPSEEK_API_KEY。')
+          }
+
+          const modelId = await getAwaitingModelId(body.sessionId)
+          if (!modelId) throw new Error('当前没有等待上传的视频段。')
+          const provider = getDirectorModelProvider(modelId)
+          const apiKey = { deepseek: deepseekKey, openrouter: openRouterKey, bigmodel: req.headers['x-bigmodel-key'] }[provider]
+          if (typeof apiKey !== 'string' || !apiKey.trim()) {
+            throw new Error(`请先配置 ${{ deepseek: 'DEEPSEEK_API_KEY', openrouter: 'OPENROUTER_API_KEY', bigmodel: 'BIGMODEL_API_KEY' }[provider]}。`)
+          }
+
+          await resumeDirectorAgent({
+            sessionId: body.sessionId,
+            sequence: body.sequence as number,
+            toolCallId: body.toolCallId,
+            tailFrameDataUrl: body.tailFrameDataUrl,
+            durationSeconds: body.durationSeconds,
+            apiKey: apiKey.trim(),
+            deepseekKey: deepseekKey.trim(),
+            signal: controller.signal,
+            send,
+            analyze: options.analyzeTailFrame,
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '恢复导演回合失败。'
+          send({ type: 'error', error: message })
+        } finally {
+          if (!res.writableEnded) res.end()
+        }
+      })
+
+      server.middlewares.use('/api/director/turn-state', async (req, res, next) => {
+        if (req.method !== 'GET') {
+          next()
+          return
+        }
+        res.setHeader('Content-Type', 'application/json; charset=utf-8')
+        try {
+          const sessionId = new URL(req.url ?? '', 'http://localhost').searchParams.get('sessionId')
+          if (!sessionId?.trim()) throw new Error('缺少会话 ID。')
+          const status = await getDirectorTurnStatus(sessionId)
+          res.statusCode = 200
+          res.end(JSON.stringify(status))
+        } catch (error) {
+          res.statusCode = 400
+          res.end(JSON.stringify({ error: error instanceof Error ? error.message : '查询回合状态失败。' }))
         }
       })
     },

@@ -9,15 +9,13 @@ import {
 } from '../config/directorModels'
 import { GameInteraction } from '../components/game/GameInteraction'
 import { GameStage } from '../components/game/GameStage'
-import { useDirectorAgent } from '../hooks/useDirectorAgent'
+import { useDirectorAgent, type OnAwaitingUpload } from '../hooks/useDirectorAgent'
 import { useGameSession } from '../hooks/useGameSession'
 import { useSceneVideo } from '../hooks/useSceneVideo'
 import { palaceStory } from '../stories/palace'
 import { isDirectorActive } from '../services/directorStatus'
 import type { AgentTraceUpdate } from '../types/director'
-import type { SceneCharacter, VideoGenerationRequest } from '../types/story'
 import type { Actor, CreatedActor } from '../types/actor'
-import type { VideoCharacterReference } from '../types/video'
 import type { GameScene } from '../types/game'
 
 type GamePageProps = {
@@ -72,37 +70,17 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
   const apiKeyLabel = { deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' }[activeModelProvider]
   const [videoMode, setVideoMode] = useState(loadVideoMode)
   const [narrativeExpanded, setNarrativeExpanded] = useState(true)
-  // 提交回调走 ref 读最新模式，避免 agent 回合里拿到过期闭包。
-  const videoModeRef = useRef(videoMode)
-  const { submitSceneVideo, retrySceneVideo, uploadSceneVideo, retryUploadedTail, manualBusy, autoBusy } = useSceneVideo({
-    apiKey: savedFalApiKey,
-    deepSeekApiKey: savedDeepSeekApiKey,
-    onVideoPlan: game.setSceneVideoPlan,
-    onVideoClipUpdate: game.updateSceneVideoClip,
-    onVideoRetry: game.resetSceneVideoFrom,
-    onManualUploadComplete: game.completeManualUpload,
-    onTailFrameAnalyzed: game.completeTailFrameAnalysis,
-  })
-  const setSceneVideoPlan = game.setSceneVideoPlan
-  const prepareManualVideo = game.prepareManualVideo
-  const submitSceneVideoIfEnabled = useCallback((
-    sceneId: string,
-    request: VideoGenerationRequest,
-    characterReferences: Record<string, VideoCharacterReference>,
-    characters: SceneCharacter[],
-    previousTailFrameUrl?: string,
-  ) => {
-    if (videoModeRef.current === 'manual') {
-      setSceneVideoPlan(sceneId, request, 'awaiting_upload')
-      prepareManualVideo(sceneId, characterReferences)
-      return
-    }
-    if (videoModeRef.current === 'off' || !savedFalApiKey) {
-      setSceneVideoPlan(sceneId, request, 'skipped')
-      return
-    }
-    submitSceneVideo(sceneId, request, characterReferences, characters, previousTailFrameUrl)
-  }, [savedFalApiKey, setSceneVideoPlan, submitSceneVideo, prepareManualVideo])
+  // useDirectorAgent 需要 onAwaitingUpload，onAwaitingUpload 需要 useSceneVideo，useSceneVideo 又需要 director.resumeTurn；
+  // 用 ref 打破这个初始化顺序上的循环依赖，渲染后立即在 effect 里同步成最新值。
+  const sceneVideoRef = useRef<ReturnType<typeof useSceneVideo> | null>(null)
+
+  const onAwaitingUpload: OnAwaitingUpload = useCallback((sceneId, clip) => {
+    if (videoMode !== 'auto') return undefined
+    if (!savedFalApiKey) return '未配置 fal API Key，请手动上传这一段视频，或先在设置里配置 fal Key。'
+    void sceneVideoRef.current?.generateSegmentWithFal(sceneId, clip.sequence)
+    return undefined
+  }, [savedFalApiKey, videoMode])
+
   const director = useDirectorAgent(
     game,
     savedOpenRouterApiKey,
@@ -114,33 +92,32 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
     thinkingEnabled,
     actors,
     onActorsCreated,
-    submitSceneVideoIfEnabled,
+    onAwaitingUpload,
   )
 
-  const retryVideo = (sceneId: string) => {
-    if (!savedFalApiKey) { onRequestApiKey(); return }
-    const scene = game.session?.sceneHistory.find((item) => item.id === sceneId)
-    if (scene?.videoRequest && game.session) {
-      retrySceneVideo(scene, game.getCharacterReferences(actors), game.session.characters)
-    }
-  }
-
-  const mediaRunning = game.restoringVideos || manualBusy || autoBusy
-  const currentScene = game.session?.currentScene
-  const getCharacterReferences = game.getCharacterReferences
+  const sceneVideo = useSceneVideo({
+    falApiKey: savedFalApiKey,
+    game,
+    resumeTurn: director.resumeTurn,
+  })
   useEffect(() => {
-    if (videoMode === 'manual' && currentScene?.videoRequest && currentScene.videoMode !== 'manual'
-      && !mediaRunning && !isDirectorActive(director.status) && game.session?.status !== 'awaiting_agent') {
-      prepareManualVideo(currentScene.id, getCharacterReferences(actors))
-    }
-  }, [videoMode, currentScene, mediaRunning, director.status, game.session?.status, prepareManualVideo, getCharacterReferences, actors])
+    sceneVideoRef.current = sceneVideo
+  })
+
+  const mediaRunning = game.restoringVideos || sceneVideo.mediaBusy
+
+  // 存档与本地视频都恢复完成后，对齐一次服务端的回合状态：可能在等上传，也可能已经彻底空闲需要重试。
+  useEffect(() => {
+    if (game.loading || game.restoringVideos) return
+    void director.syncTurnState()
+    // 只在存档加载完成的那一刻对齐一次，之后的状态变化都由事件流驱动。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game.loading, game.restoringVideos])
 
   const switchVideoMode = (next: NonNullable<GameScene['videoMode']>) => {
     if (next === videoMode || mediaRunning || isDirectorActive(director.status)) return
-    videoModeRef.current = next
+    if (game.session && game.session.status !== 'awaiting_action') return
     setVideoMode(next)
-    if (next === 'manual' && currentScene?.videoRequest) prepareManualVideo(currentScene.id, getCharacterReferences(actors))
-    if (next === 'off' && currentScene && game.session?.status === 'awaiting_media') game.releaseSceneChoices(currentScene.id)
     try {
       localStorage.setItem(VIDEO_MODE_STORAGE_KEY, next)
     } catch {
@@ -149,14 +126,11 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
   }
 
   const uploadVideo = async (sceneId: string, sequence: number, file: File) => {
-    const scene = game.session?.currentScene
-    if (!scene || scene.id !== sceneId || game.session?.status === 'awaiting_agent') throw new Error('请在当前幕上传视频。')
-    await uploadSceneVideo(scene, sequence, file, game.session!.characters.filter((character) => scene.characterIds?.includes(character.id)))
+    await sceneVideo.uploadSegmentVideo(sceneId, sequence, file)
   }
 
-  const retryTail = (sceneId: string) => {
-    const scene = game.session?.currentScene
-    if (scene?.id === sceneId) void retryUploadedTail(scene, game.session!.characters.filter((character) => scene.characterIds?.includes(character.id)))
+  const retrySegment = (sceneId: string) => {
+    void sceneVideo.retryPendingSegment(sceneId)
   }
 
   const switchThinking = (enabled: boolean) => {
@@ -245,12 +219,10 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
             directorStatus={director.status}
             videoMode={videoMode}
             mediaRunning={mediaRunning}
-            manualBusy={manualBusy}
             onStart={startStory}
             onVideoModeChange={switchVideoMode}
-            onRetryVideo={retryVideo}
             onUploadVideo={uploadVideo}
-            onRetryTail={retryTail}
+            onRetrySegment={retrySegment}
             narrativeExpanded={narrativeExpanded}
             onNarrativeExpandedChange={setNarrativeExpanded}
           />
@@ -261,7 +233,6 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
               key={`${game.session.id}:${game.session.turn}`}
               session={game.session}
               directorStatus={director.status}
-              mediaBusy={manualBusy}
               onChoose={director.submitChoice}
               onSubmitFreeform={director.submitFreeform}
               onRetry={() => { void director.retry() }}

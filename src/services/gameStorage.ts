@@ -95,20 +95,16 @@ const collectImageIds = (raw: string) => {
 const restoreScene = (scene: GameScene) => {
   if (scene.tailFrameUrl === MISSING_IMAGE) scene.tailFrameUrl = undefined
   for (const clip of scene.videoClips ?? []) {
-    const lostTailFrame = clip.tailFrameUrl === MISSING_IMAGE
-    if (lostTailFrame) clip.tailFrameUrl = undefined
+    if (clip.tailFrameUrl === MISSING_IMAGE) clip.tailFrameUrl = undefined
     if (clip.startImageUrl === MISSING_IMAGE) clip.startImageUrl = undefined
     if (clip.referenceImages?.some((reference) => reference.imageUrl === MISSING_IMAGE)) {
       clip.referenceImages = clip.referenceImages.map((reference) =>
         reference.imageUrl === MISSING_IMAGE ? { ...reference, imageUrl: undefined } : reference)
     }
-    if (!['extracting', 'analyzing'].includes(clip.status)) continue
-    if (scene.videoMode === 'manual' && !clip.uploadId) {
+    // 刷新前正在生成（auto）或已提交尾帧等 resume 续跑（analyzing）：请求已经中断，回合状态不会自动恢复，只能重试。
+    if (clip.status === 'generating' || clip.status === 'analyzing') {
       clip.status = 'failed'
-      clip.error = '上次上传处理已中断，请重新上传这一片段。'
-    } else if (lostTailFrame) {
-      clip.status = 'failed'
-      clip.error = '上次尾帧处理已中断，请重试这一片段。'
+      clip.error = '上次处理已中断，请重试这一片段。'
     }
   }
 }
@@ -141,7 +137,8 @@ export const loadGameSession = async (): Promise<GameSession | null> => {
       : parsed) as GameSession & { inlineImages?: string[] }
     delete revived.inlineImages
     const session = revived as GameSession
-    if (session.schemaVersion !== 8 || !session.id || session.storyId !== 'palace-validation' || !session.status) return null
+    // schemaVersion 8 及更早的存档结构不兼容逐段生成的会话模型，直接判定为无法读取（验证版可接受，玩家重新开始）。
+    if (session.schemaVersion !== 9 || !session.id || session.storyId !== 'palace-validation' || !session.status) return null
     for (const scene of [...session.sceneHistory, ...(session.currentScene ? [session.currentScene] : [])]) {
       restoreScene(scene)
     }

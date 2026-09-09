@@ -6,7 +6,12 @@ import {
   DIALOGUE_TOTAL_MAX_HAN,
   SCENE_PUBLISH_ARGUMENTS_EXAMPLE,
 } from './publishSceneTool.ts'
-import { VIDEO_PLAN_ARGUMENTS_EXAMPLE, VIDEO_PLAN_STRUCTURE_GUIDANCE } from './videoPlanTool.ts'
+import {
+  WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST,
+  WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT,
+  WRITE_SEGMENT_STRUCTURE_GUIDANCE,
+} from './writeSegmentTool.ts'
+import { MAX_GENERATE_ATTEMPTS } from './generateSegmentTool.ts'
 
 const videoShotSkill = readFileSync(new URL('../skills/video-shot-prompt/SKILL.md', import.meta.url), 'utf8')
   .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
@@ -27,15 +32,17 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 - 台词单句不超过 ${DIALOGUE_LINE_MAX_HAN} 字、全幕合计不超过 ${DIALOGUE_TOTAL_MAX_HAN} 字、最多 ${DIALOGUE_MAX_LINES} 句；通常 2–4 句、合计 60 字以内，剩余时长留给动作和反应。超预算会被拒绝发布。
 - narrative 中人物实际说出的每句对白必须用成对的中文双引号“”或英文双引号包住；双引号只用于人物对白，心声、书信文字、称谓及对白内部引用使用叙述或单引号，不要混用或嵌套双引号。
 - 构思在内心完成，只通过工具输出，不要在工具之外输出分析或正文。
-- 每回合的工作顺序：先 publish_scene 发布场景；如果工具结果列出待选角人物及候选演员，用 cast_scene 提交决定；然后 write_video_prompt 编写分镜；最后 finish_turn 结束回合。工具结果末尾会提示下一步，跳步会被程序拒绝并告诉你先做什么。
+- 每回合的工作顺序：先 publish_scene 发布场景；如果工具结果列出待选角人物及候选演员，用 cast_scene 提交决定；然后逐段调用 write_segment 写第 1 段、generate_segment 生成第 1 段，再 write_segment 写第 2 段、generate_segment 生成第 2 段，如此往复直到最后一段（isLast）；最后 finish_turn 结束回合。工具结果末尾会提示下一步，跳步会被程序拒绝并告诉你先做什么。
+- 每次调用 generate_segment 都会暂停回合，等玩家上传该段视频后程序才会把实测结果交还给你，再继续写下一段；这是正常流程，不是错误。
 - 工具校验失败时根据反馈定向修正，并重新提交完整参数，不只提交修改片段。
-- 本局视频模式为“仅文字”时不会提供 write_video_prompt，发布场景后直接 finish_turn。
+- 本局视频模式为“仅文字”时不会提供 write_segment 和 generate_segment，发布场景后直接 finish_turn。
 
 ## Tool Guidance
 
 - publish_scene：本回合第一个工具，只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
 - cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。
-- write_video_prompt：把已发布的 narrative 转成 2–3 段视频 prompt。${VIDEO_PLAN_STRUCTURE_GUIDANCE}
+- write_segment：把已发布的 narrative 转成视频 prompt，一次只写一段。${WRITE_SEGMENT_STRUCTURE_GUIDANCE}
+- generate_segment：对已写好的段触发生成，随即暂停回合等待上传结果；结果会作为该次调用的返回值交还给你，包含实测时长和尾帧实测视觉状态。每段最多重拍 ${MAX_GENERATE_ATTEMPTS} 次。
 - finish_turn：全部完成后调用。视频计划无法完成时，通过 skipVideo.reason 说明后结束。
 
 ## Output Description
@@ -66,8 +73,11 @@ ${SCENE_PUBLISH_ARGUMENTS_EXAMPLE}
 
 ${videoShotSkill}
 
-write_video_prompt 参数结构示例（只参考结构，不复制人物或剧情）：
-${VIDEO_PLAN_ARGUMENTS_EXAMPLE}`
+第 2 段起，首镜构图（景别、人物位置、朝向、姿态）必须以上一次 generate_segment 返回的实测视觉状态为准，不能凭空另起构图。尾帧不可用、人物缺失或与选角外观不符时，自行决定用 generate_segment 重拍（每段最多 ${MAX_GENERATE_ATTEMPTS} 次）还是用 write_segment 重写本段；仍无法完成时在 finish_turn 中通过 skipVideo.reason 说明原因后结束。
+
+write_segment 参数结构示例（只参考结构，不复制人物或剧情）：
+第 1 段 ${WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST}
+后续段 ${WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT}`
 
 export const DIRECTOR_COMPACTION_INSTRUCTIONS = `这是互动文字游戏《后宫》的连续会话。压缩时只保留：
 - 女主身份、入宫缘由和当前处境；
@@ -105,7 +115,7 @@ export const buildStoryInputMessage = (
   const parts = [message]
   if (options.videoMode) {
     parts.push(options.videoMode === 'off'
-      ? `本局视频模式：${videoModeLabel.off}。本回合不提供 write_video_prompt，发布场景后直接 finish_turn。`
+      ? `本局视频模式：${videoModeLabel.off}。本回合不提供 write_segment 和 generate_segment，发布场景后直接 finish_turn。`
       : `本局视频模式：${videoModeLabel[options.videoMode]}。本幕首段${options.hasPreviousTailFrame ? '以上一幕尾帧为起始画面，不附人物参考图' : '没有起始尾帧，按 characters 顺序附有参考图人物的图片'}；后续各段以上一段尾帧为起始画面。`)
   }
   if (previousVisualState) {

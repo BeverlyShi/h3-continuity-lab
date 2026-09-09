@@ -1,4 +1,4 @@
-import type { SceneCharacter, StoryScene, VideoGenerationRequest } from './story'
+import type { SceneCharacter, StoryScene, TailFrameVisualState, VideoGenerationRequest, VideoPromptSegment, VideoReferenceDescriptor } from './story'
 import type { SceneCastingResult } from './actor'
 
 export type DirectorStatus = 'idle' | 'thinking' | 'publishing' | 'error'
@@ -80,5 +80,9 @@ export type DirectorStreamEvent =
   | { type: 'cast_error'; message: string }
   | { type: 'video_plan'; video: VideoGenerationRequest }
   | { type: 'video_plan_error'; message: string }
+  | { type: 'segment_written'; segment: VideoPromptSegment; referenceImages: VideoReferenceDescriptor[]; cumulativeSeconds: number }
+  | { type: 'awaiting_upload'; sequence: number; toolCallId: string; prompt: string; seconds: number; referenceImages: VideoReferenceDescriptor[] }
+  | { type: 'segment_generated'; sequence: number; durationSeconds: number; visualState: TailFrameVisualState }
+  | { type: 'scene_visual_state'; visualState: TailFrameVisualState }
   | { type: 'done' }
   | { type: 'error'; error: string }
