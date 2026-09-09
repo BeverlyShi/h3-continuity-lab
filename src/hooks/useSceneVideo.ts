@@ -1,213 +1,153 @@
 import { useCallback, useRef, useState } from 'react'
 import { createFalVideoGenerator } from '../services/falVideoGenerator'
-import { generateSceneVideoSegments } from '../services/sceneVideoGenerator'
-import type { GameScene, SceneVideoClip } from '../types/game'
-import type { VideoGenerationRequest } from '../types/story'
-import type { SceneCharacter, TailFrameVisualState } from '../types/story'
-import type { VideoCharacterReference } from '../types/video'
-import { inspectTailFrame } from '../services/tailFrameVision'
 import { readVideoTailFrame } from '../services/videoTailFrame'
 import { deleteUploadedVideo, saveUploadedVideo } from '../services/uploadedVideoStorage'
+import type { SceneVideoClip } from '../types/game'
+import type { VideoInputReferenceImage } from '../types/video'
+import type { useGameSession } from './useGameSession'
+
+type GameController = ReturnType<typeof useGameSession>
+
+type ResumeTurn = (input: { sequence: number; tailFrameDataUrl: string; durationSeconds: number }) => Promise<boolean>
 
 type UseSceneVideoParams = {
-  apiKey: string
-  deepSeekApiKey: string
-  onVideoPlan: (
-    sceneId: string,
-    request: VideoGenerationRequest,
-    status: SceneVideoClip['status'],
-  ) => void
-  onVideoClipUpdate: (
-    sceneId: string,
-    sequence: number,
-    patch: Partial<Pick<
-      SceneVideoClip,
-      'status' | 'videoUrl' | 'startImageUrl' | 'referenceImages' | 'tailFrameUrl' | 'error' | 'uploadId' | 'actualDuration'
-    >>,
-  ) => void
-  onVideoRetry: (sceneId: string, startSequence: number, endSequence?: number) => void
-  onManualUploadComplete: (
-    sceneId: string,
-    sequence: number,
-    clip: Required<Pick<SceneVideoClip, 'uploadId' | 'videoUrl' | 'tailFrameUrl' | 'actualDuration'>>,
-  ) => Promise<boolean>
-  onTailFrameAnalyzed: (
-    sceneId: string,
-    tailFrameUrl: string,
-    state?: TailFrameVisualState,
-    error?: string,
-  ) => void
+  falApiKey: string
+  game: GameController
+  resumeTurn: ResumeTurn
 }
 
-export function useSceneVideo({
-  apiKey,
-  deepSeekApiKey,
-  onVideoPlan,
-  onVideoClipUpdate,
-  onVideoRetry,
-  onManualUploadComplete,
-  onTailFrameAnalyzed,
-}: UseSceneVideoParams) {
-  const submittedScenes = useRef(new Set<string>())
-  const manualBusyRef = useRef(false)
-  const [manualBusy, setManualBusy] = useState(false)
-  const [autoBusy, setAutoBusy] = useState(false)
+const blobToDataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(String(reader.result))
+  reader.onerror = () => reject(new Error('无法读取尾帧图片。'))
+  reader.readAsDataURL(blob)
+})
 
-  const analyzeUploadedTail = useCallback(async (sceneId: string, sequence: number, tailFrameUrl: string, characters: SceneCharacter[]) => {
-    onVideoClipUpdate(sceneId, sequence, { status: 'analyzing', error: undefined })
-    try {
-      if (!deepSeekApiKey) throw new Error('尾帧视觉识别需要 DeepSeek API Key；视频已保存，设置后可重试识别。')
-      const state = await inspectTailFrame(deepSeekApiKey, tailFrameUrl, characters)
-      onVideoClipUpdate(sceneId, sequence, { status: 'ready', error: undefined })
-      onTailFrameAnalyzed(sceneId, tailFrameUrl, state)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '尾帧识别失败'
-      onVideoClipUpdate(sceneId, sequence, { status: 'ready', error: message })
-      onTailFrameAnalyzed(sceneId, tailFrameUrl, undefined, message)
+// fal 的尾帧是上传后的公开 URL（下一段生成需要可抓取的地址），resume 接口则要求 data:image/ 内联图片，两者都要保留。
+const urlToDataUrl = async (url: string) => {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('无法读取尾帧图片。')
+  return blobToDataUrl(await response.blob())
+}
+
+const findClip = (game: GameController, sceneId: string, sequence: number): SceneVideoClip | undefined => {
+  const session = game.getSessionSnapshot()
+  const scene = session?.currentScene?.id === sceneId ? session.currentScene : undefined
+  return scene?.videoClips?.find((clip) => clip.sequence === sequence)
+}
+
+export function useSceneVideo({ falApiKey, game, resumeTurn }: UseSceneVideoParams) {
+  const busyRef = useRef(false)
+  const [mediaBusy, setMediaBusy] = useState(false)
+
+  const uploadSegmentVideo = useCallback(async (sceneId: string, sequence: number, file: File) => {
+    if (busyRef.current) throw new Error('请等待当前视频处理完成。')
+    const session = game.getSessionSnapshot()
+    if (session?.pendingUpload?.sceneId !== sceneId || session.pendingUpload.sequence !== sequence) {
+      throw new Error('导演当前不在等待这一段视频，请刷新后重试。')
     }
-  }, [deepSeekApiKey, onTailFrameAnalyzed, onVideoClipUpdate])
-
-  const uploadSceneVideo = useCallback(async (scene: GameScene, sequence: number, file: File, characters: SceneCharacter[]) => {
-    if (manualBusyRef.current) throw new Error('请等待当前视频处理完成。')
-    const clip = scene.videoClips?.find((item) => item.sequence === sequence)
-    if (!clip || (sequence > 1 && !clip.startImageUrl)) throw new Error('请先上传上一片段并完成尾帧提取。')
     if (!file.size || (file.type && !file.type.startsWith('video/'))) throw new Error('请选择可播放的视频文件。')
-    manualBusyRef.current = true
-    setManualBusy(true)
+
+    busyRef.current = true
+    setMediaBusy(true)
     const videoUrl = URL.createObjectURL(file)
     const uploadId = crypto.randomUUID()
     let committed = false
     try {
+      const previousClip = findClip(game, sceneId, sequence)
       const { frame, duration } = await readVideoTailFrame(videoUrl, 960)
-      const tailFrameUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(String(reader.result))
-        reader.onerror = () => reject(new Error('无法读取视频尾帧'))
-        reader.readAsDataURL(frame)
-      })
+      const tailFrameUrl = await blobToDataUrl(frame)
       await saveUploadedVideo(uploadId, file, tailFrameUrl)
-      if (!await onManualUploadComplete(scene.id, sequence, {
-        uploadId, videoUrl, actualDuration: duration, tailFrameUrl,
-      })) throw new Error('当前幕次已变化，请返回当前幕上传。')
-      committed = true
-      for (const old of scene.videoClips ?? []) {
-        if (old.sequence < sequence) continue
-        if (old.uploadId) void deleteUploadedVideo(old.uploadId).catch(() => {})
-        if (old.videoUrl?.startsWith('blob:')) URL.revokeObjectURL(old.videoUrl)
+      try {
+        await game.commitSegmentMedia(sceneId, sequence, { uploadId, videoUrl, tailFrameUrl, actualDuration: duration })
+      } catch (error) {
+        await deleteUploadedVideo(uploadId).catch(() => {})
+        throw error
       }
-      const finalSequence = Math.max(...(scene.videoClips ?? []).map((item) => item.sequence))
-      if (sequence === finalSequence) await analyzeUploadedTail(scene.id, sequence, tailFrameUrl, characters)
+      committed = true
+      if (previousClip?.uploadId && previousClip.uploadId !== uploadId) {
+        void deleteUploadedVideo(previousClip.uploadId).catch(() => {})
+        if (previousClip.videoUrl?.startsWith('blob:')) URL.revokeObjectURL(previousClip.videoUrl)
+      }
+      // resume 失败时 clip 已被标为 failed（但媒体已保存），可以用 retryPendingSegment 重试，不需要在这里再抛错。
+      await resumeTurn({ sequence, tailFrameDataUrl: tailFrameUrl, durationSeconds: duration })
     } finally {
       if (!committed) {
         URL.revokeObjectURL(videoUrl)
         void deleteUploadedVideo(uploadId).catch(() => {})
       }
-      manualBusyRef.current = false
-      setManualBusy(false)
+      busyRef.current = false
+      setMediaBusy(false)
     }
-  }, [analyzeUploadedTail, onManualUploadComplete])
+  }, [game, resumeTurn])
 
-  const retryUploadedTail = useCallback(async (scene: GameScene, characters: SceneCharacter[]) => {
-    const last = [...(scene.videoClips ?? [])].sort((a, b) => a.sequence - b.sequence).at(-1)
-    if (!last?.tailFrameUrl || manualBusyRef.current) return
-    manualBusyRef.current = true
-    setManualBusy(true)
-    try { await analyzeUploadedTail(scene.id, last.sequence, last.tailFrameUrl, characters) }
-    finally { manualBusyRef.current = false; setManualBusy(false) }
-  }, [analyzeUploadedTail])
+  const generateSegmentWithFal = useCallback(async (sceneId: string, sequence: number) => {
+    if (busyRef.current || !falApiKey) return
+    const session = game.getSessionSnapshot()
+    if (session?.pendingUpload?.sceneId !== sceneId || session.pendingUpload.sequence !== sequence) return
+    const clip = findClip(game, sceneId, sequence)
+    if (!clip) return
 
-  const runGeneration = useCallback((
-    sceneId: string,
-    request: VideoGenerationRequest,
-    startSequence = 1,
-    initialTailFrameUrl?: string,
-    endSequence?: number,
-    characterReferences: Record<string, VideoCharacterReference> = {},
-    characters: SceneCharacter[] = [],
-  ) => {
-    setAutoBusy(true)
-    void generateSceneVideoSegments(
-      createFalVideoGenerator(apiKey),
-      request,
-      (result) => {
-        onVideoClipUpdate(sceneId, result.sequence, {
-          status: result.status,
-          videoUrl: result.videoUrl,
-          startImageUrl: result.startImageUrl,
-          referenceImages: result.referenceImages,
-          tailFrameUrl: result.tailFrameUrl,
-          error: result.status === 'failed' ? result.error : undefined,
-        })
-        if (result.visualState && result.tailFrameUrl) {
-          onTailFrameAnalyzed(sceneId, result.tailFrameUrl, result.visualState)
-        } else if (result.status === 'failed' && result.tailFrameUrl) {
-          onTailFrameAnalyzed(sceneId, result.tailFrameUrl, undefined, result.error)
-        }
-      },
-      {
-        startSequence,
-        endSequence,
-        initialTailFrameUrl,
+    busyRef.current = true
+    setMediaBusy(true)
+    game.updateSceneVideoClip(sceneId, sequence, { status: 'generating', error: undefined })
+    try {
+      const characterReferences = (clip.referenceImages ?? [])
+        .filter((reference): reference is VideoInputReferenceImage & { type: 'character' } => reference.type === 'character')
+        .map((reference) => ({
+          characterName: reference.label.replace('人物参考 · ', ''),
+          actorId: reference.actorId ?? '',
+          imageUrl: reference.imageUrl ?? '',
+        }))
+      const generator = createFalVideoGenerator(falApiKey)
+      const result = await generator.generate(clip.prompt, clip.endTime - clip.startTime, sequence, {
+        startImageUrl: clip.startImageUrl,
         characterReferences,
-        analyzeTailFrame: (imageUrl) => {
-          if (!deepSeekApiKey) throw new Error('尾帧视觉识别需要 DEEPSEEK_API_KEY。')
-          return inspectTailFrame(deepSeekApiKey, imageUrl, characters)
-        },
-      },
-    ).finally(() => setAutoBusy(false))
-  }, [apiKey, deepSeekApiKey, onTailFrameAnalyzed, onVideoClipUpdate])
-
-  const submitSceneVideo = useCallback((
-    sceneId: string,
-    request: VideoGenerationRequest,
-    characterReferences: Record<string, VideoCharacterReference>,
-    characters: SceneCharacter[],
-    previousTailFrameUrl?: string,
-  ) => {
-    if (!apiKey) return
-    if (submittedScenes.current.has(sceneId)) return
-    submittedScenes.current.add(sceneId)
-
-    onVideoPlan(sceneId, request, 'generating')
-    runGeneration(
-      sceneId,
-      request,
-      1,
-      previousTailFrameUrl,
-      undefined,
-      characterReferences,
-      characters,
-    )
-  }, [apiKey, onVideoPlan, runGeneration])
-
-  const retrySceneVideo = useCallback((
-    scene: GameScene,
-    characterReferences: Record<string, VideoCharacterReference>,
-    characters: SceneCharacter[],
-  ) => {
-    if (!scene.videoRequest || !scene.videoClips?.length || !apiKey) return
-    const clips = [...scene.videoClips].sort((left, right) => left.sequence - right.sequence)
-    const blockedIndex = clips.findIndex((clip) => clip.status !== 'ready')
-    let startIndex = blockedIndex >= 0 ? blockedIndex : 0
-    while (startIndex > 0 && !clips[startIndex - 1].tailFrameUrl) {
-      startIndex -= 1
+      })
+      const tailFrameUrl = await generator.createTailFrameUrl(result.videoUrl)
+      const tailFrameDataUrl = await urlToDataUrl(tailFrameUrl)
+      const actualDuration = clip.endTime - clip.startTime
+      await game.commitSegmentMedia(sceneId, sequence, { videoUrl: result.videoUrl, tailFrameUrl, actualDuration })
+      await resumeTurn({ sequence, tailFrameDataUrl, durationSeconds: actualDuration })
+    } catch (error) {
+      game.failSegment(sceneId, sequence, error instanceof Error ? error.message : '视频生成失败。')
+    } finally {
+      busyRef.current = false
+      setMediaBusy(false)
     }
-    const startSequence = clips[startIndex].sequence
-    const initialTailFrameUrl = startIndex > 0 ? clips[startIndex - 1].tailFrameUrl : clips[0].startImageUrl
-    const endSequence = clips.at(-1)?.sequence
+  }, [falApiKey, game, resumeTurn])
 
-    submittedScenes.current.add(scene.id)
-    onVideoRetry(scene.id, startSequence, endSequence)
-    runGeneration(
-      scene.id,
-      scene.videoRequest,
-      startSequence,
-      initialTailFrameUrl,
-      endSequence,
-      characterReferences,
-      characters,
-    )
-  }, [apiKey, onVideoRetry, runGeneration])
+  const retryPendingSegment = useCallback(async (sceneId: string) => {
+    if (busyRef.current) return
+    const session = game.getSessionSnapshot()
+    const pendingUpload = session?.pendingUpload
+    if (!pendingUpload || pendingUpload.sceneId !== sceneId) return
+    const clip = findClip(game, sceneId, pendingUpload.sequence)
+    if (!clip) return
 
-  return { submitSceneVideo, retrySceneVideo, uploadSceneVideo, retryUploadedTail, manualBusy, autoBusy }
+    if (clip.tailFrameUrl && clip.actualDuration !== undefined) {
+      busyRef.current = true
+      setMediaBusy(true)
+      try {
+        const tailFrameDataUrl = clip.tailFrameUrl.startsWith('data:image/')
+          ? clip.tailFrameUrl
+          : await urlToDataUrl(clip.tailFrameUrl)
+        await resumeTurn({ sequence: pendingUpload.sequence, tailFrameDataUrl, durationSeconds: clip.actualDuration })
+      } catch (error) {
+        game.failSegment(sceneId, pendingUpload.sequence, error instanceof Error ? error.message : '重试失败。')
+      } finally {
+        busyRef.current = false
+        setMediaBusy(false)
+      }
+      return
+    }
+
+    const scene = session?.currentScene?.id === sceneId ? session.currentScene : undefined
+    if (scene?.videoMode === 'auto') {
+      await generateSegmentWithFal(sceneId, pendingUpload.sequence)
+    }
+    // manual 模式没有已保存的视频：clip 保持 failed，提示玩家重新选择文件上传即可。
+  }, [game, generateSegmentWithFal, resumeTurn])
+
+  return { uploadSegmentVideo, generateSegmentWithFal, retryPendingSegment, mediaBusy }
 }

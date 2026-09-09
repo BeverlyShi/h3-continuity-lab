@@ -37,6 +37,42 @@ export const createCastingBook = (
   }
 }
 
+// 暂停/恢复回合时把账本存进 director_turn_state，重建出一个等价的 CastingBook。
+export type CastingBookSnapshot = {
+  actors: CastableActor[]
+  createdActors: CreatedActor[]
+  bindings: Array<[string, string]>
+  declined: string[]
+  lockedCharacterIds: string[]
+  speakingCharacterIds: string[]
+}
+
+export const exportCastingBook = (book: CastingBook): CastingBookSnapshot => ({
+  actors: book.actors,
+  createdActors: book.createdActors,
+  bindings: [...book.bindings.entries()],
+  declined: [...book.declined],
+  lockedCharacterIds: [...book.lockedCharacterIds],
+  speakingCharacterIds: [...book.speakingCharacterIds],
+})
+
+export const importCastingBook = (snapshot: CastingBookSnapshot): CastingBook => ({
+  actors: snapshot.actors,
+  createdActors: snapshot.createdActors,
+  bindings: new Map(snapshot.bindings),
+  declined: new Set(snapshot.declined),
+  lockedCharacterIds: new Set(snapshot.lockedCharacterIds),
+  speakingCharacterIds: new Set(snapshot.speakingCharacterIds),
+})
+
+// 分镜首段附参考图时用：某个人物当前绑定的演员及其是否已有参考图。
+export const lookupCastingBookActor = (book: CastingBook, characterId: string) => {
+  const actorId = book.bindings.get(characterId)
+  if (!actorId) return undefined
+  const actor = book.actors.find((candidate) => candidate.id === actorId)
+  return actor ? { actorId, hasImage: actor.hasImage } : undefined
+}
+
 const actorLabel = (actor: CastableActor) =>
   `${actor.name}（${actor.id}，${actor.minAge}–${actor.maxAge}${actor.appearance ? `，${actor.appearance}` : ''}）`
 
@@ -318,7 +354,7 @@ export const createCastSceneTool = (
       ...table,
       ...(warnings.length ? [`提示：${warnings.join('；')}。`] : []),
       ...(pendingAppearances.length ? ['无参考图人物的外观（分镜每段重复使用）：', ...pendingAppearances] : []),
-      '下一步：调用 write_video_prompt 编写分镜；首段只为有参考图的人物附图。',
+      '下一步：调用 write_segment 编写第 1 段分镜；首段只为有参考图的人物附图。',
     ].join('\n')
     return {
       content: [{ type: 'text', text }],

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { buildStoryInputMessage, DIRECTOR_SYSTEM_PROMPT } from '../server/directorPrompt.ts'
 import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
-import { prepareVideoPlan, VIDEO_PLAN_ARGUMENTS_EXAMPLE } from '../server/videoPlanTool.ts'
+import { prepareWriteSegment, WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST, WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT } from '../server/writeSegmentTool.ts'
 
 test('the single system prompt covers story, casting and shot writing in a fixed section order', () => {
   const role = DIRECTOR_SYSTEM_PROMPT.indexOf('## 角色设定')
@@ -14,7 +14,7 @@ test('the single system prompt covers story, casting and shot writing in a fixed
 
   assert.match(DIRECTOR_SYSTEM_PROMPT, /互动文字游戏《后宫》/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /主动决定故事开场/)
-  assert.match(DIRECTOR_SYSTEM_PROMPT, /先 publish_scene 发布场景.*cast_scene.*write_video_prompt.*finish_turn/)
+  assert.match(DIRECTOR_SYSTEM_PROMPT, /先 publish_scene 发布场景.*cast_scene.*write_segment.*generate_segment.*finish_turn/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /"1"、"2"、"3"/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /更换往回合已绑定的演员必须设置 recast: true/)
   assert.match(DIRECTOR_SYSTEM_PROMPT, /create: \{ name, appearance \}/)
@@ -34,17 +34,27 @@ test('the single system prompt covers story, casting and shot writing in a fixed
 
 test('both structure examples in the prompt validate against each other', () => {
   assert.ok(DIRECTOR_SYSTEM_PROMPT.includes(SCENE_PUBLISH_ARGUMENTS_EXAMPLE))
-  assert.ok(DIRECTOR_SYSTEM_PROMPT.includes(VIDEO_PLAN_ARGUMENTS_EXAMPLE))
+  assert.ok(DIRECTOR_SYSTEM_PROMPT.includes(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST))
+  assert.ok(DIRECTOR_SYSTEM_PROMPT.includes(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT))
   const scene = JSON.parse(SCENE_PUBLISH_ARGUMENTS_EXAMPLE)
-  const { video } = prepareVideoPlan(JSON.parse(VIDEO_PLAN_ARGUMENTS_EXAMPLE), scene.characters, scene.dialogues)
-  assert.equal(video.videoPrompts.length, 2)
-  assert.equal(video.totalDuration, 15)
-  assert.equal(video.videoPrompts.filter((segment) => segment.prompt.includes('你识字吗？')).length, 1)
+  const first = prepareWriteSegment(JSON.parse(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST), {
+    characters: scene.characters,
+    dialogues: scene.dialogues,
+    existingSegments: [],
+  })
+  assert.match(first.segment.prompt, /你识字吗？/)
+  const second = prepareWriteSegment(JSON.parse(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT), {
+    characters: scene.characters,
+    dialogues: scene.dialogues,
+    existingSegments: [{ sequence: 1, seconds: first.segment.seconds, lineIds: first.segment.lineIds, generated: {} }],
+  })
+  assert.equal(second.cumulativeSeconds, first.cumulativeSeconds + second.segment.seconds)
+  assert.equal(second.remainingLines.length, 0)
 })
 
 test('the agent exposes every tool to one Agent instance without forcing tool choice', async () => {
   const source = await readFile(new URL('../server/directorAgent.ts', import.meta.url), 'utf8')
-  assert.match(source, /publishSceneTool,\s*castSceneTool,\s*\.\.\.\(videoEnabled \? \[videoPlanTool\] : \[\]\),\s*finishTurnTool,/)
+  assert.match(source, /publishSceneTool,\s*castSceneTool,\s*\.\.\.\(videoEnabled \? \[writeSegmentTool, generateSegmentTool\] : \[\]\),\s*finishTurnTool,/)
   assert.equal((source.match(/new Agent\(/g) ?? []).length, 1)
   assert.doesNotMatch(source, /tool_choice|narrativeReview|DIRECTOR_VIDEO_SYSTEM_PROMPT/)
 })
@@ -71,6 +81,6 @@ test('the turn message carries the player input, video mode, first-segment refer
 
   const textOnly = buildStoryInputMessage({ type: 'start' }, undefined, { videoMode: 'off' })
   assert.match(textOnly, /请开始故事/)
-  assert.match(textOnly, /仅文字.*不提供 write_video_prompt/)
+  assert.match(textOnly, /仅文字.*不提供 write_segment 和 generate_segment/)
   assert.doesNotMatch(buildStoryInputMessage({ type: 'start' }), /视频模式/)
 })

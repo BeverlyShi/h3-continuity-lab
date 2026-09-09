@@ -1,6 +1,6 @@
 ---
 name: video-shot-prompt
-description: 把已发布的互动剧情写成视频模型可直接执行的机位单，用于本项目 write_video_prompt 工具。
+description: 把已发布的互动剧情写成视频模型可直接执行的机位单，用于本项目 write_segment 工具。
 ---
 
 # 视频镜头写作

@@ -1,317 +1,296 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { resolve, join } from 'node:path'
 import test from 'node:test'
+import { JsonlSessionRepo, NodeExecutionEnv, type Entry } from '@earendil-works/pi-agent-core/node'
 import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
-import { VIDEO_PLAN_ARGUMENTS_EXAMPLE } from '../server/videoPlanTool.ts'
+import { WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST, WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT } from '../server/writeSegmentTool.ts'
+import { findAwaitingUpload, findUnresolvedToolCall } from '../server/directorTurnState.ts'
 import type { CastableActor } from '../src/types/actor.ts'
 import type { DirectorStreamEvent } from '../src/types/director.ts'
+import type { TailFrameVisualState } from '../src/types/story.ts'
 import { installScriptedProvider, messageText, type ScriptedStep } from './helpers/scriptedProvider.ts'
 
 const scene = JSON.parse(SCENE_PUBLISH_ARGUMENTS_EXAMPLE)
-const plan = JSON.parse(VIDEO_PLAN_ARGUMENTS_EXAMPLE)
+const write1 = JSON.parse(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST)
+const write2 = JSON.parse(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT)
 const actors: CastableActor[] = [
   { id: 'actor-young', name: '演员甲', gender: 'female', minAge: 16, maxAge: 22, hasImage: true },
   { id: 'actor-elder', name: '演员乙', gender: 'female', minAge: 40, maxAge: 55, hasImage: true },
-  { id: 'actor-man', name: '演员丙', gender: 'male', minAge: 30, maxAge: 40, hasImage: true },
 ]
+const castAssignments = { assignments: [
+  { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
+  { characterId: 'steward', actorId: 'actor-elder', reason: '四十多岁，面相端严' },
+] }
 
-const withTempTraces = async (run: (runDirectorAgent: typeof import('../server/directorAgent.ts')['runDirectorAgent']) => Promise<void>) => {
+// directorAgent.ts 在模块顶层按导入时的 cwd 固定了 traceRepo 的根目录；每个用例都要拿到
+// 独立的临时目录，所以用查询串绕开 ESM 的模块缓存，强制每次重新加载模块。
+let freshImportCounter = 0
+const withTempTraces = async (
+  run: (mod: typeof import('../server/directorAgent.ts')) => Promise<void>,
+) => {
   const previousCwd = process.cwd()
   const directory = await mkdtemp(join(tmpdir(), 'director-loop-'))
   process.chdir(directory)
+  freshImportCounter += 1
   try {
-    const { runDirectorAgent } = await import('../server/directorAgent.ts')
-    await run(runDirectorAgent)
+    const mod = await import(`../server/directorAgent.ts?fresh=${freshImportCounter}`)
+    await run(mod)
   } finally {
     process.chdir(previousCwd)
     await rm(directory, { recursive: true, force: true })
   }
 }
 
+const readEntries = async (sessionId: string): Promise<Entry[]> => {
+  const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd: process.cwd() }), sessionsRoot: resolve(process.cwd(), '.agent-traces') })
+  const list = await repo.list({ cwd: process.cwd() })
+  const metadata = list.find((entry) => entry.id === sessionId)
+  if (!metadata) return []
+  const session = await repo.open(metadata)
+  return session.findEntries({ order: 'oldestFirst' })
+}
+
 const requestTools = (request: { body: { tools?: Array<{ function: { name: string } }> } }) =>
   request.body.tools?.map((tool) => tool.function.name) ?? []
 
-const lastToolResult = (request: { body: { messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> | null }> } }) =>
-  messageText(request.body.messages.filter((message) => message.role === 'tool').at(-1))
+const makeVisualState = (locationLabel: string): TailFrameVisualState => ({
+  shot_size: '中景',
+  shot_position: '人物正前方',
+  shot_content: {
+    characters: [],
+    scene: { location: locationLabel, visible_elements: '木廊', lighting: '柔光', time_of_day: '白天' },
+    key_props: [],
+  },
+  frame_quality: '清晰稳定',
+})
 
-test('one agent drives publish → search → cast → write → finish, self-corrects on tool errors and streams the scene early', async () => {
-  await withTempTraces(async (runDirectorAgent) => {
-    const malformedScene = { scene: { ...scene.scene, choices: scene.scene.choices.slice(0, 1), characters: scene.characters } }
-    const missingLine = { ...plan, segments: plan.segments.map((segment: { prompt: string }) => ({ ...segment, prompt: segment.prompt.replace('{{line_1}}', '姑姑开口问话') })) }
+test('a full segment loop: write/generate pause the turn, resume feeds the measured state back, finish_turn compiles the plan', async () => {
+  await withTempTraces(async ({ runDirectorAgent, resumeDirectorAgent }) => {
     const script: ScriptedStep[] = [
-      { tool: 'publish_scene', args: malformedScene },
-      { tool: 'publish_scene', args: scene, reasoning: '先发布场景。' },
-      { tool: 'cast_scene', args: { assignments: [
-        { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
-        { characterId: 'steward', actorId: 'actor-elder', reason: '四十多岁，面相端严' },
-      ] } },
-      { tool: 'write_video_prompt', args: missingLine },
-      { tool: 'write_video_prompt', args: plan },
+      { tool: 'publish_scene', args: scene },
+      { tool: 'cast_scene', args: castAssignments },
+      { tool: 'write_segment', args: write1 },
+      { tool: 'generate_segment', args: { sequence: 1 } },
+      { tool: 'write_segment', args: write2 },
+      { tool: 'generate_segment', args: { sequence: 2 } },
       { tool: 'finish_turn', args: {} },
     ]
     const provider = installScriptedProvider(script)
-    const events: DirectorStreamEvent[] = []
     try {
-      const result = await runDirectorAgent({
+      const events: DirectorStreamEvent[] = []
+      const outcome = await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-happy', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'loop-happy-1', videoMode: 'manual',
-        send: (event) => { events.push(event) },
+        context: { ok: true, sessionId: 'loop-segment', turn: 1, input: { type: 'start' } },
+        actors, castings: [], traceId: 'trace-1', videoMode: 'manual',
+        send: (event) => events.push(event),
       })
 
-      assert.equal(provider.remaining(), 0)
-      const requests = provider.requests
-      assert.equal(requests.length, 6)
-      for (const request of requests) {
-        assert.equal(request.url, 'https://api.deepseek.com/chat/completions')
-        assert.deepEqual(requestTools(request), ['publish_scene', 'cast_scene', 'write_video_prompt', 'finish_turn'])
-        assert.equal('tool_choice' in request.body, false)
+      assert.equal(outcome.paused, true)
+      assert.equal(provider.requests.length, 4)
+      for (const request of provider.requests) {
+        assert.deepEqual(requestTools(request), ['publish_scene', 'cast_scene', 'write_segment', 'generate_segment', 'finish_turn'])
       }
-      assert.match(messageText(requests[0].body.messages.at(-1)), /本局视频模式：上传视频/)
-      assert.match(messageText(requests[0].body.messages.at(-1)), /没有起始尾帧/)
-      assert.match(lastToolResult(requests[1]), /characters 必须位于顶层/)
-      assert.match(lastToolResult(requests[2]), /待选角人物：/)
-      assert.match(lastToolResult(requests[2]), /掌事姑姑（steward，女 40–50）：候选 演员乙（actor-elder，40–55）/)
-      assert.match(lastToolResult(requests[2]), /女主（heroine，女 16–20）：候选 演员甲（actor-young，16–22）/)
-      assert.match(lastToolResult(requests[3]), /女主：演员甲，有参考图/)
-      assert.match(lastToolResult(requests[4]), /尚未安排 line_1/)
-      assert.match(lastToolResult(requests[5]), /掌事姑姑说：“你识字吗？”/)
-      assert.match(lastToolResult(requests[5]), /下一步：确认无误后调用 finish_turn/)
-
       const types = events.map((event) => event.type)
-      assert.ok(types.indexOf('scene') < types.indexOf('cast'))
-      assert.ok(types.indexOf('cast') < types.indexOf('video_plan'))
-      assert.equal(types.filter((type) => type === 'scene').length, 1)
-      assert.equal(types.at(-1), 'done')
-      assert.equal(types.includes('video_plan_error'), false)
-      const castEvent = events.find((event) => event.type === 'cast')
-      assert.ok(castEvent?.type === 'cast')
-      assert.deepEqual(castEvent.casting, {
+      assert.ok(types.includes('awaiting_upload'))
+      assert.equal(types.includes('done'), false)
+      const awaiting1 = events.find((event) => event.type === 'awaiting_upload')
+      assert.ok(awaiting1?.type === 'awaiting_upload')
+      assert.equal(awaiting1.sequence, 1)
+      assert.deepEqual(awaiting1.referenceImages, [
+        { type: 'character', characterId: 'heroine', actorId: 'actor-young' },
+        { type: 'character', characterId: 'steward', actorId: 'actor-elder' },
+      ])
+      const trace1 = events.findLast((event) => event.type === 'harness_trace')
+      assert.ok(trace1?.type === 'harness_trace')
+      assert.equal(trace1.trace.outcome, 'suspended')
+
+      const entriesAfterPause = await readEntries('loop-segment')
+      const unresolved = findUnresolvedToolCall(entriesAfterPause)
+      assert.equal(unresolved?.toolCallId, awaiting1.toolCallId)
+      assert.equal(unresolved?.toolName, 'generate_segment')
+      const awaitingState = findAwaitingUpload(entriesAfterPause)
+      assert.equal(awaitingState?.pending.toolCallId, awaiting1.toolCallId)
+
+      // 恢复第 1 段：注入假 VLM，检查请求里最后一条 tool 消息带回原 toolCallId 和实测状态。
+      const state1 = makeVisualState('廊下-1')
+      const resumeEvents1: DirectorStreamEvent[] = []
+      const outcome1 = await resumeDirectorAgent({
+        sessionId: 'loop-segment', sequence: 1, toolCallId: awaiting1.toolCallId,
+        tailFrameDataUrl: 'data:image/png;base64,AAAA', durationSeconds: 5.4,
+        apiKey: 'test-key', deepseekKey: 'test-deepseek-key',
+        send: (event) => resumeEvents1.push(event),
+        analyze: async () => state1,
+      })
+
+      assert.equal(outcome1.paused, true)
+      assert.equal(provider.requests.length, 6)
+      const continueRequest = provider.requests[4]
+      const lastToolMessage = continueRequest.body.messages.filter((message) => message.role === 'tool').at(-1)
+      assert.ok(lastToolMessage)
+      assert.equal((lastToolMessage as unknown as { tool_call_id: string }).tool_call_id, awaiting1.toolCallId)
+      assert.match(messageText(lastToolMessage), /廊下-1/)
+      assert.ok(resumeEvents1.some((event) => event.type === 'segment_generated' && event.sequence === 1))
+
+      const awaiting2 = resumeEvents1.find((event) => event.type === 'awaiting_upload')
+      assert.ok(awaiting2?.type === 'awaiting_upload')
+      assert.equal(awaiting2.sequence, 2)
+      assert.deepEqual(awaiting2.referenceImages, [{ type: 'start_frame', sequence: 1 }])
+      const trace2 = resumeEvents1.findLast((event) => event.type === 'harness_trace')
+      assert.ok(trace2?.type === 'harness_trace')
+      assert.equal(trace2.trace.outcome, 'suspended')
+
+      // 恢复第 2 段（最后一段）：完成回合，收到 video_plan、scene_visual_state、done。
+      const state2 = makeVisualState('廊下-2')
+      const resumeEvents2: DirectorStreamEvent[] = []
+      const outcome2 = await resumeDirectorAgent({
+        sessionId: 'loop-segment', sequence: 2, toolCallId: awaiting2.toolCallId,
+        tailFrameDataUrl: 'data:image/png;base64,BBBB', durationSeconds: 9.8,
+        apiKey: 'test-key', deepseekKey: 'test-deepseek-key',
+        send: (event) => resumeEvents2.push(event),
+        analyze: async () => state2,
+      })
+
+      assert.equal(provider.remaining(), 0)
+      assert.equal(outcome2.paused, false)
+      assert.equal(outcome2.video?.videoPrompts.length, 2)
+      assert.equal(outcome2.video?.totalDuration, 15)
+      const types2 = resumeEvents2.map((event) => event.type)
+      assert.ok(types2.indexOf('video_plan') < types2.indexOf('scene_visual_state'))
+      assert.ok(types2.indexOf('scene_visual_state') < types2.indexOf('done'))
+      const visualStateEvent = resumeEvents2.find((event) => event.type === 'scene_visual_state')
+      assert.ok(visualStateEvent?.type === 'scene_visual_state')
+      assert.deepEqual(visualStateEvent.visualState, state2)
+      const trace3 = resumeEvents2.findLast((event) => event.type === 'harness_trace')
+      assert.ok(trace3?.type === 'harness_trace')
+      assert.equal(trace3.trace.outcome, 'completed')
+    } finally {
+      provider.restore()
+    }
+  })
+})
+
+test('starting a new turn after an unresolved pause abandons it with an isError tool result and runs normally', async () => {
+  await withTempTraces(async ({ runDirectorAgent }) => {
+    const provider = installScriptedProvider([
+      { tool: 'publish_scene', args: scene },
+      { tool: 'cast_scene', args: castAssignments },
+      { tool: 'write_segment', args: write1 },
+      { tool: 'generate_segment', args: { sequence: 1 } },
+      { tool: 'publish_scene', args: scene },
+      { tool: 'finish_turn', args: {} },
+    ])
+    try {
+      const outcome1 = await runDirectorAgent({
+        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
+        context: { ok: true, sessionId: 'loop-abandon', turn: 1, input: { type: 'start' } },
+        actors, castings: [], traceId: 'trace-abandon-1', videoMode: 'manual',
+        send: () => {},
+      })
+      assert.equal(outcome1.paused, true)
+
+      const events2: DirectorStreamEvent[] = []
+      const outcome2 = await runDirectorAgent({
+        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
+        context: { ok: true, sessionId: 'loop-abandon', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] } },
+        actors,
         castings: [{ characterId: 'heroine', actorId: 'actor-young' }, { characterId: 'steward', actorId: 'actor-elder' }],
-        unmatchedCharacterIds: [],
-      })
-      assert.equal(result.video?.videoPrompts.length, 2)
-      assert.equal(result.video?.totalDuration, 15)
-      assert.ok(result.video!.videoPrompts[0].prompt.startsWith(plan.style))
-      assert.match(result.video!.videoPrompts[0].prompt, /掌事姑姑说：“你识字吗？”/)
-      assert.match(result.video!.videoPrompts[1].prompt, /无音乐，无旁白。$/)
-      const trace = events.findLast((event) => event.type === 'harness_trace')
-      assert.ok(trace?.type === 'harness_trace')
-      assert.equal(trace.trace.outcome, 'completed')
-      assert.equal(trace.trace.entries.filter((entry) => entry.kind === 'tool_call').length, 6)
-      assert.equal(trace.trace.entries.filter((entry) => entry.kind === 'thinking').length, 1)
-    } finally {
-      provider.restore()
-    }
-
-    // 第二回合：老角色沿用绑定，历史进入上下文，模型无需再选角。
-    const second = installScriptedProvider([
-      { tool: 'publish_scene', args: scene },
-      { tool: 'write_video_prompt', args: plan },
-      { tool: 'finish_turn', args: {} },
-    ])
-    const secondEvents: DirectorStreamEvent[] = []
-    try {
-      const result = await runDirectorAgent({
-        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-happy', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] }, hasPreviousTailFrame: true },
-        actors, castings: [{ characterId: 'heroine', actorId: 'actor-young' }, { characterId: 'steward', actorId: 'actor-elder' }],
-        traceId: 'loop-happy-2', videoMode: 'manual',
-        send: (event) => { secondEvents.push(event) },
-      })
-      assert.equal(second.remaining(), 0)
-      const first = second.requests[0].body.messages
-      assert.ok(first.some((message) => message.role === 'tool'), '上一回合的工具往返应进入本回合上下文')
-      assert.match(messageText(first.at(-1)), /以上一幕尾帧为起始画面/)
-      assert.match(lastToolResult(second.requests[1]), /沿用已有选角：女主 → 演员甲；掌事姑姑 → 演员乙/)
-      assert.match(lastToolResult(second.requests[1]), /无需调用 cast_scene/)
-      assert.deepEqual(result.casting, {
-        castings: [{ characterId: 'heroine', actorId: 'actor-young' }, { characterId: 'steward', actorId: 'actor-elder' }],
-        unmatchedCharacterIds: [],
-      })
-      assert.equal(secondEvents.at(-1)?.type, 'done')
-    } finally {
-      second.restore()
-    }
-  })
-})
-
-test('text-only mode removes write_video_prompt and finishes right after publishing', async () => {
-  await withTempTraces(async (runDirectorAgent) => {
-    const provider = installScriptedProvider([
-      { tool: 'publish_scene', args: scene },
-      { tool: 'cast_scene', args: { assignments: [
-        { characterId: 'heroine', actorId: null, reason: '仅文字模式' },
-        { characterId: 'steward', actorId: 'actor-elder', reason: '有台词，必须有参考图' },
-      ] } },
-      { tool: 'finish_turn', args: {} },
-    ])
-    const events: DirectorStreamEvent[] = []
-    try {
-      const result = await runDirectorAgent({
-        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-text-only', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'loop-text-only', videoMode: 'off',
-        send: (event) => { events.push(event) },
-      })
-      assert.deepEqual(requestTools(provider.requests[0]), ['publish_scene', 'cast_scene', 'finish_turn'])
-      assert.match(messageText(provider.requests[0].body.messages.at(-1)), /仅文字/)
-      assert.equal(result.video, undefined)
-      assert.deepEqual(result.casting, {
-        castings: [{ characterId: 'steward', actorId: 'actor-elder' }],
-        unmatchedCharacterIds: ['heroine'],
-      })
-      const types = events.map((event) => event.type)
-      assert.equal(types.includes('video_plan'), false)
-      assert.equal(types.includes('video_plan_error'), false)
-      const trace = events.findLast((event) => event.type === 'harness_trace')
-      assert.ok(trace?.type === 'harness_trace')
-      assert.equal(trace.trace.outcome, 'completed')
-    } finally {
-      provider.restore()
-    }
-  })
-})
-
-test('nudges a model that stops early, and degrades to text when it skips the video with a reason', async () => {
-  await withTempTraces(async (runDirectorAgent) => {
-    const provider = installScriptedProvider([
-      { tool: 'publish_scene', args: scene },
-      { text: '场景写好了。' },
-      { tool: 'cast_scene', args: { assignments: [
-        { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
-        { characterId: 'steward', actorId: 'actor-elder', reason: '年龄相符' },
-      ] } },
-      { tool: 'finish_turn', args: { skipVideo: { reason: '本幕台词过长，装不进三段。' } } },
-    ])
-    const events: DirectorStreamEvent[] = []
-    try {
-      const result = await runDirectorAgent({
-        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-nudge', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'loop-nudge', videoMode: 'auto',
-        send: (event) => { events.push(event) },
+        traceId: 'trace-abandon-2', videoMode: 'off',
+        send: (event) => events2.push(event),
       })
       assert.equal(provider.remaining(), 0)
-      assert.match(messageText(provider.requests[2].body.messages.at(-1)), /本回合尚未结束：还没有编写分镜/)
-      assert.equal(result.video, undefined)
-      const videoError = events.find((event) => event.type === 'video_plan_error')
-      assert.ok(videoError?.type === 'video_plan_error')
-      assert.match(videoError.message, /本幕台词过长/)
-      const trace = events.findLast((event) => event.type === 'harness_trace')
-      assert.ok(trace?.type === 'harness_trace')
-      assert.equal(trace.trace.outcome, 'degraded')
-      assert.equal(events.at(-1)?.type, 'done')
+      assert.equal(outcome2.paused, false)
+      assert.equal(events2.at(-1)?.type, 'done')
+
+      const entries = await readEntries('loop-abandon')
+      const abandoned = entries.find((entry) =>
+        entry.type === 'message' && entry.message.role === 'toolResult' && entry.message.isError
+        && messageTextOf(entry.message.content).includes('玩家未上传该段视频，本次 generate_segment 作废'))
+      assert.ok(abandoned)
     } finally {
       provider.restore()
     }
   })
 })
 
-test('refuses to skip steps: finishing before casting and writing shots before publishing are rejected with guidance', async () => {
-  await withTempTraces(async (runDirectorAgent) => {
+function messageTextOf(content: Array<{ type: string; text?: string }>) {
+  return content.flatMap((item) => (item.type === 'text' && item.text ? [item.text] : [])).join('\n')
+}
+
+test('rejects resuming with a mismatched sequence or tool call id, and does not touch the session', async () => {
+  await withTempTraces(async ({ runDirectorAgent, resumeDirectorAgent }) => {
     const provider = installScriptedProvider([
-      { tool: 'write_video_prompt', args: plan },
       { tool: 'publish_scene', args: scene },
-      { tool: 'finish_turn', args: {} },
-      { tool: 'cast_scene', args: { assignments: [
-        { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
-        { characterId: 'steward', actorId: 'actor-young', reason: '同一人' },
-      ] } },
-      { tool: 'cast_scene', args: { assignments: [
-        { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
-        { characterId: 'steward', actorId: 'actor-elder', reason: '有台词，必须有参考图' },
-      ] } },
-      { tool: 'write_video_prompt', args: plan },
-      { tool: 'finish_turn', args: {} },
+      { tool: 'cast_scene', args: castAssignments },
+      { tool: 'write_segment', args: write1 },
+      { tool: 'generate_segment', args: { sequence: 1 } },
     ])
     try {
-      const result = await runDirectorAgent({
+      const events: DirectorStreamEvent[] = []
+      await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-guardrails', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'loop-guardrails', videoMode: 'auto', send: () => {},
+        context: { ok: true, sessionId: 'loop-mismatch', turn: 1, input: { type: 'start' } },
+        actors, castings: [], traceId: 'trace-mismatch', videoMode: 'manual',
+        send: (event) => events.push(event),
       })
-      assert.equal(provider.remaining(), 0)
-      assert.match(lastToolResult(provider.requests[1]), /必须先通过 publish_scene 发布场景/)
-      assert.match(lastToolResult(provider.requests[3]), /以下人物尚未选角：女主、掌事姑姑；请先调用 cast_scene/)
-      assert.match(lastToolResult(provider.requests[4]), /同一幕不能撞脸/)
-      assert.match(lastToolResult(provider.requests[5]), /掌事姑姑：演员乙，有参考图/)
-      assert.deepEqual(result.casting, {
-        castings: [{ characterId: 'heroine', actorId: 'actor-young' }, { characterId: 'steward', actorId: 'actor-elder' }],
-        unmatchedCharacterIds: [],
-      })
-      assert.equal(result.video?.videoPrompts.length, 2)
+      const awaiting = events.find((event) => event.type === 'awaiting_upload')
+      assert.ok(awaiting?.type === 'awaiting_upload')
+      const before = await readEntries('loop-mismatch')
+
+      await assert.rejects(() => resumeDirectorAgent({
+        sessionId: 'loop-mismatch', sequence: 2, toolCallId: awaiting.toolCallId,
+        tailFrameDataUrl: 'data:image/png;base64,AAAA', durationSeconds: 5,
+        apiKey: 'test-key', deepseekKey: 'test-deepseek-key',
+        send: () => {},
+        analyze: async () => makeVisualState('x'),
+      }))
+      await assert.rejects(() => resumeDirectorAgent({
+        sessionId: 'loop-mismatch', sequence: 1, toolCallId: 'wrong-call-id',
+        tailFrameDataUrl: 'data:image/png;base64,AAAA', durationSeconds: 5,
+        apiKey: 'test-key', deepseekKey: 'test-deepseek-key',
+        send: () => {},
+        analyze: async () => makeVisualState('x'),
+      }))
+
+      const after = await readEntries('loop-mismatch')
+      assert.equal(after.length, before.length)
     } finally {
       provider.restore()
     }
   })
 })
 
-test('gives up after three consecutive failed publish attempts and reports the last error', async () => {
-  await withTempTraces(async (runDirectorAgent) => {
-    const malformed = { scene: { ...scene.scene, choices: scene.scene.choices.slice(0, 1) }, characters: scene.characters, dialogues: [] }
+test('does not touch the session when tail-frame vision analysis fails', async () => {
+  await withTempTraces(async ({ runDirectorAgent, resumeDirectorAgent }) => {
     const provider = installScriptedProvider([
-      { tool: 'publish_scene', args: malformed },
-      { tool: 'publish_scene', args: malformed },
-      { tool: 'publish_scene', args: malformed },
+      { tool: 'publish_scene', args: scene },
+      { tool: 'cast_scene', args: castAssignments },
+      { tool: 'write_segment', args: write1 },
+      { tool: 'generate_segment', args: { sequence: 1 } },
     ])
-    const events: DirectorStreamEvent[] = []
     try {
-      await assert.rejects(() => runDirectorAgent({
+      const events: DirectorStreamEvent[] = []
+      await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-give-up', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'loop-give-up', videoMode: 'auto', send: (event) => { events.push(event) },
-      }), /publish_scene 连续 3 次未通过校验/)
-      assert.equal(provider.remaining(), 0)
-      const trace = events.findLast((event) => event.type === 'harness_trace')
-      assert.ok(trace?.type === 'harness_trace')
-      assert.equal(trace.trace.outcome, 'failed')
-    } finally {
-      provider.restore()
-    }
-  })
-})
-
-test('creates a new actor when the library has no candidate for a scene character and streams it with the cast event', async () => {
-  await withTempTraces(async (runDirectorAgent) => {
-    const sceneWithEunuch = {
-      ...scene,
-      characters: [...scene.characters, { id: 'eunuch', name: '李公公', gender: 'male', minAge: 45, maxAge: 55 }],
-    }
-    const appearance = '五十上下，清瘦长脸，灰白鬓发，藏青太监常服，拂尘挽在臂弯'
-    const provider = installScriptedProvider([
-      { tool: 'publish_scene', args: sceneWithEunuch },
-      { tool: 'cast_scene', args: { assignments: [
-        { characterId: 'heroine', actorId: 'actor-young', reason: '年龄相符' },
-        { characterId: 'steward', actorId: 'actor-elder', reason: '年龄相符' },
-        { characterId: 'eunuch', create: { name: '演员丁', appearance }, reason: '库中没有男演员' },
-      ] } },
-      { tool: 'write_video_prompt', args: plan },
-      { tool: 'finish_turn', args: {} },
-    ])
-    const events: DirectorStreamEvent[] = []
-    try {
-      const result = await runDirectorAgent({
-        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-create-actor', turn: 1, input: { type: 'start' } },
-        actors: actors.filter((actor) => actor.gender === 'female'),
-        castings: [], traceId: 'loop-create-actor', videoMode: 'manual',
-        send: (event) => { events.push(event) },
+        context: { ok: true, sessionId: 'loop-vlm-fail', turn: 1, input: { type: 'start' } },
+        actors, castings: [], traceId: 'trace-vlm-fail', videoMode: 'manual',
+        send: (event) => events.push(event),
       })
-      assert.equal(provider.remaining(), 0)
-      assert.match(lastToolResult(provider.requests[1]), /李公公（eunuch，男 45–55）：无同性别演员/)
-      assert.match(lastToolResult(provider.requests[2]), /李公公：新演员 演员丁，待生成参考图/)
-      assert.match(lastToolResult(provider.requests[2]), new RegExp(`演员丁：${appearance}`))
-      const castEvent = events.find((event) => event.type === 'cast')
-      assert.ok(castEvent?.type === 'cast')
-      assert.equal(castEvent.casting.createdActors?.length, 1)
-      const createdId = castEvent.casting.createdActors![0].id
-      assert.match(castEvent.casting.createdActors![0].imagePrompt, /16:9/)
-      assert.deepEqual(result.casting?.castings.find((casting) => casting.characterId === 'eunuch'),
-        { characterId: 'eunuch', actorId: createdId })
-      assert.deepEqual(result.casting?.createdActors, castEvent.casting.createdActors)
+      const awaiting = events.find((event) => event.type === 'awaiting_upload')
+      assert.ok(awaiting?.type === 'awaiting_upload')
+      const before = await readEntries('loop-vlm-fail')
+
+      await assert.rejects(() => resumeDirectorAgent({
+        sessionId: 'loop-vlm-fail', sequence: 1, toolCallId: awaiting.toolCallId,
+        tailFrameDataUrl: 'data:image/png;base64,AAAA', durationSeconds: 5,
+        apiKey: 'test-key', deepseekKey: 'test-deepseek-key',
+        send: () => {},
+        analyze: async () => { throw new Error('DeepSeek Vision 请求失败。') },
+      }), /DeepSeek Vision 请求失败/)
+
+      const after = await readEntries('loop-vlm-fail')
+      assert.equal(after.length, before.length)
     } finally {
       provider.restore()
     }

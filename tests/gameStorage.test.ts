@@ -19,7 +19,7 @@ const makeScene = (id: string, overrides: Partial<GameScene> = {}): GameScene =>
 })
 
 const makeSession = (scenes: GameScene[]): GameSession => ({
-  schemaVersion: 8, id: 'game', storyId: 'palace-validation', status: 'awaiting_media',
+  schemaVersion: 9, id: 'game', storyId: 'palace-validation', status: 'awaiting_upload',
   turn: scenes.length, createdAt: 1, updatedAt: 2,
   currentScene: scenes.at(-1), sceneHistory: scenes, characters: [], castings: [],
 })
@@ -82,9 +82,9 @@ test('restores tail frames from IndexedDB and keeps character references as acto
   })
 })
 
-test('marks interrupted clips as failed when their tail frame is gone', async () => {
+test('marks an interrupted analyzing clip as failed and drops its lost tail frame', async () => {
   await withStorage(async () => {
-    // 图片记录丢失（例如清理过 IndexedDB）时，令牌无法还原。
+    // 图片记录丢失（例如清理过 IndexedDB）时，令牌无法还原；resume 请求也来不及完成。
     const scene = makeScene('one', { videoMode: 'auto' })
     scene.tailFrameUrl = 'session-image:lost'
     scene.videoClips![0] = { ...scene.videoClips![0], status: 'analyzing', startImageUrl: 'session-image:lost', tailFrameUrl: 'session-image:lost' }
@@ -99,10 +99,31 @@ test('marks interrupted clips as failed when their tail frame is gone', async ()
   })
 })
 
+test('marks an interrupted generating clip as failed too', async () => {
+  await withStorage(async () => {
+    const scene = makeScene('one', { videoMode: 'auto' })
+    scene.videoClips![0] = { ...scene.videoClips![0], status: 'generating', tailFrameUrl: undefined, startImageUrl: undefined }
+    localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify(makeSession([scene])))
+    const restored = (await loadGameSession())!
+    const clip = restored.sceneHistory[0].videoClips?.[0]
+    assert.equal(clip?.status, 'failed')
+    assert.match(clip?.error ?? '', /中断/)
+  })
+})
+
+test('rejects a session saved with an older schemaVersion', async () => {
+  await withStorage(async () => {
+    localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify({
+      ...makeSession([makeScene('one')]), schemaVersion: 8,
+    }))
+    assert.equal(await loadGameSession(), null)
+  })
+})
+
 test('reads the legacy inlineImages format once and rewrites it into IndexedDB', async () => {
   await withStorage(async ({ images, read }) => {
     const legacy = {
-      schemaVersion: 8, id: 'game', storyId: 'palace-validation', status: 'awaiting_media',
+      schemaVersion: 9, id: 'game', storyId: 'palace-validation', status: 'awaiting_upload',
       turn: 1, createdAt: 1, updatedAt: 2, sceneHistory: [{
         id: 'one', turn: 1, title: '旧存档', narrative: '旧存档。', choices: [],
         tailFrameUrl: 'session-image:0',
