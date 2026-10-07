@@ -5,7 +5,7 @@ import {
   chooseWorkflowKind,
   createComfyClient,
   validateComfySegmentRequest,
-} from '../server/comfyVideo.ts'
+} from '../src/comfy/comfyVideo.ts'
 
 const PNG = 'data:image/png;base64,iVBORw0KGgo='
 

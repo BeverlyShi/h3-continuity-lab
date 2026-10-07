@@ -26,18 +26,18 @@ export default tseslint.config(
     },
   },
   {
-    // 导演 agent 在浏览器里运行：src/director/ 下不得依赖 Node 专有 API。
-    files: ['src/director/**/*.ts'],
+    // 导演 agent 与 Comfy 业务逻辑在浏览器里运行，转发层跑在 Cloudflare Worker 里：都不得依赖 Node 专有 API。
+    files: ['src/director/**/*.ts', 'src/comfy/**/*.ts', 'worker/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [
-          { regex: '^node:', message: '导演代码运行在浏览器里，不能使用 Node 内置模块。' },
+          { regex: '^node:', message: '这里的代码运行在浏览器或 Worker 里，不能使用 Node 内置模块。' },
           { regex: '^@earendil-works/pi-agent-core/node$', message: '请从 @earendil-works/pi-agent-core 主入口导入。' },
         ],
       }],
       'no-restricted-globals': ['error',
-        { name: 'Buffer', message: '浏览器里没有 Buffer。' },
-        { name: 'process', message: '浏览器里没有 process。' },
+        { name: 'Buffer', message: '浏览器和 Worker 里没有 Buffer。' },
+        { name: 'process', message: '浏览器和 Worker 里没有 process。' },
       ],
     },
   },
