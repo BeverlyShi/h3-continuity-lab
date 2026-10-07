@@ -106,11 +106,33 @@ npm run lint    # 代码检查
 npm run build   # 类型检查并构建到 dist/
 ```
 
-注意：Comfy 转发层只挂在 `npm run dev` 的开发服务器上，`npm run preview` 预览构建产物时无法使用 ComfyUI 生成。
+注意：Comfy 转发层只挂在 `npm run dev` 的开发服务器上，`npm run preview` 预览构建产物时无法使用 ComfyUI 生成；要连同转发层一起预览生产版，用 `npm run preview:worker`（见下文）。
 
 ## 部署
 
-部署到 Cloudflare Workers 的说明见后续。
+部署到 Cloudflare Workers（Workers Static Assets），配置在 `wrangler.jsonc`：
+
+- `dist/` 里的静态页面由 Cloudflare 直接提供，找不到的路径回退到 `index.html`。
+- 只有 `/api/*` 进 Worker（`worker/index.ts`），由它调用 `worker/comfyProxy.ts` 转发到 Comfy Cloud。
+
+本地预览生产版：
+
+```bash
+npm run preview:worker   # 构建后用 wrangler dev 在 http://localhost:8787 运行，含 /api/comfy/* 转发
+```
+
+用 Workers Builds 连接 GitHub 自动部署（push 到 main 即部署）：
+
+1. Cloudflare Dashboard → Workers & Pages → 创建 → 导入 Git 仓库。
+2. Worker 名称必须与 `wrangler.jsonc` 的 `name`（`h3-continuity-lab`）一致。
+3. 构建命令 `npm run build`，部署命令 `npx wrangler deploy`。
+4. Node 版本由仓库根目录的 `.node-version`（24）指定。
+
+自定义域名由 `wrangler.jsonc` 的 `routes` 配置（`custom_domain: true`，域名需在同一 Cloudflare 账号下），部署时自动绑定。**fork 后自建请把 `routes` 里的域名换成你自己的，或删掉 `routes` 改用 `*.workers.dev` 地址。**
+
+免费档说明：静态资源请求不计入 Worker 调用，只有 `/api/*` 计入每日 Worker 请求额度；免费档每请求 CPU 时间上限 10ms，转发是流式透传，不把上传或视频读入内存，等待上游的时间不算 CPU 时间。
+
+修改 `wrangler.jsonc` 后请运行 `npx wrangler types` 重新生成 `worker-configuration.d.ts`（Worker 的运行时类型与 `Env`）。
 
 ## 许可证
 

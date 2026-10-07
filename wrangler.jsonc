@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "h3-continuity-lab",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-10-07",
+  "assets": {
+    "directory": "./dist/",
+    "binding": "ASSETS",
+    // 找不到的路径回退到 index.html，交给前端路由。
+    "not_found_handling": "single-page-application",
+    // 只有 /api/* 进 Worker，其余请求由静态资源直接响应，不计入 Worker 调用。
+    "run_worker_first": ["/api/*"]
+  },
+  // fork 后自建请换成自己的域名（该域名需在同一 Cloudflare 账号下）。
+  "routes": [{ "pattern": "interaction1.com", "custom_domain": true }],
+  // 在 Dashboard 查看日志与 CPU 用量；Worker 本身不打印任何日志。
+  "observability": { "enabled": true }
+}
