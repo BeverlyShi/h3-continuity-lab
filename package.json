@@ -4,11 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --configLoader runner",
-    "build": "tsc -b && vite build --configLoader runner",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "node --experimental-strip-types --import ./tests/helpers/registerRawLoader.ts --test tests/*.test.ts",
-    "preview": "vite preview --configLoader runner"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",

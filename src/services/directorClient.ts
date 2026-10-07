@@ -1,16 +1,16 @@
-import type { DirectorModelId } from '../config/directorModels'
+import { getDirectorModelProvider, type DirectorModelId } from '../config/directorModels.ts'
+import type {
+  DirectorAgentRequest,
+  DirectorSessionStore,
+  RewriteDirectorRequest,
+} from '../director/directorAgent.ts'
+import type { DirectorVideoMode } from '../director/directorPrompt.ts'
 import type { CastableActor, CharacterCasting, SceneCastingResult } from '../types/actor'
 import type { DirectorStreamEvent } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
 import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../types/story'
 
-export function parseDirectorEvent(line: string): DirectorStreamEvent {
-  const event = JSON.parse(line) as DirectorStreamEvent
-  if (!event || typeof event !== 'object' || typeof event.type !== 'string') {
-    throw new Error('导演返回了无法识别的数据。')
-  }
-  return event
-}
+export type { DirectorVideoMode }
 
 export type StreamedDirectorTurn = {
   scene: StoryScene
@@ -19,47 +19,93 @@ export type StreamedDirectorTurn = {
   video?: VideoGenerationRequest
 }
 
-export type DirectorVideoMode = 'auto' | 'comfy'
+// 导演在浏览器里运行；测试可注入假的导演函数或内存会话存储。
+export type DirectorRuntime = {
+  store: DirectorSessionStore
+  runDirectorAgent: (request: DirectorAgentRequest) => Promise<unknown>
+  rewriteDirectorSegment: (request: RewriteDirectorRequest) => Promise<unknown>
+}
 
-// 流结束时没有 done，说明连接被意外打断（网络中断、代理超时等）。
-export async function readDirectorStream(
-  response: Response,
+let runtimePromise: Promise<DirectorRuntime> | undefined
+
+// 导演模块（pi-agent-core / pi-ai / OpenAI SDK）第一次用到时才加载，不进首屏包。
+const loadDirectorRuntime = () => runtimePromise ??= Promise.all([
+  import('../director/directorAgent.ts'),
+  import('../director/browserSessionStore.ts'),
+]).then(([agent, sessions]) => ({
+  store: sessions.createBrowserSessionStore(),
+  runDirectorAgent: agent.runDirectorAgent,
+  rewriteDirectorSegment: agent.rewriteDirectorSegment,
+}), (error: unknown) => {
+  runtimePromise = undefined
+  throw error
+})
+
+type DirectorKeys = {
+  openRouterApiKey?: string
+  deepseekApiKey?: string
+  bigModelApiKey?: string
+}
+
+const requireModelKey = (modelId: DirectorModelId, keys: DirectorKeys) => {
+  const provider = getDirectorModelProvider(modelId)
+  const apiKey = { deepseek: keys.deepseekApiKey, openrouter: keys.openRouterApiKey, bigmodel: keys.bigModelApiKey }[provider]?.trim()
+  if (!apiKey) {
+    throw new Error(`请先配置 ${{ deepseek: 'DEEPSEEK_API_KEY', openrouter: 'OPENROUTER_API_KEY', bigmodel: 'BIGMODEL_API_KEY' }[provider]}。`)
+  }
+  return apiKey
+}
+
+const optionalKey = (key: string | undefined) => key?.trim() || undefined
+
+// 事件按 JSON 复制一份再交给前端（与原先的 NDJSON 传输等价），前端状态不与导演内部对象共享引用。
+// 出错时补发 error 事件并以该错误结束；正常结束必须收到 done。
+const runDirector = async (
+  signal: AbortSignal | undefined,
   onEvent: (event: DirectorStreamEvent) => void,
-): Promise<void> {
-  if (!response.body) throw new Error('浏览器不支持导演流式响应。')
+  fallbackError: string,
+  runtime: DirectorRuntime | undefined,
+  run: (runtime: DirectorRuntime, send: (event: DirectorStreamEvent) => void, signal: AbortSignal) => Promise<unknown>,
+): Promise<void> => {
+  const controller = new AbortController()
+  const abort = () => controller.abort(signal?.reason)
+  if (signal?.aborted) abort()
+  else signal?.addEventListener('abort', abort, { once: true })
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
   let done = false
   let streamError = ''
+  let listenerFailed = false
+  let listenerError: unknown
 
-  const consumeLine = (line: string) => {
-    if (!line.trim()) return
-    const event = parseDirectorEvent(line)
-    onEvent(event)
-    if (event.type === 'done') done = true
-    if (event.type === 'error') streamError = event.error
+  const send = (event: DirectorStreamEvent) => {
+    if (listenerFailed) return
+    const copy = JSON.parse(JSON.stringify(event)) as DirectorStreamEvent
+    if (copy.type === 'done') done = true
+    if (copy.type === 'error') streamError = copy.error
+    try {
+      onEvent(copy)
+    } catch (error) {
+      // 前端处理事件出错时停止导演，相当于原先浏览器断开连接。
+      listenerFailed = true
+      listenerError = error
+      controller.abort()
+    }
   }
 
-  while (true) {
-    const { done: streamDone, value } = await reader.read()
-    buffer += decoder.decode(value, { stream: !streamDone })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-    lines.forEach(consumeLine)
-    if (streamDone) break
+  try {
+    await run(runtime ?? await loadDirectorRuntime(), send, controller.signal)
+  } catch (error) {
+    send({ type: 'error', error: error instanceof Error ? error.message : fallbackError })
+  } finally {
+    signal?.removeEventListener('abort', abort)
   }
-  consumeLine(buffer)
 
+  if (listenerFailed) throw listenerError
   if (streamError) throw new Error(streamError)
   if (!done) throw new Error('导演连接意外中断，请重试。')
 }
 
-type StreamDirectorTurnOptions = {
-  openRouterApiKey?: string
-  deepseekApiKey?: string
-  bigModelApiKey?: string
+type StreamDirectorTurnOptions = DirectorKeys & {
   context: DirectorTurnContext
   traceId: string
   actors?: CastableActor[]
@@ -69,23 +115,7 @@ type StreamDirectorTurnOptions = {
   thinkingEnabled?: boolean
   signal?: AbortSignal
   onEvent: (event: DirectorStreamEvent) => void
-}
-
-const buildDirectorHeaders = (keys: {
-  openRouterApiKey?: string
-  deepseekApiKey?: string
-  bigModelApiKey?: string
-}) => {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (keys.openRouterApiKey) headers['X-OpenRouter-Key'] = keys.openRouterApiKey
-  if (keys.deepseekApiKey) headers['X-DeepSeek-Key'] = keys.deepseekApiKey
-  if (keys.bigModelApiKey) headers['X-BigModel-Key'] = keys.bigModelApiKey
-  return headers
-}
-
-const readErrorBody = async (response: Response, fallback: string) => {
-  const body = await response.json().catch(() => ({})) as { error?: string }
-  return body.error ?? fallback
+  runtime?: DirectorRuntime
 }
 
 export async function streamDirectorTurn({
@@ -101,22 +131,14 @@ export async function streamDirectorTurn({
   thinkingEnabled = false,
   signal,
   onEvent,
+  runtime,
 }: StreamDirectorTurnOptions): Promise<StreamedDirectorTurn> {
-  const response = await fetch('/api/director/turn', {
-    method: 'POST',
-    headers: buildDirectorHeaders({ openRouterApiKey, deepseekApiKey, bigModelApiKey }),
-    body: JSON.stringify({ context, traceId, actors, castings, model, thinkingEnabled, videoMode }),
-    signal,
-  })
-
-  if (!response.ok) throw new Error(await readErrorBody(response, `导演服务请求失败（${response.status}）。`))
-
   let scene: StoryScene | undefined
   let characters: SceneCharacter[] | undefined
   let casting: SceneCastingResult | undefined
   let video: VideoGenerationRequest | undefined
 
-  await readDirectorStream(response, (event) => {
+  await runDirector(signal, (event) => {
     if (event.type === 'scene') {
       scene = event.scene
       characters = event.characters
@@ -124,16 +146,33 @@ export async function streamDirectorTurn({
     if (event.type === 'cast') casting = event.casting
     if (event.type === 'video_plan') video = event.video
     onEvent(event)
+  }, '导演请求失败。', runtime, async (director, send, runSignal) => {
+    // 本地存档里可能残留已下线的视频模式或旧版尾帧地址，这里拦下以免把坏数据交给导演。
+    if (videoMode !== undefined && videoMode !== 'auto' && videoMode !== 'comfy') throw new Error('视频模式设置无效。')
+    if (context.previousScene && !context.previousScene.tailFrameDataUrl.startsWith('data:image/')) {
+      throw new Error('故事输入无效。')
+    }
+    await director.runDirectorAgent({
+      store: director.store,
+      apiKey: requireModelKey(model, { openRouterApiKey, deepseekApiKey, bigModelApiKey }),
+      modelId: model,
+      thinkingEnabled,
+      context,
+      actors,
+      castings,
+      traceId,
+      videoMode,
+      visionKey: optionalKey(deepseekApiKey),
+      signal: runSignal,
+      send,
+    })
   })
 
   if (!scene || !characters) throw new Error('Pi Agent 没有发布故事场景。')
   return { scene, characters, ...(casting ? { casting } : {}), video }
 }
 
-type StreamDirectorRewriteOptions = {
-  openRouterApiKey?: string
-  deepseekApiKey?: string
-  bigModelApiKey?: string
+type StreamDirectorRewriteOptions = DirectorKeys & {
   sessionId: string
   sequence: number
   reason: string
@@ -143,9 +182,10 @@ type StreamDirectorRewriteOptions = {
   thinkingEnabled?: boolean
   signal?: AbortSignal
   onEvent: (event: DirectorStreamEvent) => void
+  runtime?: DirectorRuntime
 }
 
-// 让导演重写当前场次第 sequence 段；成功时流里只有一次 video_plan（fromSequence = sequence）。
+// 让导演重写当前场次第 sequence 段；成功时事件里只有一次 video_plan（fromSequence = sequence）。
 export async function streamDirectorRewrite({
   openRouterApiKey,
   deepseekApiKey,
@@ -159,20 +199,29 @@ export async function streamDirectorRewrite({
   thinkingEnabled = false,
   signal,
   onEvent,
+  runtime,
 }: StreamDirectorRewriteOptions): Promise<{ video?: VideoGenerationRequest }> {
-  const response = await fetch('/api/director/rewrite', {
-    method: 'POST',
-    headers: buildDirectorHeaders({ openRouterApiKey, deepseekApiKey, bigModelApiKey }),
-    body: JSON.stringify({ sessionId, sequence, reason, traceId, actors, model, thinkingEnabled }),
-    signal,
-  })
-
-  if (!response.ok) throw new Error(await readErrorBody(response, `导演重写请求失败（${response.status}）。`))
-
   let video: VideoGenerationRequest | undefined
-  await readDirectorStream(response, (event) => {
+  await runDirector(signal, (event) => {
     if (event.type === 'video_plan') video = event.video
     onEvent(event)
+  }, '重写分镜失败。', runtime, async (director, send, runSignal) => {
+    if (!Number.isInteger(sequence) || sequence < 1 || sequence > 3) throw new Error('段号无效。')
+    const cleanReason = reason.trim()
+    if (!cleanReason || cleanReason.length > 200) throw new Error('请写明重写原因（200 字以内）。')
+    await director.rewriteDirectorSegment({
+      store: director.store,
+      sessionId,
+      sequence,
+      reason: cleanReason,
+      apiKey: requireModelKey(model, { openRouterApiKey, deepseekApiKey, bigModelApiKey }),
+      modelId: model,
+      thinkingEnabled,
+      actors,
+      traceId,
+      signal: runSignal,
+      send,
+    })
   })
   return { video }
 }

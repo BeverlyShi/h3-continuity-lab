@@ -10,11 +10,11 @@ import {
   type DirectorAgentRequest,
   type DirectorSessionStore,
   type RewriteDirectorRequest,
-} from '../server/directorAgent.ts'
-import { createNodeSessionStore } from '../server/nodeSessionStore.ts'
-import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
-import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE } from '../server/writeSceneVideoTool.ts'
-import { findRewritableScene } from '../server/directorTurnState.ts'
+} from '../src/director/directorAgent.ts'
+import { createNodeSessionStore } from './helpers/nodeSessionStore.ts'
+import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../src/director/publishSceneTool.ts'
+import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE } from '../src/director/writeSceneVideoTool.ts'
+import { findRewritableScene } from '../src/director/directorTurnState.ts'
 import type { CastableActor } from '../src/types/actor.ts'
 import type { DirectorStreamEvent } from '../src/types/director.ts'
 import type { TailFrameVisualState } from '../src/types/story.ts'

@@ -1,5 +1,5 @@
-import videoShotSkillSource from '../skills/video-shot-prompt/SKILL.md?raw'
-import type { StoryInput } from '../src/types/story.ts'
+import videoShotSkillSource from '../../skills/video-shot-prompt/SKILL.md?raw'
+import type { StoryInput } from '../types/story.ts'
 import {
   DIALOGUE_LINE_MAX_HAN,
   DIALOGUE_MAX_LINES,

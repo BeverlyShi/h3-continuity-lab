@@ -5,7 +5,7 @@
     "inputs": {
       "model": "MiniMax H3 Max Turbo",
       "model.prompt": "",
-      "model.resolution": "768P",
+      "model.resolution": "480P",
       "model.ratio": "16:9",
       "model.duration": 5,
       "model.prompt_expansion_mode": "balanced",

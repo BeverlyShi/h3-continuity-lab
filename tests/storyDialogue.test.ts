@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { assertValidScenePublish } from '../server/publishSceneTool.ts'
+import { assertValidScenePublish } from '../src/director/publishSceneTool.ts'
 import type { ScenePublish } from '../src/types/story.ts'
 
 const scene: ScenePublish = {

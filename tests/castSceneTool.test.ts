@@ -7,7 +7,7 @@ import {
   isCastingComplete,
   listCastingCandidates,
   resolveSceneCasting,
-} from '../server/castSceneTool.ts'
+} from '../src/director/castSceneTool.ts'
 import type { CastableActor } from '../src/types/actor.ts'
 import type { SceneCharacter } from '../src/types/story.ts'
 

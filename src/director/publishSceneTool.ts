@@ -3,7 +3,7 @@ import { Check, Errors } from 'typebox/value'
 import {
   scenePublishSchema,
   type ScenePublish,
-} from '../src/types/story.ts'
+} from '../types/story.ts'
 import { countHanCharacters } from './textMetrics.ts'
 
 export const DIALOGUE_LINE_MAX_HAN = 20

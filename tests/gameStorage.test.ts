@@ -194,7 +194,7 @@ test('clearLocalMedia only removes session, project and media keys', async () =>
     } finally {
       Reflect.deleteProperty(globalThis, 'indexedDB')
     }
-    assert.deepEqual(deleted, ['palace-uploaded-videos'])
+    assert.deepEqual(deleted, ['palace-uploaded-videos', 'h3-director-sessions'])
     assert.equal(images.size, 0)
     assert.equal(localStorage.getItem('h3-continuity-lab:game-session'), null)
     assert.equal(localStorage.getItem('h3-continuity-lab:projects'), null)

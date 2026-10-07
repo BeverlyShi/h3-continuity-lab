@@ -22,6 +22,7 @@ import type { Actor } from '../types/actor'
 import type { SceneCastingResult } from '../types/actor'
 import { buildCharacterReferences } from '../services/casting'
 import { deleteUploadedVideo, loadUploadedVideo } from '../services/uploadedVideoStorage'
+import { deleteDirectorSession } from '../director/sessionDatabase'
 
 const now = () => Date.now()
 
@@ -329,6 +330,8 @@ export function useGameSession() {
   const getCastings = useCallback(() => [...(sessionRef.current?.castings ?? [])], [])
 
   const restart = useCallback(() => {
+    const sessionId = sessionRef.current?.id
+    if (sessionId) void deleteDirectorSession(sessionId).catch(() => {})
     for (const scene of sessionRef.current?.sceneHistory ?? []) {
       for (const clip of scene.videoClips ?? []) {
         if (clip.uploadId) void deleteUploadedVideo(clip.uploadId).catch(() => {})

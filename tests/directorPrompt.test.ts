@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { buildRewriteMessage, buildStoryInputMessage, DIRECTOR_SYSTEM_PROMPT } from '../server/directorPrompt.ts'
-import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
-import { prepareSceneVideo, WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE } from '../server/writeSceneVideoTool.ts'
+import { buildRewriteMessage, buildStoryInputMessage, DIRECTOR_SYSTEM_PROMPT } from '../src/director/directorPrompt.ts'
+import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../src/director/publishSceneTool.ts'
+import { prepareSceneVideo, WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE } from '../src/director/writeSceneVideoTool.ts'
 
 test('the single system prompt covers story, casting and shot writing in a fixed section order', () => {
   const role = DIRECTOR_SYSTEM_PROMPT.indexOf('## 角色设定')
@@ -52,7 +52,7 @@ test('both structure examples in the prompt validate against each other', () => 
 })
 
 test('the agent exposes the scene tools to one Agent instance without forcing tool choice', async () => {
-  const source = await readFile(new URL('../server/directorAgent.ts', import.meta.url), 'utf8')
+  const source = await readFile(new URL('../src/director/directorAgent.ts', import.meta.url), 'utf8')
   assert.match(source, /\[publishSceneTool, castSceneTool, inspectLastFrameTool, writeSceneVideoTool\]/)
   assert.doesNotMatch(source, /videoEnabled/)
   assert.match(source, /rewrite\s*\?\s*\[writeSceneVideoTool\]/)

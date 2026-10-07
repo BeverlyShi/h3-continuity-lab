@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Entry } from '@earendil-works/pi-agent-core'
-import { projectHistory } from '../server/directorContext.ts'
+import { projectHistory } from '../src/director/directorContext.ts'
 
 const usage = {
   input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },

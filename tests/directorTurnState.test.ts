@@ -7,7 +7,7 @@ import {
   persistTurnState,
   readLatestTurnState,
   type DirectorTurnState,
-} from '../server/directorTurnState.ts'
+} from '../src/director/directorTurnState.ts'
 
 const usage = {
   input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },

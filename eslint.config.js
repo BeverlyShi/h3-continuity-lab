@@ -26,13 +26,12 @@ export default tseslint.config(
     },
   },
   {
-    // 导演 agent 将来在浏览器里运行：server/ 下除开发插件与 Node 会话存储外不得依赖 Node 专有 API。
-    files: ['server/**/*.ts'],
-    ignores: ['server/directorPlugin.ts', 'server/comfyPlugin.ts', 'server/nodeSessionStore.ts'],
+    // 导演 agent 在浏览器里运行：src/director/ 下不得依赖 Node 专有 API。
+    files: ['src/director/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [
-          { regex: '^node:', message: '只有开发插件和 nodeSessionStore.ts 可以使用 Node 内置模块。' },
+          { regex: '^node:', message: '导演代码运行在浏览器里，不能使用 Node 内置模块。' },
           { regex: '^@earendil-works/pi-agent-core/node$', message: '请从 @earendil-works/pi-agent-core 主入口导入。' },
         ],
       }],
