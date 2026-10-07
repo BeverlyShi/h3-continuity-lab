@@ -65,4 +65,3 @@ export const readVideoTailFrame = async (videoUrl: string, maxDimension = Number
   }
 }
 
-export const extractVideoTailFrame = async (videoUrl: string) => (await readVideoTailFrame(videoUrl)).frame

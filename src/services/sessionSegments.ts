@@ -87,7 +87,7 @@ const clearClipMedia = (clip: SceneVideoClip): SceneVideoClip => ({
   videoUrl: undefined,
   tailFrameUrl: undefined,
   actualDuration: undefined,
-  comfyJobId: undefined,
+  jobId: undefined,
   error: undefined,
   startImageUrl: undefined,
   referenceImages: undefined,
@@ -195,7 +195,7 @@ export const commitClipMedia = (
 
   const laterWasReady = clips.some((clip) => clip.sequence > sequence && clip.status === 'ready')
   let next = resetClipsAfter(clips, sequence).map((clip) => clip.sequence === sequence
-    ? { ...clip, ...media, status: 'ready' as const, error: undefined, comfyJobId: undefined }
+    ? { ...clip, ...media, status: 'ready' as const, error: undefined, jobId: undefined }
     : clip)
   const following = [...next]
     .filter((clip) => clip.sequence > sequence)
@@ -226,24 +226,24 @@ export const commitClipMedia = (
   return patched
 }
 
-export const setClipComfyJob = (session: GameSession, sceneId: string, sequence: number, comfyJobId: string): GameSession =>
+export const setClipJob = (session: GameSession, sceneId: string, sequence: number, jobId: string): GameSession =>
   patchScene(session, sceneId, (scene) => ({
     ...scene,
-    videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence ? { ...clip, comfyJobId } : clip),
+    videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence ? { ...clip, jobId } : clip),
   }))
 
-// Comfy 任务本身失败时任务 ID 作废（dropComfyJob），网络出错或超时则保留，重试时接着查同一个任务。
+// 生成任务本身失败时任务 ID 作废（dropJob），网络出错或超时则保留，重试时接着查同一个任务。
 export const failClip = (
   session: GameSession,
   sceneId: string,
   sequence: number,
   error: string,
-  { dropComfyJob = false }: { dropComfyJob?: boolean } = {},
+  { dropJob = false }: { dropJob?: boolean } = {},
 ): GameSession =>
   patchScene(session, sceneId, (scene) => ({
     ...scene,
     videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
-      ? { ...clip, status: 'failed', error, ...(dropComfyJob ? { comfyJobId: undefined } : {}) }
+      ? { ...clip, status: 'failed', error, ...(dropJob ? { jobId: undefined } : {}) }
       : clip),
   }))
 

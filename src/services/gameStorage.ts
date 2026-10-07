@@ -103,7 +103,11 @@ const restoreScene = (scene: GameScene) => {
       clip.referenceImages = clip.referenceImages.map((reference) =>
         reference.imageUrl === MISSING_IMAGE ? { ...reference, imageUrl: undefined } : reference)
     }
-    // 刷新前正在生成：请求已经中断，只能重试；Comfy 任务 ID 保留，加载后接着查原任务，不重复扣费。
+    // 旧存档的任务 ID 字段叫 comfyJobId，只可能是 Comfy 提交的：补上前缀改存到 jobId。
+    const legacy = clip as typeof clip & { comfyJobId?: string }
+    if (legacy.comfyJobId && !clip.jobId) clip.jobId = `comfy:${legacy.comfyJobId}`
+    delete legacy.comfyJobId
+    // 刷新前正在生成：请求已经中断，只能重试；任务 ID 保留，加载后接着查原任务，不重复扣费。
     if (clip.status === 'generating') {
       clip.status = 'failed'
       clip.error = '上次处理已中断，请重试这一段。'

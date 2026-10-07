@@ -8,7 +8,7 @@ import {
   findDiscardedMedia,
   finishDirectorRun as finishDirectorRunReducer,
   markClipGenerating as markClipGeneratingReducer,
-  setClipComfyJob as setClipComfyJobReducer,
+  setClipJob as setClipJobReducer,
   skipSceneVideo as skipSceneVideoReducer,
   type CommitClipMediaInput,
   type FinishDirectorRunInput,
@@ -310,10 +310,10 @@ export function useGameSession() {
     releaseDiscardedMedia(current, next)
   }, [releaseDiscardedMedia, replaceSession])
 
-  const setClipComfyJob = useCallback((sceneId: string, sequence: number, comfyJobId: string) =>
-    applyReducer((current) => setClipComfyJobReducer(current, sceneId, sequence, comfyJobId)), [applyReducer])
+  const setClipJob = useCallback((sceneId: string, sequence: number, jobId: string) =>
+    applyReducer((current) => setClipJobReducer(current, sceneId, sequence, jobId)), [applyReducer])
 
-  const failClip = useCallback((sceneId: string, sequence: number, error: string, options?: { dropComfyJob?: boolean }) =>
+  const failClip = useCallback((sceneId: string, sequence: number, error: string, options?: { dropJob?: boolean }) =>
     applyReducer((current) => failClipReducer(current, sceneId, sequence, error, options)), [applyReducer])
 
   const finishDirectorRun = useCallback((sceneId: string, input: FinishDirectorRunInput) =>
@@ -360,7 +360,7 @@ export function useGameSession() {
     applyVideoPlan,
     markClipGenerating,
     commitClipMedia,
-    setClipComfyJob,
+    setClipJob,
     failClip,
     finishDirectorRun,
     skipSceneVideo,
