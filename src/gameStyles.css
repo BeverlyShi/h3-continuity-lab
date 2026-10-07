@@ -94,11 +94,7 @@
 .game-video-mode-help { margin-top: 8px; color: #64748b; font-size: 11px; line-height: 1.7; }
 .game-video-mode-footer { margin-top: 5px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .game-video-mode-footer small { color: #94a3b8; font-size: 10px; line-height: 1.6; }
-.game-video-mode-card { display: flex; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 8px; background: white; }
-.game-video-mode-card.active { border-color: #fda4af; background: #fff1f2; }
-.game-video-mode-card > .game-video-mode { flex: 1; border: 0; background: transparent; }
-.game-video-mode-card > .game-video-mode:hover { background: #fff1f2; }
-.game-video-auto { padding: 0 12px 10px; display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; }
+.game-video-auto { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; }
 .game-video-auto .agent-thinking-toggle { margin-top: 0; font-size: 11px; }
 .game-video-auto small { color: #94a3b8; font-size: 10px; line-height: 1.6; }
 

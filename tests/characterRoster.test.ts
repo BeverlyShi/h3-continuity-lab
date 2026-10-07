@@ -52,7 +52,7 @@ test('a new id reusing the name of a cast character is a conflict; uncast namesa
 
 test('the roster goes into the player input as its own paragraph and only there', () => {
   const roster = describeCharacterRoster(known, castings, actors)!
-  const message = buildStoryInputMessage({ type: 'freeform', text: '走向宫门' }, { videoMode: 'comfy', roster })
+  const message = buildStoryInputMessage({ type: 'freeform', text: '走向宫门' }, { hasPreviousFrame: false, roster })
   assert.ok(message.endsWith(roster))
   assert.equal(stripCharacterRoster(message).includes(CHARACTER_ROSTER_HEADING), false)
   assert.ok(stripCharacterRoster(message).startsWith('玩家决定自由行动：走向宫门'))

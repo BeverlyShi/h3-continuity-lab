@@ -38,7 +38,6 @@ import {
   buildStoryInputMessage,
   DIRECTOR_COMPACTION_INSTRUCTIONS,
   DIRECTOR_SYSTEM_PROMPT,
-  type DirectorVideoMode,
 } from './directorPrompt.ts'
 import {
   createCastingBook,
@@ -856,7 +855,6 @@ export type DirectorAgentRequest = {
   // 本局此前登场过的全部人物（游戏存档里的人物表）。
   knownCharacters?: SceneCharacter[]
   traceId: string
-  videoMode?: DirectorVideoMode
   // inspect_last_frame 用 DeepSeek Vision；没配时导演只能换场景开场。
   visionKey?: string
   analyze?: typeof analyzeTailFrame
@@ -878,7 +876,6 @@ async function runPersistentDirector({
   castings,
   knownCharacters = [],
   traceId,
-  videoMode = 'auto',
   visionKey,
   analyze,
   signal,
@@ -897,7 +894,6 @@ async function runPersistentDirector({
     traceId,
     modelId,
     thinkingEnabled,
-    videoMode,
     context,
     actors,
     castings,
@@ -921,7 +917,6 @@ async function runPersistentDirector({
     send,
     initialMessages,
     promptText: buildStoryInputMessage(context.input, {
-      videoMode,
       hasPreviousFrame: Boolean(context.previousScene),
       roster: describeCharacterRoster(knownCharacters, castings, actors),
     }),

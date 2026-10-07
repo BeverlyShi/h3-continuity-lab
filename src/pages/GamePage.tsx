@@ -25,19 +25,22 @@ type GamePageProps = {
   savedOpenRouterApiKey: string
   savedDeepSeekApiKey: string
   savedBigModelApiKey: string
+  videoMode: NonNullable<GameScene['videoMode']>
+  // 只负责保存；切换前的守卫在本页。
+  onVideoModeChange: (next: NonNullable<GameScene['videoMode']>) => void
   onTraceUpdate: (update: AgentTraceUpdate) => void
   onRequestApiKey: () => void
   actors: Actor[]
   // 最新演员库：异步流程（等参考图、逐段生成）里读，不受渲染闭包影响。
   getActors: () => Actor[]
   onActorsCreated: (created: CreatedActor[]) => Promise<void> | void
-  portraits: Pick<ActorPortraits, 'generatePortrait' | 'ensurePortraits' | 'waitForPortraits' | 'generatingIds'>
+  portraits: Pick<ActorPortraits, 'generatePortrait' | 'ensurePortraits' | 'generatingIds' | 'canGenerate'>
 }
 
 const DIRECTOR_MODEL_STORAGE_KEY = 'palace-director-model'
 const DIRECTOR_THINKING_STORAGE_KEY = 'palace-director-thinking-enabled'
-const VIDEO_MODE_STORAGE_KEY = 'palace-video-mode'
-const COMFY_AUTO_GENERATE_STORAGE_KEY = 'h3-game-comfy-auto'
+// 沿用旧 key 名，保留老用户的开关设置。
+const AUTO_GENERATE_STORAGE_KEY = 'h3-game-comfy-auto'
 
 const loadDirectorModel = (): DirectorModelId => {
   try {
@@ -56,33 +59,22 @@ const loadDirectorThinking = () => {
   }
 }
 
-const loadVideoMode = (): NonNullable<GameScene['videoMode']> => {
+const loadAutoGenerate = () => {
   try {
-    // 旧版的「上传视频」「仅文字」已下线，连同无值一律落到 ComfyUI。
-    return localStorage.getItem(VIDEO_MODE_STORAGE_KEY) === 'auto' ? 'auto' : 'comfy'
-  } catch {
-    return 'comfy'
-  }
-}
-
-const loadComfyAutoGenerate = () => {
-  try {
-    return localStorage.getItem(COMFY_AUTO_GENERATE_STORAGE_KEY) === 'on'
+    return localStorage.getItem(AUTO_GENERATE_STORAGE_KEY) === 'on'
   } catch {
     return false
   }
 }
 
-export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors, getActors, onActorsCreated, portraits }: GamePageProps) {
+export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, videoMode, onVideoModeChange, onTraceUpdate, onRequestApiKey, actors, getActors, onActorsCreated, portraits }: GamePageProps) {
   const game = useGameSession()
   const [modelId, setModelId] = useState<DirectorModelId>(loadDirectorModel)
   const [thinkingEnabled, setThinkingEnabled] = useState(loadDirectorThinking)
   const activeModelProvider = getDirectorModelProvider(modelId)
   const activeApiKey = { deepseek: savedDeepSeekApiKey, openrouter: savedOpenRouterApiKey, bigmodel: savedBigModelApiKey }[activeModelProvider]
   const apiKeyLabel = { deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' }[activeModelProvider]
-  const [videoMode, setVideoMode] = useState(loadVideoMode)
-  const [comfyAutoGenerate, setComfyAutoGenerate] = useState(loadComfyAutoGenerate)
-  const autoGenerate = videoMode === 'auto' || comfyAutoGenerate
+  const [autoGenerate, setAutoGenerate] = useState(loadAutoGenerate)
   const [narrativeExpanded, setNarrativeExpanded] = useState(true)
 
   const sceneVideo = useSceneVideo({
@@ -92,30 +84,27 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
     autoGenerate,
     game,
     getActors,
-    // ComfyUI 模式先补齐缺的参考图；API 模式只等已在生成的（玩家在演员库手动点的）。
-    preparePortraits: videoMode === 'comfy' && savedComfyApiKey ? portraits.ensurePortraits : portraits.waitForPortraits,
+    // 先补齐缺的参考图（当前模式 key 没配时只等已在生成的）。
+    preparePortraits: portraits.ensurePortraits,
   })
   const { generateScene: generateSceneVideo } = sceneVideo
-  const { generatePortrait } = portraits
+  const { generatePortrait, canGenerate: canGeneratePortraits } = portraits
 
-  // 选角落定：新建演员先入库；ComfyUI 模式下本场次所有还没有参考图的演员（新建的和库里待生成的）立即生成三视图。
+  // 选角落定：新建演员先入库；本场次所有还没有参考图的演员（新建的和库里待生成的）立即生成三视图。
   const onSceneCast = useCallback(async (casting: SceneCastingResult) => {
     if (casting.createdActors?.length) await onActorsCreated(casting.createdActors)
-    if (videoMode !== 'comfy' || !savedComfyApiKey) return
+    if (!canGeneratePortraits) return
     for (const actorId of new Set(casting.castings.map((item) => item.actorId))) void generatePortrait(actorId)
-  }, [generatePortrait, onActorsCreated, savedComfyApiKey, videoMode])
+  }, [canGeneratePortraits, generatePortrait, onActorsCreated])
 
-  // ComfyUI 模式按秒扣积分：没开「自动生成」时分镜就绪后不自动提交，等玩家在时间轴上点「生成本场次视频」。
+  const hasVideoKey = videoMode === 'auto' ? Boolean(savedFalApiKey) : Boolean(savedComfyApiKey)
+
+  // 视频按秒扣费：没开「自动生成」时分镜就绪后不自动提交，等玩家在时间轴上点「生成本场次视频」。
   const onVideoPlanReady: OnVideoPlanReady = useCallback((sceneId) => {
-    if (videoMode === 'comfy') {
-      if (!savedComfyApiKey) return '未配置 Comfy API Key，请先在设置里配置。'
-      if (comfyAutoGenerate) void generateSceneVideo(sceneId)
-      return undefined
-    }
-    if (!savedFalApiKey) return '未配置 fal API Key，请先在设置里配置。'
-    void generateSceneVideo(sceneId)
+    if (!hasVideoKey) return `未配置 ${videoMode === 'auto' ? 'fal' : 'Comfy'} API Key，请先在设置里配置。`
+    if (autoGenerate) void generateSceneVideo(sceneId)
     return undefined
-  }, [comfyAutoGenerate, generateSceneVideo, savedComfyApiKey, savedFalApiKey, videoMode])
+  }, [autoGenerate, generateSceneVideo, hasVideoKey, videoMode])
 
   const director = useDirectorAgent(
     game,
@@ -123,7 +112,7 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
     savedDeepSeekApiKey,
     savedBigModelApiKey,
     onTraceUpdate,
-    videoMode,
+    canGeneratePortraits,
     modelId,
     thinkingEnabled,
     actors,
@@ -156,26 +145,19 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
   const switchVideoMode = (next: NonNullable<GameScene['videoMode']>) => {
     if (next === videoMode || mediaRunning || isDirectorActive(director.status)) return
     if (game.session && game.session.status !== 'awaiting_action') return
-    setVideoMode(next)
-    try {
-      localStorage.setItem(VIDEO_MODE_STORAGE_KEY, next)
-    } catch {
-      // 存不进 localStorage 时仅影响刷新后的默认值
-    }
+    onVideoModeChange(next)
   }
 
-  const switchComfyAutoGenerate = (enabled: boolean) => {
-    if (videoMode !== 'comfy' || mediaRunning || isDirectorActive(director.status)) return
+  const switchAutoGenerate = (enabled: boolean) => {
+    if (mediaRunning || isDirectorActive(director.status)) return
     if (game.session && game.session.status !== 'awaiting_action') return
-    setComfyAutoGenerate(enabled)
+    setAutoGenerate(enabled)
     try {
-      localStorage.setItem(COMFY_AUTO_GENERATE_STORAGE_KEY, enabled ? 'on' : 'off')
+      localStorage.setItem(AUTO_GENERATE_STORAGE_KEY, enabled ? 'on' : 'off')
     } catch {
       // 存不进 localStorage 时仅影响刷新后的默认值
     }
   }
-
-  const hasVideoKey = videoMode === 'auto' ? Boolean(savedFalApiKey) : Boolean(savedComfyApiKey)
 
   const generateClip = (sceneId: string, sequence: number) => {
     if (!hasVideoKey) {
@@ -223,7 +205,7 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
   }
 
   const startStory = () => {
-    if (!activeApiKey || videoMode === 'auto' && !savedFalApiKey || videoMode === 'comfy' && !savedComfyApiKey) {
+    if (!activeApiKey || !hasVideoKey) {
       onRequestApiKey()
       return
     }
@@ -292,8 +274,8 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
             mediaRunning={mediaRunning}
             onStart={startStory}
             onVideoModeChange={switchVideoMode}
-            comfyAutoGenerate={comfyAutoGenerate}
-            onComfyAutoGenerateChange={switchComfyAutoGenerate}
+            autoGenerate={autoGenerate}
+            onAutoGenerateChange={switchAutoGenerate}
             onGenerateClip={generateClip}
             onGenerateScene={generateScene}
             onRewriteSegment={rewriteSegment}
@@ -308,7 +290,7 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
               session={game.session}
               directorStatus={director.status}
               videoMode={videoMode}
-              comfyAutoGenerate={comfyAutoGenerate}
+              autoGenerate={autoGenerate}
               mediaRunning={mediaRunning}
               onChoose={director.submitChoice}
               onSubmitFreeform={director.submitFreeform}

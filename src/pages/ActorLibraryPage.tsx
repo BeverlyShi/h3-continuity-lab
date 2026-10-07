@@ -112,7 +112,7 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSe
         <div>
           <span className="actor-eyebrow"><UserRound size={14} />角色参考演员</span>
           <h1>演员库</h1>
-          <p>上传一张 16:9、纯白背景的人物三视图；导演在库中找不到合适演员时会新建演员，ComfyUI 模式下自动生成三视图。</p>
+          <p>上传一张 16:9、纯白背景的人物三视图；导演在库中找不到合适演员时会新建演员，并用当前视频模式的后端自动生成三视图。</p>
         </div>
         <button className="button button-primary" onClick={() => setFormOpen(true)}>
           <Plus size={15} />新增演员
@@ -170,10 +170,10 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSe
                   <button
                     type="button"
                     disabled={generating}
-                    title="用 ComfyUI（GPT Image 2）生成 16:9 三视图，约 $0.05 一张"
+                    title="用当前视频模式的后端（GPT Image 2）生成 16:9 三视图"
                     onClick={() => { void portraits.generatePortrait(actor.id, { force: true }) }}
                   >
-                    <Sparkles size={13} />{generating ? '生成中…' : actor.portraitError ? '重试生成' : actor.referenceImageUrl ? '重新生成' : 'ComfyUI 生成'}
+                    <Sparkles size={13} />{generating ? '生成中…' : actor.portraitError ? '重试生成' : actor.referenceImageUrl ? '重新生成' : '生成参考图'}
                   </button>
                 )}
                 <button

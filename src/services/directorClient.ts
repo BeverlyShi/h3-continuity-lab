@@ -4,13 +4,10 @@ import type {
   DirectorSessionStore,
   RewriteDirectorRequest,
 } from '../director/directorAgent.ts'
-import type { DirectorVideoMode } from '../director/directorPrompt.ts'
 import type { CastableActor, CharacterCasting, SceneCastingResult } from '../types/actor'
 import type { DirectorStreamEvent } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
 import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../types/story'
-
-export type { DirectorVideoMode }
 
 export type StreamedDirectorTurn = {
   scene: StoryScene
@@ -111,7 +108,6 @@ type StreamDirectorTurnOptions = DirectorKeys & {
   actors?: CastableActor[]
   castings?: CharacterCasting[]
   knownCharacters?: SceneCharacter[]
-  videoMode?: DirectorVideoMode
   model: DirectorModelId
   thinkingEnabled?: boolean
   signal?: AbortSignal
@@ -128,7 +124,6 @@ export async function streamDirectorTurn({
   actors = [],
   castings = [],
   knownCharacters = [],
-  videoMode,
   model,
   thinkingEnabled = false,
   signal,
@@ -149,8 +144,7 @@ export async function streamDirectorTurn({
     if (event.type === 'video_plan') video = event.video
     onEvent(event)
   }, '导演请求失败。', runtime, async (director, send, runSignal) => {
-    // 本地存档里可能残留已下线的视频模式或旧版尾帧地址，这里拦下以免把坏数据交给导演。
-    if (videoMode !== undefined && videoMode !== 'auto' && videoMode !== 'comfy') throw new Error('视频模式设置无效。')
+    // 本地存档里可能残留旧版尾帧地址，这里拦下以免把坏数据交给导演。
     if (context.previousScene && !context.previousScene.tailFrameDataUrl.startsWith('data:image/')) {
       throw new Error('故事输入无效。')
     }
@@ -164,7 +158,6 @@ export async function streamDirectorTurn({
       castings,
       knownCharacters,
       traceId,
-      videoMode,
       visionKey: optionalKey(deepseekApiKey),
       signal: runSignal,
       send,

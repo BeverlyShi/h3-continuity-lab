@@ -37,7 +37,6 @@ const baseState: DirectorTurnState = {
   traceId: 'trace-1',
   modelId: 'deepseek-v4-flash',
   thinkingEnabled: false,
-  videoMode: 'comfy',
   context: { ok: true, sessionId: 'session-1', turn: 1, input: { type: 'start' } },
   actors: [],
   castings: [],
@@ -78,6 +77,8 @@ test('readLatestTurnState returns the last director_turn_state entry', () => {
 
 test('findRewritableScene only accepts a finished scene written with the new whole-scene storyboard', () => {
   assert.deepEqual(findRewritableScene([turnStateEntry(1, baseState)]), baseState)
+  // 旧版状态带的 videoMode 字段读出时去掉。
+  assert.deepEqual(findRewritableScene([turnStateEntry(1, { ...baseState, videoMode: 'comfy' })]), baseState)
   assert.equal(findRewritableScene([turnStateEntry(1, { ...baseState, status: 'running' })]), undefined)
   assert.equal(findRewritableScene([turnStateEntry(1, { ...baseState, video: undefined })]), undefined)
   // 旧版逐段循环的状态：segments 里带 sequence、没有 opening。

@@ -90,7 +90,7 @@ test('one scene runs straight through: publish, cast, whole-scene storyboard, th
       const outcome = await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-scene', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'trace-1', videoMode: 'comfy',
+        actors, castings: [], traceId: 'trace-1',
         send: (event) => events.push(event),
       })
 
@@ -150,7 +150,7 @@ test('continuing from the previous scene requires inspecting its last frame firs
       await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-continue', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] }, previousScene },
-        actors, castings, traceId: 'trace-continue', videoMode: 'comfy',
+        actors, castings, traceId: 'trace-continue',
         visionKey: 'test-deepseek-key',
         analyze: async (input) => {
           inspected.push(input)
@@ -196,7 +196,7 @@ test('rewriting one segment only offers write_scene_video and re-emits the plan 
       await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-rewrite', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'trace-rewrite-1', videoMode: 'comfy',
+        actors, castings: [], traceId: 'trace-rewrite-1',
         send: () => {},
       })
 
@@ -250,7 +250,7 @@ test('a model that stops before delivering the storyboard is reminded once', asy
       await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-remind', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] } },
-        actors, castings, traceId: 'trace-remind', videoMode: 'comfy',
+        actors, castings, traceId: 'trace-remind',
         send: (event) => events.push(event),
       })
       assert.equal(provider.remaining(), 0)
@@ -282,7 +282,7 @@ test('a dangling tool call left by an interrupted run is closed before the next 
       await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-dangling', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] } },
-        actors, castings, traceId: 'trace-dangling', videoMode: 'comfy',
+        actors, castings, traceId: 'trace-dangling',
         send: () => {},
       })
       const entries = await readEntries('loop-dangling')
