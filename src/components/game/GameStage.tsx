@@ -30,7 +30,7 @@ import type { Actor } from '../../types/actor'
 type GameStageProps = {
   session: GameSession | null
   actors: Actor[]
-  // 正在用 ComfyUI 生成三视图的演员。
+  // 正在生成三视图的演员。
   generatingPortraitIds?: ReadonlySet<string>
   hasApiKey: boolean
   apiKeyLabel?: string
@@ -39,9 +39,9 @@ type GameStageProps = {
   mediaRunning: boolean
   onStart: () => void
   onVideoModeChange: (next: NonNullable<GameScene['videoMode']>) => void
-  // ComfyUI「自动生成」开关：打开后分镜写好即自动逐段提交，关闭时整场生成只由玩家点击触发。
-  comfyAutoGenerate: boolean
-  onComfyAutoGenerateChange: (next: boolean) => void
+  // 「自动生成」开关（两种模式共用）：打开后分镜写好即自动逐段提交，关闭时整场生成只由玩家点击触发。
+  autoGenerate: boolean
+  onAutoGenerateChange: (next: boolean) => void
   onGenerateClip: (sceneId: string, sequence: number) => void
   onGenerateScene: (sceneId: string) => void
   onRewriteSegment: (sceneId: string, sequence: number, reason: string) => Promise<boolean>
@@ -122,7 +122,7 @@ const PENDING_CLIP_STATUSES: SceneVideoClip['status'][] = ['waiting', 'pending',
 export function GameStage(props: GameStageProps) {
   const {
     session, actors, generatingPortraitIds, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoMode, mediaRunning,
-    onStart, onVideoModeChange, comfyAutoGenerate, onComfyAutoGenerateChange, onGenerateClip, onGenerateScene, onRewriteSegment,
+    onStart, onVideoModeChange, autoGenerate, onAutoGenerateChange, onGenerateClip, onGenerateScene, onRewriteSegment,
     narrativeExpanded, onNarrativeExpandedChange,
   } = props
   const [reviewSceneId, setReviewSceneId] = useState('')
@@ -353,7 +353,7 @@ export function GameStage(props: GameStageProps) {
     if (!firstUnreadyClip) return ''
     if (firstUnreadyClip.status === 'generating') return `第 ${firstUnreadyClip.sequence} 段生成中…`
     if (session?.status !== 'awaiting_video') return ''
-    if (videoMode === 'comfy' && !comfyAutoGenerate) return mediaRunning ? '正在处理视频…' : '整场分镜已写好，点时间轴上的「生成本场次视频」开始（按秒消耗 Comfy 积分）。'
+    if (!autoGenerate) return mediaRunning ? '正在处理视频…' : '整场分镜已写好，点时间轴上的「生成本场次视频」开始（按秒扣费）。'
     return `等待第 ${firstUnreadyClip.sequence} 段视频生成…`
   }
 
@@ -471,40 +471,36 @@ export function GameStage(props: GameStageProps) {
             onClick={() => onVideoModeChange('auto')}
           >
             <strong><Sparkles size={15} />API 生成</strong>
-            <span>通过已接入的 fal API 自动逐段生成并衔接视频。</span>
+            <span>通过 fal API 生成三视图和视频，整场分镜写好后逐段生成。</span>
           </button>
-          <div className={`game-video-mode-card${videoMode === 'comfy' ? ' active' : ''}`}>
-            <button
-              type="button"
-              className={`game-video-mode${videoMode === 'comfy' ? ' active' : ''}`}
-              aria-pressed={videoMode === 'comfy'}
-              disabled={modeLocked}
-              onClick={() => onVideoModeChange('comfy')}
-            >
-              <strong><Workflow size={15} />ComfyUI 生成</strong>
-              <span>用你的 Comfy Cloud 订阅跑 H3 官方工作流，整场分镜写好后逐段生成。</span>
-            </button>
-            <div className="game-video-auto">
-              <button
-                type="button"
-                className="agent-thinking-toggle"
-                role="switch"
-                aria-checked={comfyAutoGenerate}
-                disabled={videoMode !== 'comfy' || modeLocked}
-                onClick={() => onComfyAutoGenerateChange(!comfyAutoGenerate)}
-              >
-                <span className="agent-thinking-track" aria-hidden="true"><span /></span>
-                自动生成
-              </button>
-              <small>分镜写好后自动逐段提交，按秒消耗 Comfy 积分</small>
-            </div>
-          </div>
+          <button
+            type="button"
+            className={`game-video-mode${videoMode === 'comfy' ? ' active' : ''}`}
+            aria-pressed={videoMode === 'comfy'}
+            disabled={modeLocked}
+            onClick={() => onVideoModeChange('comfy')}
+          >
+            <strong><Workflow size={15} />ComfyUI 生成</strong>
+            <span>用你的 Comfy Cloud 订阅跑 H3 官方工作流，整场分镜写好后逐段生成。</span>
+          </button>
         </div>
-        <p className="game-video-mode-help">{modeForHelp === 'auto'
-          ? '导演写好整场分镜后，页面自动调用 fal 逐段生成，每段以上一段的尾帧开场。需要在设置里填写 fal API Key。'
-          : comfyAutoGenerate
-            ? '导演写好整场分镜后，页面自动逐段提交 ComfyUI 生成，按秒消耗 Comfy 积分（有参考图用 H3 Max 参考生成，没有参考图用 Turbo 文生）。需要在设置里填写 Comfy API Key。'
-            : '导演写好整场分镜后，由你点击生成，按秒消耗 Comfy 积分（有参考图用 H3 Max 参考生成，没有参考图用 Turbo 文生）。需要在设置里填写 Comfy API Key。'}</p>
+        <div className="game-video-auto">
+          <button
+            type="button"
+            className="agent-thinking-toggle"
+            role="switch"
+            aria-checked={autoGenerate}
+            disabled={modeLocked}
+            onClick={() => onAutoGenerateChange(!autoGenerate)}
+          >
+            <span className="agent-thinking-track" aria-hidden="true"><span /></span>
+            自动生成
+          </button>
+          <small>分镜写好后自动逐段提交，按秒扣费</small>
+        </div>
+        <p className="game-video-mode-help">{autoGenerate
+          ? `导演写好整场分镜后，页面调用 ${modeForHelp === 'auto' ? 'fal' : 'ComfyUI'} 自动逐段生成，按秒扣费，每段以上一段的尾帧开场。需要在设置里填写 ${modeForHelp === 'auto' ? 'fal' : 'Comfy'} API Key。`
+          : `导演写好整场分镜后，由你点击生成，页面调用 ${modeForHelp === 'auto' ? 'fal' : 'ComfyUI'} 逐段生成，按秒扣费，每段以上一段的尾帧开场。需要在设置里填写 ${modeForHelp === 'auto' ? 'fal' : 'Comfy'} API Key。`}</p>
         <div className="game-video-mode-footer">
           <small>下一场次开始时，导演可以查看本场次最后一帧，决定接着拍还是换场景。</small>
         </div>
@@ -733,17 +729,17 @@ export function GameStage(props: GameStageProps) {
                   ? `生成本场次视频（共 ${remainingSeconds} 秒）`
                   : `继续生成剩余 ${remainingClips.length} 段（共 ${remainingSeconds} 秒）`}
               </button>
-              {videoMode === 'comfy' && <small>按秒消耗 Comfy 积分，逐段生成，每段以上一段的尾帧作为画面参考。</small>}
+              <small>按秒扣费，逐段生成，每段以上一段的尾帧作为画面参考。</small>
             </div>
           )}
           {actorsGeneratingPortrait.length > 0 && (
             <p className="game-video-upload-help" role="status">
-              正在用 ComfyUI 生成参考图：{actorsGeneratingPortrait.join('、')}。生成视频时会先等参考图出来。
+              正在生成参考图：{actorsGeneratingPortrait.join('、')}。生成视频时会先等参考图出来。
             </p>
           )}
           {actorsMissingReference.length > 0 && (
             <p className="game-video-reference-warning" role="status">
-              本场次有演员还没有参考图：{actorsMissingReference.join('、')}。{videoMode === 'comfy' ? '生成视频时会先用 ComfyUI 补生成参考图（生成失败过的演员请到演员库重试），也可以直接按文字描述生成。' : '可以先到演员库生成参考图，也可以直接按文字描述生成。'}
+              本场次有演员还没有参考图：{actorsMissingReference.join('、')}。生成视频时会先自动补生成参考图（生成失败过的演员请到演员库重试），也可以直接按文字描述生成。
             </p>
           )}
           {mediaRunning && <p className="game-video-upload-help" role="status">正在处理视频…</p>}
@@ -940,9 +936,8 @@ export function GameStage(props: GameStageProps) {
               <Play size={17} fill="currentColor" />请开始故事
             </button>
             <p className="game-cost-note">{!hasApiKey ? `请先在页面右上角配置 ${apiKeyLabel} API Key。`
-              : videoMode === 'auto' ? '开始后导演写好整场分镜，页面自动调用 fal 逐段生成视频，消耗对应 API 额度。'
-                : comfyAutoGenerate ? '开始后导演写好整场分镜，页面自动逐段提交 ComfyUI 生成，按秒消耗 Comfy 积分。'
-                  : '导演写好整场分镜后，由你点击生成，按秒消耗 Comfy 积分。'}</p>
+              : autoGenerate ? `开始后导演写好整场分镜，页面自动调用 ${videoMode === 'auto' ? 'fal' : 'ComfyUI'} 逐段生成视频，按秒扣费。`
+                : `导演写好整场分镜后，由你点击生成，页面调用 ${videoMode === 'auto' ? 'fal' : 'ComfyUI'} 逐段生成，按秒扣费。`}</p>
           </div>
         </div>
       )}

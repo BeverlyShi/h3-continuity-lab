@@ -185,10 +185,10 @@ export const createFalBackend = (
 // 续查已提交的任务按 ID 前缀选后端，与当前模式无关。
 export const getBackendForJob = (jobId: string, keys: GenerationKeys): GenerationBackend => {
   if (parseJobId(jobId).backend === 'fal') {
-    if (!keys.falApiKey) throw new Error('这一段的视频任务由 API 生成（fal）提交，需要先在设置里配置 fal API Key 才能接着查询。')
+    if (!keys.falApiKey) throw new Error('这个生成任务由 API 生成（fal）提交，需要先在设置里配置 fal API Key 才能接着查询。')
     return createFalBackend(keys.falApiKey)
   }
-  if (!keys.comfyApiKey) throw new Error('这一段的视频任务由 ComfyUI 提交，需要先在设置里配置 Comfy API Key 才能接着查询。')
+  if (!keys.comfyApiKey) throw new Error('这个生成任务由 ComfyUI 提交，需要先在设置里配置 Comfy API Key 才能接着查询。')
   return createComfyBackend(keys.comfyApiKey)
 }
 

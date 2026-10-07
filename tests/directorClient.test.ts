@@ -88,7 +88,6 @@ test('runs the director in-process with the selected model key and resolves with
     traceId: 'trace-1',
     actors,
     castings,
-    videoMode: 'comfy',
     model: 'google/gemini-2.5-flash-lite',
     onEvent: (event) => { received.push(event.type) },
     runtime,
@@ -101,7 +100,6 @@ test('runs the director in-process with the selected model key and resolves with
   assert.equal(request.visionKey, undefined)
   assert.equal(request.modelId, 'google/gemini-2.5-flash-lite')
   assert.equal(request.thinkingEnabled, false)
-  assert.equal(request.videoMode, 'comfy')
   assert.equal(request.traceId, 'trace-1')
   assert.deepEqual(request.actors, actors)
   assert.deepEqual(request.castings, castings)
@@ -146,16 +144,7 @@ test('rejects with the configuration hint when the provider key is missing', asy
   }
 })
 
-test('rejects removed video modes and a previous frame that is not an image data URL', async () => {
-  for (const videoMode of ['sometimes', 'manual', 'off']) {
-    const { runtime, turns } = createFakeRuntime()
-    await assert.rejects(streamDirectorTurn({
-      deepseekApiKey: 'k', context: startContext(), traceId: 't', model: 'deepseek-v4-flash',
-      videoMode: videoMode as 'auto', onEvent: () => {}, runtime,
-    }), /视频模式设置无效/)
-    assert.equal(turns.length, 0)
-  }
-
+test('rejects a previous frame that is not an image data URL', async () => {
   const { runtime, turns } = createFakeRuntime()
   await assert.rejects(streamDirectorTurn({
     deepseekApiKey: 'k',
@@ -355,7 +344,7 @@ test('the in-browser director runs the single agent for both official providers 
       try {
         const events: DirectorStreamEvent[] = []
         await streamDirectorTurn({
-          deepseekApiKey: 'test-key', bigModelApiKey: 'test-key', model, thinkingEnabled, videoMode: 'comfy',
+          deepseekApiKey: 'test-key', bigModelApiKey: 'test-key', model, thinkingEnabled,
           traceId: `${model}-${thinkingEnabled}`, actors: [], castings: [],
           context: startContext(`browser-${model.replaceAll('/', '-')}-${thinkingEnabled}`),
           onEvent: (event) => { events.push(event) },
@@ -411,7 +400,7 @@ test('a scene continues from the previous frame in the browser, and a rewrite re
   try {
     const events: DirectorStreamEvent[] = []
     await streamDirectorTurn({
-      deepseekApiKey: 'test-key', model: 'deepseek-v4-flash', videoMode: 'comfy', traceId: 'browser-scene-1', actors, castings: [],
+      deepseekApiKey: 'test-key', model: 'deepseek-v4-flash', traceId: 'browser-scene-1', actors, castings: [],
       context: {
         ok: true, sessionId: 'browser-scene', turn: 2, input: { type: 'choice', choice: publishedScene.scene.choices[0] },
         previousScene: { tailFrameDataUrl: 'data:image/jpeg;base64,AAAA', characters: publishedScene.characters },

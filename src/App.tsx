@@ -19,8 +19,21 @@ import {
   saveDeepSeekApiKey,
   saveOpenRouterApiKey,
 } from './services/localStorage'
+import type { GameScene } from './types/game'
 
 type Workspace = 'game' | 'actors' | 'trace'
+type VideoMode = NonNullable<GameScene['videoMode']>
+
+const VIDEO_MODE_STORAGE_KEY = 'palace-video-mode'
+
+const loadVideoMode = (): VideoMode => {
+  try {
+    // 旧版的「上传视频」「仅文字」已下线，连同无值一律落到 ComfyUI。
+    return localStorage.getItem(VIDEO_MODE_STORAGE_KEY) === 'auto' ? 'auto' : 'comfy'
+  } catch {
+    return 'comfy'
+  }
+}
 
 function App() {
   const [workspace, setWorkspace] = useState<Workspace>('game')
@@ -32,7 +45,18 @@ function App() {
   const [isApiDialogOpen, setIsApiDialogOpen] = useState(false)
   const { traces, updateTrace } = useAgentTraces()
   const actorLibrary = useActorLibrary()
-  const portraits = useActorPortraits(savedComfyApiKey, actorLibrary)
+  // 视频模式同时决定演员库生成参考图用哪个后端，所以放在这里；切换前的守卫在 GamePage。
+  const [videoMode, setVideoMode] = useState(loadVideoMode)
+  const portraits = useActorPortraits({ videoMode, falApiKey: savedApiKey, comfyApiKey: savedComfyApiKey }, actorLibrary)
+
+  const changeVideoMode = (next: VideoMode) => {
+    setVideoMode(next)
+    try {
+      localStorage.setItem(VIDEO_MODE_STORAGE_KEY, next)
+    } catch {
+      // 存不进 localStorage 时仅影响刷新后的默认值
+    }
+  }
 
   const updateApiKeys = ({ falApiKey, comfyApiKey, openRouterApiKey, deepSeekApiKey, bigModelApiKey }: ApiKeys) => {
     setSavedComfyApiKey(comfyApiKey)
@@ -120,6 +144,8 @@ function App() {
           savedOpenRouterApiKey={savedOpenRouterApiKey}
           savedDeepSeekApiKey={savedDeepSeekApiKey}
           savedBigModelApiKey={savedBigModelApiKey}
+          videoMode={videoMode}
+          onVideoModeChange={changeVideoMode}
           onTraceUpdate={updateTrace}
           onRequestApiKey={() => setIsApiDialogOpen(true)}
           actors={actorLibrary.actors}

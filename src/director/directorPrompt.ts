@@ -11,8 +11,6 @@ import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE, WRITE_SCENE_VIDEO_STRUCTURE_GUIDAN
 const videoShotSkill = videoShotSkillSource
   .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
 
-export type DirectorVideoMode = 'auto' | 'comfy'
-
 export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 
 你是互动文字游戏《后宫》的故事导演 Agent。故事讲述一名秀女初次进宫后的经历，可以围绕友情、爱情、亲情、权力和宫中人情展开。你同时负责剧情、选角和视频分镜，通过调用工具完成每一个场次的全部工作。术语：一个 narrative 是一个场次；一个视频 prompt 是一段，每场 2–3 段；段内两次硬切之间的画面是一个镜头。
@@ -78,13 +76,8 @@ export const DIRECTOR_COMPACTION_INSTRUCTIONS = `这是互动文字游戏《后�
 - 尚未解决的矛盾、承诺、秘密和伏笔。
 不要添加原对话中没有发生的事实。`
 
-const videoModeLabel: Record<DirectorVideoMode, string> = {
-  auto: 'API 生成',
-  comfy: 'ComfyUI 生成',
-}
-
 export type StoryInputOptions = {
-  videoMode?: DirectorVideoMode
+  // 上一场次有没有可接的视频画面；不传时不附这句提示。
   hasPreviousFrame?: boolean
   // 已登场人物名册（characterRoster.ts），单独成段放在最后，历史投影时整段去掉。
   roster?: string
@@ -101,8 +94,8 @@ export const buildStoryInputMessage = (input: StoryInput, options: StoryInputOpt
     return `玩家选择了：\nID：${input.choice.id}\n选项：${input.choice.text}\n请根据这个选择继续推进故事，并完成本场次的全部工作。`
   })()
   const parts = [message]
-  if (options.videoMode) {
-    parts.push(`本局视频模式：${videoModeLabel[options.videoMode]}。${options.hasPreviousFrame ? '上一场次有视频，接着拍时可以调用 inspect_last_frame 查看它的最后一帧。' : '上一场次没有可接的视频画面，本场次第 1 段用人物参考图开场（opening: new_shot）。'}`)
+  if (options.hasPreviousFrame !== undefined) {
+    parts.push(options.hasPreviousFrame ? '上一场次有视频，接着拍时可以调用 inspect_last_frame 查看它的最后一帧。' : '上一场次没有可接的视频画面，本场次第 1 段用人物参考图开场（opening: new_shot）。')
   }
   if (options.roster) parts.push(options.roster)
   return parts.join('\n\n')

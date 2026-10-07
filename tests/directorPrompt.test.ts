@@ -60,23 +60,23 @@ test('the agent exposes the scene tools to one Agent instance without forcing to
   assert.doesNotMatch(source, /tool_choice|narrativeReview|DIRECTOR_VIDEO_SYSTEM_PROMPT|generate_segment|finish_turn/)
 })
 
-test('the scene message carries the player input, video mode and whether a previous frame exists', () => {
-  const choice = buildStoryInputMessage({ type: 'choice', choice: { id: '2', text: '询问身后的秀女' } }, { videoMode: 'auto' })
+test('the scene message carries the player input and whether a previous frame exists, but not the video mode', () => {
+  const choice = buildStoryInputMessage({ type: 'choice', choice: { id: '2', text: '询问身后的秀女' } }, { hasPreviousFrame: false })
   assert.match(choice, /ID：2/)
   assert.match(choice, /询问身后的秀女/)
-  assert.match(choice, /本局视频模式：API 生成/)
+  assert.doesNotMatch(choice, /视频模式/)
   assert.match(choice, /上一场次没有可接的视频画面.*new_shot/)
 
-  const withFrame = buildStoryInputMessage({ type: 'freeform', text: '走向宫门' }, { videoMode: 'comfy', hasPreviousFrame: true })
+  const withFrame = buildStoryInputMessage({ type: 'freeform', text: '走向宫门' }, { hasPreviousFrame: true })
   assert.match(withFrame, /玩家决定自由行动：走向宫门/)
-  assert.match(withFrame, /本局视频模式：ComfyUI 生成/)
+  assert.doesNotMatch(withFrame, /视频模式/)
   assert.match(withFrame, /可以调用 inspect_last_frame/)
 
-  const start = buildStoryInputMessage({ type: 'start' }, { videoMode: 'comfy' })
+  const start = buildStoryInputMessage({ type: 'start' }, { hasPreviousFrame: false })
   assert.match(start, /请开始故事/)
   assert.doesNotMatch(start, /仅文字|上传视频|不提供 inspect_last_frame/)
   assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /仅文字/)
-  assert.doesNotMatch(buildStoryInputMessage({ type: 'start' }), /视频模式/)
+  assert.doesNotMatch(buildStoryInputMessage({ type: 'start' }), /上一场次/)
 })
 
 test('the rewrite message names the segment, the reason and the current storyboard', () => {

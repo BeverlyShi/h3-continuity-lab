@@ -1,9 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import {
-  streamDirectorRewrite,
-  streamDirectorTurn,
-  type DirectorVideoMode,
-} from '../services/directorClient'
+import { streamDirectorRewrite, streamDirectorTurn } from '../services/directorClient'
 import { toImageDataUrl } from '../services/dataUrl'
 import { getDirectorModelProvider, type DirectorModelId } from '../config/directorModels'
 import { describeStoryInput } from '../stories/palace'
@@ -38,11 +34,12 @@ export function useDirectorAgent(
   deepseekApiKey: string,
   bigModelApiKey: string,
   onTraceUpdate: (update: AgentTraceUpdate) => void,
-  videoMode: DirectorVideoMode,
+  // 当前视频模式的 key 已配置：新建演员会立即生成三视图。
+  canGeneratePortraits: boolean,
   modelId: DirectorModelId,
   thinkingEnabled: boolean,
   actors: Actor[],
-  // 本场次选角落定：新建演员入库，ComfyUI 模式下给缺参考图的演员生成三视图。
+  // 本场次选角落定：新建演员入库，给缺参考图的演员生成三视图。
   onSceneCast: (casting: SceneCastingResult) => Promise<void> | void,
   onVideoPlanReady?: OnVideoPlanReady,
 ) {
@@ -83,8 +80,8 @@ export function useDirectorAgent(
         })
         if (created.length) {
           const names = created.map((actor) => actor.name).join('、')
-          append('status', videoMode === 'comfy'
-            ? `新建演员 ${names}，正在用 ComfyUI 生成三视图参考图。`
+          append('status', canGeneratePortraits
+            ? `新建演员 ${names}，正在生成三视图参考图。`
             : `新建演员 ${names}，待生成参考图，请到演员库生成或上传。`)
         }
         if (sceneId) game.applySceneCasting(sceneId, event.casting, actors)
@@ -138,7 +135,7 @@ export function useDirectorAgent(
       getVideoPlan: () => videoPlan,
       getSkipReason: () => videoSkipReason,
     }
-  }, [actors, append, game, onSceneCast, onTraceUpdate, videoMode])
+  }, [actors, append, canGeneratePortraits, game, onSceneCast, onTraceUpdate])
 
   const notifyVideoPlanReady = useCallback((plan: { sceneId: string; fromSequence: number } | undefined) => {
     if (!plan) return
@@ -214,7 +211,6 @@ export function useDirectorAgent(
         actors: castableActors(),
         castings: game.getCastings(),
         knownCharacters: game.getSessionSnapshot()?.characters ?? [],
-        videoMode,
         model: modelId,
         thinkingEnabled,
         onEvent: handler.handleEvent,
@@ -243,7 +239,7 @@ export function useDirectorAgent(
     } finally {
       runningRef.current = false
     }
-  }, [append, attachPreviousScene, bigModelApiKey, castableActors, createEventHandler, deepseekApiKey, game, modelId, notifyVideoPlanReady, onTraceUpdate, openRouterApiKey, requireApiKey, thinkingEnabled, videoMode])
+  }, [append, attachPreviousScene, bigModelApiKey, castableActors, createEventHandler, deepseekApiKey, game, modelId, notifyVideoPlanReady, onTraceUpdate, openRouterApiKey, requireApiKey, thinkingEnabled])
 
   const rewriteSegment = useCallback(async (sceneId: string, sequence: number, reason: string) => {
     if (runningRef.current) return false

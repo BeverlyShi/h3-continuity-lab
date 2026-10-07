@@ -4,7 +4,6 @@ import type { CastableActor, CharacterCasting } from '../types/actor.ts'
 import type { DirectorTurnContext } from '../types/game.ts'
 import type { SceneCharacter, ScenePublish, TailFrameVisualState } from '../types/story.ts'
 import type { CastingBookSnapshot } from './castSceneTool.ts'
-import type { DirectorVideoMode } from './directorPrompt.ts'
 import { toDurableValue } from './directorTrace.ts'
 import type { SceneVideoDraft } from './writeSceneVideoTool.ts'
 
@@ -17,7 +16,6 @@ export type DirectorTurnState = {
   traceId: string
   modelId: DirectorModelId
   thinkingEnabled: boolean
-  videoMode: DirectorVideoMode
   context: DirectorTurnContext
   actors: CastableActor[]
   castings: CharacterCasting[]
@@ -60,7 +58,10 @@ export const findRewritableScene = (entries: readonly Entry[]): DirectorTurnStat
   if (!latest || latest.status !== 'finished' || !latest.scenePublish || !latest.video?.opening || !latest.video.segments?.length) {
     return undefined
   }
-  return latest as DirectorTurnState
+  // 旧版状态带 videoMode 字段，已不再使用，去掉以免随重写再次写回。
+  const state = { ...latest } as DirectorTurnState & { videoMode?: unknown }
+  delete state.videoMode
+  return state
 }
 
 export type UnresolvedToolCall = { toolCallId: string; toolName: string; arguments: unknown }
