@@ -5,11 +5,11 @@
     "inputs": {
       "model": "MiniMax H3 Max",
       "model.prompt": "",
-      "model.resolution": "768P",
+      "model.resolution": "480P",
       "model.ratio": "16:9",
       "model.duration": 5,
       "model.prompt_expansion_mode": "balanced",
-      "model.reference_detail": "high",
+      "model.reference_detail": "standard",
       "seed": 0,
       "watermark": false
     }

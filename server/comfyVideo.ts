@@ -1,7 +1,7 @@
 import h3MaxR2v from './comfy/workflows/h3_max_r2v.json' with { type: 'json' }
 import h3MaxTurboT2v from './comfy/workflows/h3_max_turbo_t2v.json' with { type: 'json' }
 
-// 工作流取自 Comfy 官方 H3 模板（API 格式），程序只填 prompt、秒数、种子和图片，其余参数保持模板原值。
+// 工作流取自 Comfy 官方 H3 模板（API 格式），分辨率改成最低档 480P、参考细节改成 standard 换出片速度；程序只填 prompt、秒数、种子和图片，其余参数保持模板原值。
 export const COMFY_BASE_URL = 'https://cloud.comfy.org'
 
 type WorkflowNode = { class_type: string; inputs: Record<string, unknown>; _meta?: { title: string } }
