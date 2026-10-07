@@ -15,7 +15,8 @@ import { useSceneVideo } from '../hooks/useSceneVideo'
 import { palaceStory } from '../stories/palace'
 import { isDirectorActive } from '../services/directorStatus'
 import type { AgentTraceUpdate } from '../types/director'
-import type { Actor, CreatedActor } from '../types/actor'
+import type { ActorPortraits } from '../hooks/useActorPortraits'
+import type { Actor, CreatedActor, SceneCastingResult } from '../types/actor'
 import type { GameScene } from '../types/game'
 
 type GamePageProps = {
@@ -27,7 +28,10 @@ type GamePageProps = {
   onTraceUpdate: (update: AgentTraceUpdate) => void
   onRequestApiKey: () => void
   actors: Actor[]
+  // 最新演员库：异步流程（等参考图、逐段生成）里读，不受渲染闭包影响。
+  getActors: () => Actor[]
   onActorsCreated: (created: CreatedActor[]) => Promise<void> | void
+  portraits: Pick<ActorPortraits, 'generatePortrait' | 'ensurePortraits' | 'waitForPortraits' | 'generatingIds'>
 }
 
 const DIRECTOR_MODEL_STORAGE_KEY = 'palace-director-model'
@@ -69,7 +73,7 @@ const loadComfyAutoGenerate = () => {
   }
 }
 
-export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors, onActorsCreated }: GamePageProps) {
+export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors, getActors, onActorsCreated, portraits }: GamePageProps) {
   const game = useGameSession()
   const [modelId, setModelId] = useState<DirectorModelId>(loadDirectorModel)
   const [thinkingEnabled, setThinkingEnabled] = useState(loadDirectorThinking)
@@ -87,9 +91,19 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
     videoMode,
     autoGenerate,
     game,
-    actors,
+    getActors,
+    // ComfyUI 模式先补齐缺的参考图；API 模式只等已在生成的（玩家在演员库手动点的）。
+    preparePortraits: videoMode === 'comfy' && savedComfyApiKey ? portraits.ensurePortraits : portraits.waitForPortraits,
   })
   const { generateScene: generateSceneVideo } = sceneVideo
+  const { generatePortrait } = portraits
+
+  // 选角落定：新建演员先入库；ComfyUI 模式下本场次所有还没有参考图的演员（新建的和库里待生成的）立即生成三视图。
+  const onSceneCast = useCallback(async (casting: SceneCastingResult) => {
+    if (casting.createdActors?.length) await onActorsCreated(casting.createdActors)
+    if (videoMode !== 'comfy' || !savedComfyApiKey) return
+    for (const actorId of new Set(casting.castings.map((item) => item.actorId))) void generatePortrait(actorId)
+  }, [generatePortrait, onActorsCreated, savedComfyApiKey, videoMode])
 
   // ComfyUI 模式按秒扣积分：没开「自动生成」时分镜就绪后不自动提交，等玩家在时间轴上点「生成本场次视频」。
   const onVideoPlanReady: OnVideoPlanReady = useCallback((sceneId) => {
@@ -113,7 +127,7 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
     modelId,
     thinkingEnabled,
     actors,
-    onActorsCreated,
+    onSceneCast,
     onVideoPlanReady,
   )
 
@@ -270,6 +284,7 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
             key={game.session?.currentScene?.id ?? 'empty-stage'}
             session={game.session}
             actors={actors}
+            generatingPortraitIds={portraits.generatingIds}
             hasApiKey={Boolean(activeApiKey)}
             apiKeyLabel={apiKeyLabel}
             directorStatus={director.status}

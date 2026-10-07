@@ -2,7 +2,7 @@ import type { Entry, JsonlSessionMetadata, Session } from '@earendil-works/pi-ag
 import type { DirectorModelId } from '../config/directorModels.ts'
 import type { CastableActor, CharacterCasting } from '../types/actor.ts'
 import type { DirectorTurnContext } from '../types/game.ts'
-import type { ScenePublish, TailFrameVisualState } from '../types/story.ts'
+import type { SceneCharacter, ScenePublish, TailFrameVisualState } from '../types/story.ts'
 import type { CastingBookSnapshot } from './castSceneTool.ts'
 import type { DirectorVideoMode } from './directorPrompt.ts'
 import { toDurableValue } from './directorTrace.ts'
@@ -21,6 +21,8 @@ export type DirectorTurnState = {
   context: DirectorTurnContext
   actors: CastableActor[]
   castings: CharacterCasting[]
+  // 本局此前登场过的全部人物：名册和人物 id 冲突检查用；旧版状态没有这个字段。
+  knownCharacters?: SceneCharacter[]
   startSeq: number
   startedAt: number
   scenePublish?: ScenePublish

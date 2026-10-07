@@ -2,11 +2,11 @@ import {
   COMFY_BASE_URL,
   createComfyClient,
   validateComfySegmentRequest,
+  type ComfyJobStatus,
   type ComfySegmentRequest,
-  type ComfySegmentStatus,
 } from '../comfy/comfyVideo.ts'
 
-export type { ComfySegmentRequest, ComfySegmentStatus }
+export type { ComfyJobStatus, ComfySegmentRequest }
 
 // 浏览器直连 cloud.comfy.org 会被跨域拦截：业务逻辑在浏览器里跑，请求经同源转发层 /api/comfy/* 原样转给 Comfy Cloud。
 export const COMFY_PROXY_PREFIX = '/api/comfy/'
@@ -24,10 +24,18 @@ const proxyFetch = createComfyProxyFetch((input, init) => fetch(input, init))
 export const submitComfySegment = async (apiKey: string, request: ComfySegmentRequest): Promise<{ jobId: string }> =>
   await createComfyClient(apiKey, proxyFetch).submitSegment(validateComfySegmentRequest(request))
 
-export const getComfySegment = async (apiKey: string, jobId: string): Promise<ComfySegmentStatus> =>
-  await createComfyClient(apiKey, proxyFetch).getSegment(jobId)
+export const submitComfyPortrait = async (apiKey: string, prompt: string): Promise<{ jobId: string }> =>
+  await createComfyClient(apiKey, proxyFetch).submitPortrait(prompt)
+
+export const getComfyJobStatus = async (apiKey: string, jobId: string): Promise<ComfyJobStatus> =>
+  await createComfyClient(apiKey, proxyFetch).getJobStatus(jobId)
 
 export const fetchComfyVideo = async (apiKey: string, jobId: string) => {
   const response = await createComfyClient(apiKey, proxyFetch).fetchVideo(jobId)
+  return await response.blob()
+}
+
+export const fetchComfyImage = async (apiKey: string, jobId: string) => {
+  const response = await createComfyClient(apiKey, proxyFetch).fetchImage(jobId)
   return await response.blob()
 }

@@ -15,7 +15,7 @@ import type {
 } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
 import type { StoryChoice } from '../types/story'
-import type { Actor, CreatedActor } from '../types/actor'
+import type { Actor, SceneCastingResult } from '../types/actor'
 import type { useGameSession } from './useGameSession'
 
 type GameController = ReturnType<typeof useGameSession>
@@ -42,7 +42,8 @@ export function useDirectorAgent(
   modelId: DirectorModelId,
   thinkingEnabled: boolean,
   actors: Actor[],
-  onActorsCreated: (created: CreatedActor[]) => Promise<void> | void,
+  // 本场次选角落定：新建演员入库，ComfyUI 模式下给缺参考图的演员生成三视图。
+  onSceneCast: (casting: SceneCastingResult) => Promise<void> | void,
   onVideoPlanReady?: OnVideoPlanReady,
 ) {
   const [messages, setMessages] = useState<DirectorChatMessage[]>([])
@@ -76,11 +77,15 @@ export function useDirectorAgent(
       if (event.type === 'cast') {
         const sceneId = getSceneId()
         const created = event.casting.createdActors ?? []
+        const casting = event.casting
+        void (async () => { await onSceneCast(casting) })().catch((reason: unknown) => {
+          append('error', `新建演员入库失败：${reason instanceof Error ? reason.message : '未知错误'}`)
+        })
         if (created.length) {
-          void (async () => { await onActorsCreated(created) })().catch((reason: unknown) => {
-            append('error', `新建演员入库失败：${reason instanceof Error ? reason.message : '未知错误'}`)
-          })
-          append('status', `新建演员 ${created.map((actor) => actor.name).join('、')}，待生成参考图，请到演员库复制 prompt 生成后上传。`)
+          const names = created.map((actor) => actor.name).join('、')
+          append('status', videoMode === 'comfy'
+            ? `新建演员 ${names}，正在用 ComfyUI 生成三视图参考图。`
+            : `新建演员 ${names}，待生成参考图，请到演员库生成或上传。`)
         }
         if (sceneId) game.applySceneCasting(sceneId, event.casting, actors)
         append(
@@ -133,7 +138,7 @@ export function useDirectorAgent(
       getVideoPlan: () => videoPlan,
       getSkipReason: () => videoSkipReason,
     }
-  }, [actors, append, game, onActorsCreated, onTraceUpdate])
+  }, [actors, append, game, onSceneCast, onTraceUpdate, videoMode])
 
   const notifyVideoPlanReady = useCallback((plan: { sceneId: string; fromSequence: number } | undefined) => {
     if (!plan) return
@@ -208,6 +213,7 @@ export function useDirectorAgent(
         traceId,
         actors: castableActors(),
         castings: game.getCastings(),
+        knownCharacters: game.getSessionSnapshot()?.characters ?? [],
         videoMode,
         model: modelId,
         thinkingEnabled,

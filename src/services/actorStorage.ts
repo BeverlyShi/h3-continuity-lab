@@ -53,6 +53,8 @@ export const loadActors = async () => {
       ...(referenceImageUrl ? { referenceImageUrl } : {}),
       ...(stored.appearance ? { appearance: stored.appearance } : {}),
       ...(stored.imagePrompt ? { imagePrompt: stored.imagePrompt } : {}),
+      ...(stored.portraitJobId ? { portraitJobId: stored.portraitJobId } : {}),
+      ...(stored.portraitError ? { portraitError: stored.portraitError } : {}),
       createdAt: stored.createdAt,
     } satisfies Actor]
   }).sort((left, right) => left.createdAt - right.createdAt)

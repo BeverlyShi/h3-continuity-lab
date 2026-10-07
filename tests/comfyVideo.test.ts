@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   buildComfyWorkflow,
+  buildPortraitWorkflow,
   chooseWorkflowKind,
   createComfyClient,
   validateComfySegmentRequest,
@@ -69,10 +70,10 @@ test('submits with the key in extra_data and maps job states', async () => {
   assert.equal(body.prompt['11'].inputs.image, 'up.png')
   assert.equal((submit.init?.headers as Record<string, string>)['X-API-Key'], 'comfyui-test')
 
-  assert.deepEqual(await client.getSegment('job-1'), { status: 'running' })
-  assert.deepEqual(await client.getSegment('job-1'), { status: 'running' })
-  assert.deepEqual(await client.getSegment('job-1'), { status: 'completed' })
-  assert.deepEqual(await client.getSegment('job-1'), { status: 'failed', error: 'Comfy 生成失败：内容审核未通过' })
+  assert.deepEqual(await client.getJobStatus('job-1'), { status: 'running' })
+  assert.deepEqual(await client.getJobStatus('job-1'), { status: 'running' })
+  assert.deepEqual(await client.getJobStatus('job-1'), { status: 'completed' })
+  assert.deepEqual(await client.getJobStatus('job-1'), { status: 'failed', error: 'Comfy 生成失败：内容审核未通过' })
 })
 
 test('explains payment errors from Comfy', async () => {
@@ -81,4 +82,44 @@ test('explains payment errors from Comfy', async () => {
     createComfyClient('k', fakeFetch).submitSegment({ prompt: 'p', seconds: 5 }),
     /HTTP 402（积分不足）：insufficient credits/,
   )
+})
+
+test('the portrait workflow is GPT Image 2 medium at 16:9 and only takes prompt and seed', () => {
+  const workflow = buildPortraitWorkflow({ prompt: '三视图', seed: 9 })
+  assert.equal(workflow['1'].class_type, 'OpenAIGPTImageNodeV2')
+  assert.equal(workflow['1'].inputs.model, 'gpt-image-2')
+  assert.equal(workflow['1'].inputs['model.quality'], 'medium')
+  assert.equal(workflow['1'].inputs['model.size'], '2048x1152')
+  assert.equal(workflow['1'].inputs.prompt, '三视图')
+  assert.equal(workflow['1'].inputs.seed, 9)
+  assert.deepEqual(workflow['2'].inputs.images, ['1', 0])
+  assert.equal(buildPortraitWorkflow({ prompt: 'other', seed: 1 })['1'].inputs.prompt, 'other')
+})
+
+test('submits a portrait job and downloads the image output, not a video', async () => {
+  const calls: { url: string; init?: RequestInit }[] = []
+  const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const href = String(url)
+    calls.push({ url: href, init })
+    if (href.endsWith('/api/prompt')) return jsonResponse({ prompt_id: 'job-img', node_errors: {} })
+    if (href.includes('/api/jobs/')) {
+      return jsonResponse({ status: 'success', outputs: { 2: { images: [{ filename: 'harem_actor_portrait_00001_.png', subfolder: 'image', type: 'output' }] } } })
+    }
+    if (href.includes('/api/view?')) return new Response('png-bytes', { headers: { 'Content-Type': 'image/png' } })
+    throw new Error(`unexpected ${href}`)
+  }) as typeof fetch
+
+  const client = createComfyClient('comfyui-test', fakeFetch)
+  assert.deepEqual(await client.submitPortrait('三视图'), { jobId: 'job-img' })
+  const body = JSON.parse(String(calls[0].init?.body))
+  assert.equal(body.extra_data.api_key_comfy_org, 'comfyui-test')
+  assert.equal(body.prompt['1'].inputs.prompt, '三视图')
+
+  const image = await client.fetchImage('job-img')
+  assert.equal(await image.text(), 'png-bytes')
+  const view = new URL(calls.at(-1)!.url)
+  assert.equal(view.searchParams.get('filename'), 'harem_actor_portrait_00001_.png')
+  assert.equal(view.searchParams.get('subfolder'), 'image')
+  await assert.rejects(client.fetchVideo('job-img'), /没有产出视频文件/)
+  await assert.rejects(client.submitPortrait('  '), /缺少生图 prompt/)
 })

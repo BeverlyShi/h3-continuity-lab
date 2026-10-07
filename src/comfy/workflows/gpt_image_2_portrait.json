@@ -1,0 +1,25 @@
+{
+  "1": {
+    "class_type": "OpenAIGPTImageNodeV2",
+    "_meta": { "title": "演员三视图 GPT Image 2" },
+    "inputs": {
+      "prompt": "",
+      "model": "gpt-image-2",
+      "model.size": "2048x1152",
+      "model.custom_width": 1024,
+      "model.custom_height": 1024,
+      "model.background": "opaque",
+      "model.quality": "medium",
+      "n": 1,
+      "seed": 0
+    }
+  },
+  "2": {
+    "class_type": "SaveImage",
+    "_meta": { "title": "保存图片" },
+    "inputs": {
+      "images": ["1", 0],
+      "filename_prefix": "image/harem_actor_portrait"
+    }
+  }
+}

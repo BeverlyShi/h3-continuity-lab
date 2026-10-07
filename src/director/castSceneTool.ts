@@ -202,7 +202,7 @@ export const createCastSceneTool = (
 ): AgentTool<typeof castSceneSchema, SceneCastingResult> => ({
   name: 'cast_scene',
   label: '为场景选择演员',
-  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。演员库没有合适人选时，可通过 create { name, appearance } 新建演员，程序会生成三视图 prompt 交给用户生成图片；只写人物身份层外观。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。有台词的人物必须指定演员或新建，不能设为 null。提交后本场次所有人物都必须有选角决定。',
+  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。演员库没有合适人选时，可通过 create { name, appearance } 新建演员，程序会据此生成三视图参考图；只写人物身份层外观。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。有台词的人物必须指定演员或新建，不能设为 null。提交后本场次所有人物都必须有选角决定。',
   parameters: castSceneSchema,
   executionMode: 'sequential',
   execute: async (_toolCallId, input) => {

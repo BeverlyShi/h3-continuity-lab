@@ -1,5 +1,6 @@
 import h3MaxR2v from './workflows/h3_max_r2v.json' with { type: 'json' }
 import h3MaxTurboT2v from './workflows/h3_max_turbo_t2v.json' with { type: 'json' }
+import gptImage2Portrait from './workflows/gpt_image_2_portrait.json' with { type: 'json' }
 
 // 工作流取自 Comfy 官方 H3 模板（API 格式），分辨率改成最低档 480P、参考细节改成 standard 换出片速度；程序只填 prompt、秒数、种子和图片，其余参数保持模板原值。
 export const COMFY_BASE_URL = 'https://cloud.comfy.org'
@@ -45,6 +46,17 @@ export const validateComfySegmentRequest = (value: unknown): ComfySegmentRequest
     seconds: body.seconds!,
     ...(body.referenceImages?.length ? { referenceImages: body.referenceImages } : {}),
   }
+}
+
+const PORTRAIT_NODE_ID = '1'
+
+// 演员三视图：GPT Image 2 medium，2048x1152（16:9）写死在模板里，程序只填 prompt 和种子。
+export const buildPortraitWorkflow = (input: { prompt: string; seed: number }): ComfyWorkflow => {
+  const workflow: ComfyWorkflow = structuredClone(gptImage2Portrait)
+  const image = workflow[PORTRAIT_NODE_ID].inputs
+  image.prompt = input.prompt
+  image.seed = input.seed
+  return workflow
 }
 
 // uploadedImages 是已上传到 Comfy 的文件名，r2v 依次接入 image_1..image_N。
@@ -95,11 +107,14 @@ const comfyError = async (response: Response, action: string) => {
 
 export type ComfyClient = {
   submitSegment: (request: ComfySegmentRequest) => Promise<{ jobId: string; kind: ComfyWorkflowKind }>
-  getSegment: (jobId: string) => Promise<ComfySegmentStatus>
+  submitPortrait: (prompt: string) => Promise<{ jobId: string }>
+  // 视频段和演员三视图共用同一套任务状态。
+  getJobStatus: (jobId: string) => Promise<ComfyJobStatus>
   fetchVideo: (jobId: string) => Promise<Response>
+  fetchImage: (jobId: string) => Promise<Response>
 }
 
-export type ComfySegmentStatus =
+export type ComfyJobStatus =
   | { status: 'running' }
   | { status: 'failed'; error: string }
   | { status: 'completed' }
@@ -116,13 +131,18 @@ type JobDetail = {
 
 type OutputFile = { filename: string; subfolder?: string; type?: string; mime_type?: string }
 
-const findVideoFile = (job: JobDetail): OutputFile | undefined =>
+const OUTPUT_PATTERNS = {
+  video: { mime: /^video\//, extension: /\.(mp4|webm|mov|mkv)$/i },
+  image: { mime: /^image\//, extension: /\.(png|jpe?g|webp)$/i },
+}
+
+const findOutputFile = (job: JobDetail, kind: keyof typeof OUTPUT_PATTERNS): OutputFile | undefined =>
   Object.values(job.outputs ?? {})
     .flatMap((output) => Object.values(output))
     .flatMap((value) => Array.isArray(value) ? value : [])
     .find((file): file is OutputFile =>
       Boolean(file) && typeof file === 'object' && typeof (file as OutputFile).filename === 'string'
-      && (/^video\//.test((file as OutputFile).mime_type ?? '') || /\.(mp4|webm|mov|mkv)$/i.test((file as OutputFile).filename)))
+      && (OUTPUT_PATTERNS[kind].mime.test((file as OutputFile).mime_type ?? '') || OUTPUT_PATTERNS[kind].extension.test((file as OutputFile).filename)))
 
 export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetch): ComfyClient => {
   const headers = { 'X-API-Key': apiKey }
@@ -146,6 +166,35 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
     return await response.json() as JobDetail
   }
 
+  const submitWorkflow = async (workflow: ComfyWorkflow) => {
+    const response = await fetchImpl(`${COMFY_BASE_URL}/api/prompt`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      // H3、GPT Image 都是合作节点，提交时还要在 extra_data 里带上同一个 key 才会计费到账户。
+      body: JSON.stringify({ prompt: workflow, extra_data: { api_key_comfy_org: apiKey } }),
+    })
+    if (!response.ok) throw await comfyError(response, '提交工作流')
+    const json = await response.json() as { prompt_id?: string; node_errors?: Record<string, unknown> }
+    if (json.node_errors && Object.keys(json.node_errors).length) {
+      throw new Error(`Comfy 工作流校验失败：${JSON.stringify(json.node_errors).slice(0, 300)}`)
+    }
+    if (!json.prompt_id) throw new Error('Comfy 没有返回任务 ID。')
+    return json.prompt_id
+  }
+
+  // /api/view 返回 302 到短时签名地址；转发层不带 key 去取签名地址，浏览器这里直接拿到文件。
+  const fetchOutput = async (jobId: string, kind: keyof typeof OUTPUT_PATTERNS) => {
+    const job = await getJob(jobId)
+    const file = findOutputFile(job, kind)
+    if (!file) throw new Error(kind === 'video' ? 'Comfy 任务没有产出视频文件。' : 'Comfy 任务没有产出图片文件。')
+    const query = new URLSearchParams({ filename: file.filename, subfolder: file.subfolder ?? '', type: file.type ?? 'output' })
+    const response = await fetchImpl(`${COMFY_BASE_URL}/api/view?${query}`, { headers })
+    if (!response.ok) throw await comfyError(response, kind === 'video' ? '下载视频' : '下载图片')
+    return response
+  }
+
+  const randomSeed = (max: number) => Math.floor(Math.random() * max)
+
   return {
     async submitSegment(request) {
       const kind = chooseWorkflowKind(request)
@@ -154,25 +203,18 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
       const workflow = buildComfyWorkflow(kind, {
         prompt: request.prompt,
         seconds: request.seconds,
-        seed: Math.floor(Math.random() * 4_294_967_295),
+        seed: randomSeed(4_294_967_295),
         uploadedImages,
       })
-      const response = await fetchImpl(`${COMFY_BASE_URL}/api/prompt`, {
-        method: 'POST',
-        headers: { ...headers, 'Content-Type': 'application/json' },
-        // H3 是合作节点，提交时还要在 extra_data 里带上同一个 key 才会计费到账户。
-        body: JSON.stringify({ prompt: workflow, extra_data: { api_key_comfy_org: apiKey } }),
-      })
-      if (!response.ok) throw await comfyError(response, '提交工作流')
-      const json = await response.json() as { prompt_id?: string; node_errors?: Record<string, unknown> }
-      if (json.node_errors && Object.keys(json.node_errors).length) {
-        throw new Error(`Comfy 工作流校验失败：${JSON.stringify(json.node_errors).slice(0, 300)}`)
-      }
-      if (!json.prompt_id) throw new Error('Comfy 没有返回任务 ID。')
-      return { jobId: json.prompt_id, kind }
+      return { jobId: await submitWorkflow(workflow), kind }
     },
 
-    async getSegment(jobId) {
+    async submitPortrait(prompt) {
+      if (!prompt.trim()) throw new Error('缺少生图 prompt。')
+      return { jobId: await submitWorkflow(buildPortraitWorkflow({ prompt, seed: randomSeed(2_147_483_647) })) }
+    },
+
+    async getJobStatus(jobId) {
       const response = await fetchImpl(`${COMFY_BASE_URL}/api/job/${encodeURIComponent(jobId)}/status`, { headers })
       if (!response.ok) throw await comfyError(response, '查询任务')
       const json = await response.json() as { status?: string; error_message?: string | null }
@@ -184,15 +226,8 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
       return { status: 'failed', error: `Comfy 生成失败：${reason}` }
     },
 
-    async fetchVideo(jobId) {
-      const job = await getJob(jobId)
-      const file = findVideoFile(job)
-      if (!file) throw new Error('Comfy 任务没有产出视频文件。')
-      const query = new URLSearchParams({ filename: file.filename, subfolder: file.subfolder ?? '', type: file.type ?? 'output' })
-      // /api/view 返回 302 到短时签名地址；转发层不带 key 去取签名地址，浏览器这里直接拿到视频。
-      const video = await fetchImpl(`${COMFY_BASE_URL}/api/view?${query}`, { headers })
-      if (!video.ok) throw await comfyError(video, '下载视频')
-      return video
-    },
+    fetchVideo: (jobId) => fetchOutput(jobId, 'video'),
+
+    fetchImage: (jobId) => fetchOutput(jobId, 'image'),
   }
 }

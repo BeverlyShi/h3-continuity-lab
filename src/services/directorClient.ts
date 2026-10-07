@@ -110,6 +110,7 @@ type StreamDirectorTurnOptions = DirectorKeys & {
   traceId: string
   actors?: CastableActor[]
   castings?: CharacterCasting[]
+  knownCharacters?: SceneCharacter[]
   videoMode?: DirectorVideoMode
   model: DirectorModelId
   thinkingEnabled?: boolean
@@ -126,6 +127,7 @@ export async function streamDirectorTurn({
   traceId,
   actors = [],
   castings = [],
+  knownCharacters = [],
   videoMode,
   model,
   thinkingEnabled = false,
@@ -160,6 +162,7 @@ export async function streamDirectorTurn({
       context,
       actors,
       castings,
+      knownCharacters,
       traceId,
       videoMode,
       visionKey: optionalKey(deepseekApiKey),

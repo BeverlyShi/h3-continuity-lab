@@ -52,6 +52,7 @@ import {
   resolveSceneCasting,
 } from './castSceneTool.ts'
 import { createPublishSceneTool } from './publishSceneTool.ts'
+import { describeCharacterRoster, findRosterConflicts } from './characterRoster.ts'
 import { createWriteSceneVideoTool, describeSegmentReferences, validateSceneSegments } from './writeSceneVideoTool.ts'
 import { createInspectLastFrameTool } from './inspectLastFrameTool.ts'
 import { compileVideoPlan } from './videoPromptCompiler.ts'
@@ -638,6 +639,7 @@ async function runAgentSession({
   }, {
     isPublished: () => Boolean(state.scenePublish),
     describeCasting: (turn) => describeCastingStatus(book, turn.characters),
+    checkCharacters: (turn) => findRosterConflicts(turn.characters, state.knownCharacters ?? [], state.castings, state.actors),
   })
 
   const castSceneTool = createCastSceneTool(book, sceneCharacters, () => {
@@ -851,6 +853,8 @@ export type DirectorAgentRequest = {
   context: DirectorTurnContext
   actors: CastableActor[]
   castings: CharacterCasting[]
+  // 本局此前登场过的全部人物（游戏存档里的人物表）。
+  knownCharacters?: SceneCharacter[]
   traceId: string
   videoMode?: DirectorVideoMode
   // inspect_last_frame 用 DeepSeek Vision；没配时导演只能换场景开场。
@@ -872,6 +876,7 @@ async function runPersistentDirector({
   context,
   actors,
   castings,
+  knownCharacters = [],
   traceId,
   videoMode = 'auto',
   visionKey,
@@ -896,6 +901,7 @@ async function runPersistentDirector({
     context,
     actors,
     castings,
+    knownCharacters,
     startSeq,
     startedAt,
   }
@@ -914,7 +920,11 @@ async function runPersistentDirector({
     signal,
     send,
     initialMessages,
-    promptText: buildStoryInputMessage(context.input, { videoMode, hasPreviousFrame: Boolean(context.previousScene) }),
+    promptText: buildStoryInputMessage(context.input, {
+      videoMode,
+      hasPreviousFrame: Boolean(context.previousScene),
+      roster: describeCharacterRoster(knownCharacters, castings, actors),
+    }),
     mode: { kind: 'scene' },
   })
 }
