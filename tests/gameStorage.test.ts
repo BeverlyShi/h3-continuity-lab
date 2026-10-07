@@ -110,6 +110,16 @@ test('marks an interrupted generating clip as failed and keeps its Comfy job', a
   })
 })
 
+test('reads scenes saved in the retired upload and text-only modes as ComfyUI', async () => {
+  await withStorage(async () => {
+    const legacy = (videoMode: string) => ({ ...makeScene(videoMode), videoMode }) as unknown as GameScene
+    const session = makeSession([legacy('manual'), legacy('off'), makeScene('auto', { videoMode: 'auto' }), makeScene('none')])
+    localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify(session))
+    const restored = (await loadGameSession())!
+    assert.deepEqual(restored.sceneHistory.map((scene) => scene.videoMode), ['comfy', 'comfy', 'auto', undefined])
+  })
+})
+
 test('rejects a session saved with an older schemaVersion', async () => {
   await withStorage(async () => {
     localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify({

@@ -93,6 +93,8 @@ const collectImageIds = (raw: string) => {
 }
 
 const restoreScene = (scene: GameScene) => {
+  // 旧存档里已下线的「上传视频」「仅文字」模式按 ComfyUI 显示。
+  if (scene.videoMode !== undefined && scene.videoMode !== 'auto' && scene.videoMode !== 'comfy') scene.videoMode = 'comfy'
   if (scene.tailFrameUrl === MISSING_IMAGE) scene.tailFrameUrl = undefined
   for (const clip of scene.videoClips ?? []) {
     if (clip.tailFrameUrl === MISSING_IMAGE) clip.tailFrameUrl = undefined

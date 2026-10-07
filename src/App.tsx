@@ -1,9 +1,8 @@
-import { Activity, Check, Film, Gamepad2, KeyRound, UserRound, Video } from 'lucide-react'
+import { Activity, Check, Film, Gamepad2, KeyRound, UserRound } from 'lucide-react'
 import { useState } from 'react'
 import { ApiKeyDialog, type ApiKeys } from './components/ApiKeyDialog'
 import { GamePage } from './pages/GamePage'
 import { TracePage } from './pages/TracePage'
-import { VideoGenerationPage } from './pages/VideoGenerationPage'
 import { ActorLibraryPage } from './pages/ActorLibraryPage'
 import { useActorLibrary } from './hooks/useActorLibrary'
 import { useAgentTraces } from './hooks/useAgentTraces'
@@ -20,10 +19,10 @@ import {
   saveOpenRouterApiKey,
 } from './services/localStorage'
 
-type Workspace = 'video' | 'game' | 'actors' | 'trace'
+type Workspace = 'game' | 'actors' | 'trace'
 
 function App() {
-  const [workspace, setWorkspace] = useState<Workspace>('video')
+  const [workspace, setWorkspace] = useState<Workspace>('game')
   const [savedApiKey, setSavedApiKey] = useState(loadApiKey)
   const [savedComfyApiKey, setSavedComfyApiKey] = useState(loadComfyApiKey)
   const [savedOpenRouterApiKey, setSavedOpenRouterApiKey] = useState(loadOpenRouterApiKey)
@@ -61,15 +60,6 @@ function App() {
             <span className="badge">Prototype</span>
           </div>
           <nav className="workspace-tabs" aria-label="工作区">
-            <button
-              className={workspace === 'video' ? 'active' : ''}
-              aria-label="视频生成"
-              aria-pressed={workspace === 'video'}
-              onClick={() => setWorkspace('video')}
-            >
-              <Video size={15} />
-              <span>视频生成</span>
-            </button>
             <button
               className={workspace === 'game' ? 'active' : ''}
               aria-label="游戏互动"
@@ -109,12 +99,6 @@ function App() {
         </button>
       </header>
 
-      <div hidden={workspace !== 'video'}>
-        <VideoGenerationPage
-          savedApiKey={savedApiKey}
-          onRequestApiKey={() => setIsApiDialogOpen(true)}
-        />
-      </div>
       <div hidden={workspace !== 'actors'}>
         <ActorLibraryPage
           actors={actorLibrary.actors}

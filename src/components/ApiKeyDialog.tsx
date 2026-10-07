@@ -65,7 +65,7 @@ export function ApiKeyDialog({
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="api-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="dialog-heading">
           <div className="dialog-icon"><KeyRound size={18} /></div>
-          <div><h2 id="api-title">API 连接设置</h2><p>上传视频模式无需 fal / Comfy Key；OpenRouter/DeepSeek/智谱用于导演，DeepSeek 还负责尾帧识别</p></div>
+          <div><h2 id="api-title">API 连接设置</h2><p>fal 用于 API 生成，Comfy 用于 ComfyUI 生成；OpenRouter/DeepSeek/智谱用于导演，DeepSeek 还负责尾帧识别</p></div>
           <button className="icon-button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
         </div>
         <form onSubmit={submit}>
@@ -132,7 +132,7 @@ export function ApiKeyDialog({
           </div>
           <div className="dialog-section">
             <strong>本地数据</strong>
-            <p>删除游戏存档、视频项目和上传的视频；保留 API Key、模型设置和演员库。</p>
+            <p>删除游戏存档和本地保存的视频；保留 API Key、模型设置和演员库。</p>
             <button className="button button-secondary" type="button" disabled={clearing} onClick={() => { void clearMedia() }}>
               <Trash2 size={15} />{clearing ? '清理中…' : '清理本地视频与存档'}
             </button>

@@ -120,7 +120,7 @@ export function useGameSession() {
           ...clip,
           videoUrl: saved?.videoUrl,
           status: !saved?.asset || interrupted ? 'failed' : clip.status,
-          error: !saved?.asset ? '本地视频无法读取，请重新上传。'
+          error: !saved?.asset ? '本地视频无法读取，请重新生成这一段。'
             : interrupted ? '上次处理已中断，请重试这一段。' : clip.error,
         }
       }),

@@ -139,7 +139,7 @@ test('continuing from the previous scene requires inspecting its last frame firs
       await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-continue', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] }, previousScene },
-        actors, castings, traceId: 'trace-continue', videoMode: 'manual',
+        actors, castings, traceId: 'trace-continue', videoMode: 'comfy',
         visionKey: 'test-deepseek-key',
         analyze: async (input) => {
           inspected.push(input)
@@ -239,36 +239,12 @@ test('a model that stops before delivering the storyboard is reminded once', asy
       await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-remind', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] } },
-        actors, castings, traceId: 'trace-remind', videoMode: 'manual',
+        actors, castings, traceId: 'trace-remind', videoMode: 'comfy',
         send: (event) => events.push(event),
       })
       assert.equal(provider.remaining(), 0)
       assert.match(messageText(provider.requests[2].body.messages.at(-1)), /还没有提交本场次分镜/)
       assert.ok(events.some((event) => event.type === 'video_plan'))
-    } finally {
-      provider.restore()
-    }
-  })
-})
-
-test('text-only mode offers no video tools and ends after publishing and casting', async () => {
-  await withTempTraces(async ({ runDirectorAgent }) => {
-    const provider = installScriptedProvider([
-      { tool: 'publish_scene', args: scene },
-      { tool: 'cast_scene', args: castAssignments },
-    ])
-    try {
-      const events: DirectorStreamEvent[] = []
-      await runDirectorAgent({
-        apiKey: 'test-key', modelId: 'deepseek-v4-flash',
-        context: { ok: true, sessionId: 'loop-text', turn: 1, input: { type: 'start' } },
-        actors, castings: [], traceId: 'trace-text', videoMode: 'off',
-        send: (event) => events.push(event),
-      })
-      assert.equal(provider.remaining(), 0)
-      assert.deepEqual(requestTools(provider.requests[0]), ['publish_scene', 'cast_scene'])
-      assert.equal(events.some((event) => event.type === 'video_plan' || event.type === 'video_plan_error'), false)
-      assert.equal(events.at(-1)?.type, 'done')
     } finally {
       provider.restore()
     }
@@ -290,12 +266,13 @@ test('a dangling tool call left by an interrupted run is closed before the next 
 
     const provider = installScriptedProvider([
       { tool: 'publish_scene', args: scene },
+      { tool: 'write_scene_video', args: storyboard },
     ])
     try {
       await runDirectorAgent({
         apiKey: 'test-key', modelId: 'deepseek-v4-flash',
         context: { ok: true, sessionId: 'loop-dangling', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] } },
-        actors, castings, traceId: 'trace-dangling', videoMode: 'off',
+        actors, castings, traceId: 'trace-dangling', videoMode: 'comfy',
         send: () => {},
       })
       const entries = await readEntries('loop-dangling')

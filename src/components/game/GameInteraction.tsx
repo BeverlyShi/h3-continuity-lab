@@ -9,6 +9,7 @@ type GameInteractionProps = {
   session: GameSession
   directorStatus: DirectorStatus
   videoMode: NonNullable<GameScene['videoMode']>
+  comfyAutoGenerate: boolean
   mediaRunning: boolean
   onChoose: (choice: StoryChoice) => boolean
   onSubmitFreeform: (text: string) => boolean
@@ -16,16 +17,16 @@ type GameInteractionProps = {
   onSkipVideo: () => void
 }
 
-const videoHint = (videoMode: NonNullable<GameScene['videoMode']>, mediaRunning: boolean) => {
-  if (videoMode === 'comfy') return mediaRunning ? 'Comfy 正在生成，完成一段后需要再点击继续。' : '点时间轴上的「生成本场次视频」开始，按秒消耗 Comfy 积分。'
-  if (videoMode === 'auto') return mediaRunning ? '正在自动逐段生成。' : '自动生成已停止，可以在时间轴上重试这一段或上传视频。'
-  return '请在时间轴上逐段上传视频，每段要以上一段的尾帧开场。'
+const videoHint = (videoMode: NonNullable<GameScene['videoMode']>, comfyAutoGenerate: boolean, mediaRunning: boolean) => {
+  if (videoMode === 'comfy' && !comfyAutoGenerate) return mediaRunning ? 'Comfy 正在生成，完成一段后需要再点击继续。' : '点时间轴上的「生成本场次视频」开始，按秒消耗 Comfy 积分。'
+  return mediaRunning ? '正在自动逐段生成。' : '自动生成已停止，可以在时间轴上重试这一段。'
 }
 
 export function GameInteraction({
   session,
   directorStatus,
   videoMode,
+  comfyAutoGenerate,
   mediaRunning,
   onChoose,
   onSubmitFreeform,
@@ -70,7 +71,7 @@ export function GameInteraction({
         {mediaRunning ? <LoaderCircle className="spin" size={20} /> : <Film size={20} />}
         <div>
           <h2>本场次视频完成后开放选择</h2>
-          <p>{videoHint(videoMode, mediaRunning)}</p>
+          <p>{videoHint(videoMode, comfyAutoGenerate, mediaRunning)}</p>
         </div>
         <button className="button button-secondary" disabled={isDirectorActive(directorStatus)} onClick={onSkipVideo}>跳过视频，直接选择</button>
       </section>

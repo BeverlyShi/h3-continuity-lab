@@ -37,7 +37,7 @@ const baseState: DirectorTurnState = {
   traceId: 'trace-1',
   modelId: 'deepseek-v4-flash',
   thinkingEnabled: false,
-  videoMode: 'manual',
+  videoMode: 'comfy',
   context: { ok: true, sessionId: 'session-1', turn: 1, input: { type: 'start' } },
   actors: [],
   castings: [],

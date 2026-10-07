@@ -19,7 +19,7 @@ export type StreamedDirectorTurn = {
   video?: VideoGenerationRequest
 }
 
-export type DirectorVideoMode = 'auto' | 'comfy' | 'manual' | 'off'
+export type DirectorVideoMode = 'auto' | 'comfy'
 
 // 流结束时没有 done，说明连接被意外打断（网络中断、代理超时等）。
 export async function readDirectorStream(

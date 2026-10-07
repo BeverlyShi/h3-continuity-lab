@@ -11,7 +11,7 @@ import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE, WRITE_SCENE_VIDEO_STRUCTURE_GUIDAN
 const videoShotSkill = readFileSync(new URL('../skills/video-shot-prompt/SKILL.md', import.meta.url), 'utf8')
   .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
 
-export type DirectorVideoMode = 'auto' | 'comfy' | 'manual' | 'off'
+export type DirectorVideoMode = 'auto' | 'comfy'
 
 export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 
@@ -30,7 +30,6 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 - 一个场次要交付三样东西：发布的剧情（publish_scene）、全部人物的选角决定（cast_scene，没有待选角人物时不需要）、整个场次的分镜（write_scene_video）。工具之间有依赖：先有剧情才能选角，选角完成才能写分镜；不满足时程序会拒绝并说明原因。三样都交齐后回合自动结束，视频由页面按段生成，不需要你等待或再做什么。
 - 写分镜前判断本场次是否接着上一场次的画面拍：同一时刻、同一地点的直接延续就接着拍，先调用 inspect_last_frame 看上一场次最后一帧，再按它写第 1 段首镜；换场景、换时间或上一场次没有可接画面时用新开场，不需要查看。
 - 工具校验失败时根据反馈定向修正，并重新提交完整参数，不只提交修改片段。
-- 本局视频模式为“仅文字”时不会提供 inspect_last_frame 和 write_scene_video，发布剧情并完成选角即可。
 
 ## Tool Guidance
 
@@ -82,8 +81,6 @@ export const DIRECTOR_COMPACTION_INSTRUCTIONS = `这是互动文字游戏《后�
 const videoModeLabel: Record<DirectorVideoMode, string> = {
   auto: 'API 生成',
   comfy: 'ComfyUI 生成',
-  manual: '上传视频',
-  off: '仅文字',
 }
 
 export type StoryInputOptions = {
@@ -103,9 +100,7 @@ export const buildStoryInputMessage = (input: StoryInput, options: StoryInputOpt
   })()
   const parts = [message]
   if (options.videoMode) {
-    parts.push(options.videoMode === 'off'
-      ? `本局视频模式：${videoModeLabel.off}。不提供 inspect_last_frame 和 write_scene_video，发布剧情并完成选角即可。`
-      : `本局视频模式：${videoModeLabel[options.videoMode]}。${options.hasPreviousFrame ? '上一场次有视频，接着拍时可以调用 inspect_last_frame 查看它的最后一帧。' : '上一场次没有可接的视频画面，本场次第 1 段用人物参考图开场（opening: new_shot）。'}`)
+    parts.push(`本局视频模式：${videoModeLabel[options.videoMode]}。${options.hasPreviousFrame ? '上一场次有视频，接着拍时可以调用 inspect_last_frame 查看它的最后一帧。' : '上一场次没有可接的视频画面，本场次第 1 段用人物参考图开场（opening: new_shot）。'}`)
   }
   return parts.join('\n\n')
 }

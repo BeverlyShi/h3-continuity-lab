@@ -67,18 +67,19 @@ test('the director endpoint runs the single agent for both official providers wi
         const provider = installScriptedProvider([
           { tool: 'publish_scene', args: scene, reasoning: '构思场景。' },
           { tool: 'cast_scene', args: { assignments: [{ characterId: 'steward', create: { name: '崔姑姑', appearance: '四十五岁上下，面容清瘦端严，乌发圆髻，深青窄袖宫装' }, reason: '演员库为空' }] }, reasoning: '新建演员。' },
+          { tool: 'write_scene_video', args: storyboard, reasoning: '编写分镜。' },
         ])
         try {
           const response = await fetch(`${baseUrl}/api/director/turn`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key', 'X-BigModel-Key': 'test-key' },
-            body: JSON.stringify({ model, thinkingEnabled, videoMode: 'off', traceId: `${model}-${thinkingEnabled}`, actors: [], castings: [], context: {
+            body: JSON.stringify({ model, thinkingEnabled, videoMode: 'comfy', traceId: `${model}-${thinkingEnabled}`, actors: [], castings: [], context: {
               ok: true, sessionId: `http-${model.replaceAll('/', '-')}`, turn: 1, input: { type: 'start' },
             } }),
           })
           const events = await readNdjson(response)
           assert.deepEqual(events.filter((event) => event.type === 'error' || event.type === 'video_plan_error'), [])
-          assert.deepEqual(events.map((event) => event.type).filter((type) => ['scene', 'cast', 'done'].includes(type)), ['scene', 'cast', 'done'])
+          assert.deepEqual(events.map((event) => event.type).filter((type) => ['scene', 'cast', 'video_plan', 'done'].includes(type)), ['scene', 'cast', 'video_plan', 'done'])
           assert.equal(provider.remaining(), 0)
           for (const request of provider.requests) {
             assert.equal(request.url, isGlm ? 'https://open.bigmodel.cn/api/paas/v4/chat/completions' : 'https://api.deepseek.com/chat/completions')
@@ -89,10 +90,10 @@ test('the director endpoint runs the single agent for both official providers wi
             if (isGlm) assert.equal(request.body.thinking?.clear_thinking, false)
             assert.equal(request.body.max_tokens, 16_384)
             assert.equal('tool_choice' in request.body, false)
-            assert.deepEqual(request.body.tools?.map((tool) => tool.function.name), ['publish_scene', 'cast_scene'])
+            assert.deepEqual(request.body.tools?.map((tool) => tool.function.name), ['publish_scene', 'cast_scene', 'inspect_last_frame', 'write_scene_video'])
           }
-          // 交齐即停：选角完成后不再多发一次请求；同一场次内后续请求回放了此前的思考内容。
-          assert.equal(provider.requests.length, 2)
+          // 交齐即停：分镜写好后不再多发一次请求；同一场次内后续请求回放了此前的思考内容。
+          assert.equal(provider.requests.length, 3)
           const assistants = provider.requests[1].body.messages.filter((message) => message.role === 'assistant')
           assert.equal(assistants.length, 1)
         } finally {
@@ -101,14 +102,17 @@ test('the director endpoint runs the single agent for both official providers wi
       }
     }
 
-    const invalid = await fetch(`${baseUrl}/api/director/turn`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
-      body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode: 'sometimes', traceId: 'invalid-mode', actors: [], castings: [], context: {
-        ok: true, sessionId: 'http-invalid-mode', turn: 1, input: { type: 'start' },
-      } }),
-    })
-    assert.match(await invalid.text(), /视频模式设置无效/)
+    // 已下线的「上传视频」（manual）与「仅文字」（off）模式同样被拒绝。
+    for (const videoMode of ['sometimes', 'manual', 'off']) {
+      const invalid = await fetch(`${baseUrl}/api/director/turn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
+        body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode, traceId: 'invalid-mode', actors: [], castings: [], context: {
+          ok: true, sessionId: 'http-invalid-mode', turn: 1, input: { type: 'start' },
+        } }),
+      })
+      assert.match(await invalid.text(), /视频模式设置无效/)
+    }
 
     for (const actor of [
       { id: 'actor-a', name: '演员甲', gender: 'female', minAge: 16, maxAge: 24 },
@@ -117,7 +121,7 @@ test('the director endpoint runs the single agent for both official providers wi
       const badActors = await fetch(`${baseUrl}/api/director/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
-        body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode: 'manual', traceId: 'invalid-actors', actors: [actor], castings: [], context: {
+        body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode: 'comfy', traceId: 'invalid-actors', actors: [actor], castings: [], context: {
           ok: true, sessionId: 'http-invalid-actors', turn: 1, input: { type: 'start' },
         } }),
       })
@@ -191,7 +195,7 @@ test('validates the turn context frame and the rewrite endpoint parameters', asy
     const badFrame = await fetch(`${baseUrl}/api/director/turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
-      body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode: 'manual', traceId: 't', actors: [], castings: [], context: {
+      body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode: 'comfy', traceId: 't', actors: [], castings: [], context: {
         ok: true, sessionId: 'http-bad-frame', turn: 2, input: { type: 'start' },
         previousScene: { tailFrameDataUrl: 'https://example.com/frame.jpg', characters: [] },
       } }),

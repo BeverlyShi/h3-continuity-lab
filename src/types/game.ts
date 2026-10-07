@@ -11,8 +11,8 @@ import type {
 
 export type SceneVideoClip = VideoPromptSegment & {
   status: 'waiting' | 'pending' | 'generating' | 'ready' | 'failed'
-  // waiting：等上一段完成（画面参考帧来自上一段尾帧）；pending：可以生成或上传；generating：fal（auto）或 Comfy（comfy）生成中
-  // ready：视频与尾帧已就绪；failed：上传或生成出错，可重试、重新上传或让导演重写
+  // waiting：等上一段完成（画面参考帧来自上一段尾帧）；pending：可以生成；generating：fal（auto）或 Comfy（comfy）生成中
+  // ready：视频与尾帧已就绪；failed：生成出错，可重试或让导演重写
   referenceDescriptors?: VideoReferenceDescriptor[]
   referenceImages?: VideoInputReferenceImage[]
   startImageUrl?: string
@@ -35,7 +35,7 @@ export type GameScene = StoryScene & {
   castingError?: string
   videoRequest?: VideoGenerationRequest
   videoClips?: SceneVideoClip[]
-  videoMode?: 'auto' | 'comfy' | 'manual' | 'off'
+  videoMode?: 'auto' | 'comfy'
   videoSkippedReason?: string
   // 本场次最后一段的尾帧：下一场次导演选择接着拍时，用它作画面参考帧并交给 inspect_last_frame。
   tailFrameUrl?: string
@@ -43,7 +43,7 @@ export type GameScene = StoryScene & {
 
 export type GameSessionStatus = 'awaiting_agent' | 'awaiting_video' | 'awaiting_action'
 // awaiting_agent：导演正在写本场次（剧情、选角、分镜）
-// awaiting_video：导演已交出分镜，页面按段生成或上传视频；全部完成或玩家跳过视频后开放选择
+// awaiting_video：导演已交出分镜，页面按段生成视频；全部完成或玩家跳过视频后开放选择
 // awaiting_action：选项开放
 
 export type GameSession = {
