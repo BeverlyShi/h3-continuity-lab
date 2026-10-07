@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { resolve, join } from 'node:path'
+import { join } from 'node:path'
 import test from 'node:test'
-import { JsonlSessionRepo, NodeExecutionEnv, type Entry } from '@earendil-works/pi-agent-core/node'
+import type { Entry } from '@earendil-works/pi-agent-core'
+import {
+  runDirectorAgent,
+  rewriteDirectorSegment,
+  type DirectorAgentRequest,
+  type DirectorSessionStore,
+  type RewriteDirectorRequest,
+} from '../server/directorAgent.ts'
+import { createNodeSessionStore } from '../server/nodeSessionStore.ts'
 import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
 import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE } from '../server/writeSceneVideoTool.ts'
 import { findRewritableScene } from '../server/directorTurnState.ts'
@@ -23,32 +31,35 @@ const castAssignments = { assignments: [
   { characterId: 'steward', actorId: 'actor-elder', reason: '四十多岁，面相端严' },
 ] }
 
-// directorAgent.ts 在模块顶层按导入时的 cwd 固定了 traceRepo 的根目录；每个用例都要拿到
-// 独立的临时目录，所以用查询串绕开 ESM 的模块缓存，强制每次重新加载模块。
-let freshImportCounter = 0
-const withTempTraces = async (
-  run: (mod: typeof import('../server/directorAgent.ts')) => Promise<void>,
-) => {
-  const previousCwd = process.cwd()
-  const directory = await mkdtemp(join(tmpdir(), 'director-loop-'))
-  process.chdir(directory)
-  freshImportCounter += 1
-  try {
-    const mod = await import(`../server/directorAgent.ts?fresh=${freshImportCounter}`)
-    await run(mod)
-  } finally {
-    process.chdir(previousCwd)
-    await rm(directory, { recursive: true, force: true })
-  }
-}
-
-const readEntries = async (sessionId: string): Promise<Entry[]> => {
-  const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd: process.cwd() }), sessionsRoot: resolve(process.cwd(), '.agent-traces') })
-  const list = await repo.list({ cwd: process.cwd() })
+const readEntries = async (store: DirectorSessionStore, sessionId: string): Promise<Entry[]> => {
+  const list = await store.repo.list({ cwd: store.scope })
   const metadata = list.find((entry) => entry.id === sessionId)
   if (!metadata) return []
-  const session = await repo.open(metadata)
+  const session = await store.repo.open(metadata)
   return session.findEntries({ order: 'oldestFirst' })
+}
+
+// 每个用例的会话存储落在独立的临时目录，导演入口都注入这份存储。
+const withTempTraces = async (
+  run: (harness: {
+    store: DirectorSessionStore
+    runDirectorAgent: (request: Omit<DirectorAgentRequest, 'store'>) => ReturnType<typeof runDirectorAgent>
+    rewriteDirectorSegment: (request: Omit<RewriteDirectorRequest, 'store'>) => ReturnType<typeof rewriteDirectorSegment>
+    readEntries: (sessionId: string) => Promise<Entry[]>
+  }) => Promise<void>,
+) => {
+  const directory = await mkdtemp(join(tmpdir(), 'director-loop-'))
+  const store = createNodeSessionStore(directory)
+  try {
+    await run({
+      store,
+      runDirectorAgent: (request) => runDirectorAgent({ ...request, store }),
+      rewriteDirectorSegment: (request) => rewriteDirectorSegment({ ...request, store }),
+      readEntries: (sessionId) => readEntries(store, sessionId),
+    })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 }
 
 const requestTools = (request: { body: { tools?: Array<{ function: { name: string } }> } }) =>
@@ -68,7 +79,7 @@ const makeVisualState = (locationLabel: string): TailFrameVisualState => ({
 const castings = [{ characterId: 'heroine', actorId: 'actor-young' }, { characterId: 'steward', actorId: 'actor-elder' }]
 
 test('one scene runs straight through: publish, cast, whole-scene storyboard, then stops without an extra model call', async () => {
-  await withTempTraces(async ({ runDirectorAgent }) => {
+  await withTempTraces(async ({ runDirectorAgent, readEntries }) => {
     const provider = installScriptedProvider([
       { tool: 'publish_scene', args: scene },
       { tool: 'cast_scene', args: castAssignments },
@@ -124,7 +135,7 @@ test('one scene runs straight through: publish, cast, whole-scene storyboard, th
 })
 
 test('continuing from the previous scene requires inspecting its last frame first', async () => {
-  await withTempTraces(async ({ runDirectorAgent }) => {
+  await withTempTraces(async ({ runDirectorAgent, readEntries }) => {
     const continuing = { ...storyboard, opening: 'continue' }
     const provider = installScriptedProvider([
       { tool: 'publish_scene', args: scene },
@@ -169,7 +180,7 @@ test('continuing from the previous scene requires inspecting its last frame firs
 })
 
 test('rewriting one segment only offers write_scene_video and re-emits the plan from that segment', async () => {
-  await withTempTraces(async ({ runDirectorAgent, rewriteDirectorSegment }) => {
+  await withTempTraces(async ({ runDirectorAgent, rewriteDirectorSegment, readEntries }) => {
     const rewritten = {
       characters: ['heroine', 'steward'],
       seconds: 10,
@@ -252,9 +263,8 @@ test('a model that stops before delivering the storyboard is reminded once', asy
 })
 
 test('a dangling tool call left by an interrupted run is closed before the next scene', async () => {
-  await withTempTraces(async ({ runDirectorAgent }) => {
-    const repo = new JsonlSessionRepo({ fs: new NodeExecutionEnv({ cwd: process.cwd() }), sessionsRoot: resolve(process.cwd(), '.agent-traces') })
-    const session = await repo.create({ id: 'loop-dangling', cwd: process.cwd(), metadata: { kind: 'palace-story-director', storyId: 'palace-validation' } })
+  await withTempTraces(async ({ store, runDirectorAgent, readEntries }) => {
+    const session = await store.repo.create({ id: 'loop-dangling', cwd: store.scope, metadata: { kind: 'palace-story-director', storyId: 'palace-validation' } })
     await session.appendMessage({ role: 'user', content: [{ type: 'text', text: '请开始故事' }], timestamp: 1 })
     await session.appendMessage({
       role: 'assistant',

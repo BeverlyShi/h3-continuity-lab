@@ -1,4 +1,4 @@
-import type { AgentTool } from '@earendil-works/pi-agent-core/node'
+import type { AgentTool } from '@earendil-works/pi-agent-core'
 import { Type } from 'typebox'
 import type { SceneCharacter, TailFrameVisualState } from '../src/types/story.ts'
 import type { analyzeTailFrame } from './tailFrameVision.ts'

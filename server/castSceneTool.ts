@@ -1,4 +1,4 @@
-import type { AgentTool } from '@earendil-works/pi-agent-core/node'
+import type { AgentTool } from '@earendil-works/pi-agent-core'
 import { Type, type Static } from 'typebox'
 import type { CastableActor, CharacterCasting, CreatedActor, SceneCastingResult } from '../src/types/actor.ts'
 import type { SceneCharacter } from '../src/types/story.ts'

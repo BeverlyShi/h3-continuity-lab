@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { assertJsonSerializable, type AgentMessage } from '@earendil-works/pi-agent-core/node'
+import { assertJsonSerializable, type AgentMessage } from '@earendil-works/pi-agent-core'
 import { summarizeAssistantUsage, toDurableMessage, toDurableValue } from '../server/directorTrace.ts'
 
 test('removes undefined properties before persisting an agent message', () => {

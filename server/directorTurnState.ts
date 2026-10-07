@@ -1,4 +1,4 @@
-import type { Entry, JsonlSessionMetadata, Session } from '@earendil-works/pi-agent-core/node'
+import type { Entry, JsonlSessionMetadata, Session } from '@earendil-works/pi-agent-core'
 import type { DirectorModelId } from '../src/config/directorModels.ts'
 import type { CastableActor, CharacterCasting } from '../src/types/actor.ts'
 import type { DirectorTurnContext } from '../src/types/game.ts'

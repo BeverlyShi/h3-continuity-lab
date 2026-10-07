@@ -1,4 +1,4 @@
-import type { Entry } from '@earendil-works/pi-agent-core/node'
+import type { Entry } from '@earendil-works/pi-agent-core'
 
 type MessageEntry = Extract<Entry, { type: 'message' }>
 type AssistantMessage = Extract<MessageEntry['message'], { role: 'assistant' }>

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { createServer, type ViteDevServer } from 'vite'
+import { directorPlugin } from '../server/directorPlugin.ts'
 import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
 import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE } from '../server/writeSceneVideoTool.ts'
 import type { TailFrameVisualState } from '../src/types/story.ts'
@@ -24,20 +25,16 @@ const fakeVisualState: TailFrameVisualState = {
 const scene = JSON.parse(SCENE_PUBLISH_ARGUMENTS_EXAMPLE)
 const storyboard = JSON.parse(WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE)
 
-// directorPlugin.ts 通过 directorAgent.ts 在模块顶层按导入时的 cwd 固定 trace 根目录；
-// 每个用例都用独立临时目录，所以用查询串绕开 ESM 模块缓存，强制每次重新加载。
-let freshImportCounter = 0
+// directorPlugin() 创建时按当前 cwd 固定 trace 根目录；每个用例都先切到独立临时目录再创建插件。
 const withServer = async (
   run: (ctx: { baseUrl: string; fetch: typeof globalThis.fetch }) => Promise<void>,
 ) => {
   const previousCwd = process.cwd()
   const directory = await mkdtemp(join(tmpdir(), 'director-http-'))
   process.chdir(directory)
-  freshImportCounter += 1
   // 保存真实 fetch：installScriptedProvider 会整体替换 globalThis.fetch 来拦截服务端对 AI provider 的请求，
   // 测试自己对本地 vite server 的请求必须绕开这个 mock。
   const realFetch = globalThis.fetch
-  const { directorPlugin } = await import(`../server/directorPlugin.ts?fresh=${freshImportCounter}`)
   let vite: ViteDevServer | undefined
   let http: Server | undefined
   try {

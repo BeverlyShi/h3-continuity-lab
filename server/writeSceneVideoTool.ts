@@ -1,4 +1,4 @@
-import type { AgentTool } from '@earendil-works/pi-agent-core/node'
+import type { AgentTool } from '@earendil-works/pi-agent-core'
 import { Check, Errors } from 'typebox/value'
 import {
   writeSceneVideoSchema,

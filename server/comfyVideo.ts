@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import h3MaxR2v from './comfy/workflows/h3_max_r2v.json' with { type: 'json' }
+import h3MaxTurboT2v from './comfy/workflows/h3_max_turbo_t2v.json' with { type: 'json' }
 
 // 工作流取自 Comfy 官方 H3 模板（API 格式），程序只填 prompt、秒数、种子和图片，其余参数保持模板原值。
 export const COMFY_BASE_URL = 'https://cloud.comfy.org'
@@ -6,12 +7,9 @@ export const COMFY_BASE_URL = 'https://cloud.comfy.org'
 type WorkflowNode = { class_type: string; inputs: Record<string, unknown>; _meta?: { title: string } }
 export type ComfyWorkflow = Record<string, WorkflowNode>
 
-const loadWorkflow = (name: string): ComfyWorkflow =>
-  JSON.parse(readFileSync(new URL(`./comfy/workflows/${name}.json`, import.meta.url), 'utf8')) as ComfyWorkflow
-
-const WORKFLOWS = {
-  t2v: loadWorkflow('h3_max_turbo_t2v'),
-  r2v: loadWorkflow('h3_max_r2v'),
+const WORKFLOWS: Record<'t2v' | 'r2v', ComfyWorkflow> = {
+  t2v: h3MaxTurboT2v,
+  r2v: h3MaxR2v,
 }
 
 const VIDEO_NODE_ID = '2'
@@ -73,7 +71,7 @@ const readImageBytes = async (source: string): Promise<{ bytes: Blob; extension:
   if (source.startsWith('data:')) {
     const match = source.match(/^data:(image\/[a-z0-9.+-]+);base64,(.*)$/i)
     if (!match) throw new Error('图片 data URL 格式无效。')
-    return { bytes: new Blob([Buffer.from(match[2], 'base64')], { type: match[1] }), extension: match[1].split('/')[1].replace('jpeg', 'jpg') }
+    return { bytes: new Blob([Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0))], { type: match[1] }), extension: match[1].split('/')[1].replace('jpeg', 'jpg') }
   }
   const response = await fetch(source)
   if (!response.ok) throw new Error(`无法下载图片（HTTP ${response.status}）。`)

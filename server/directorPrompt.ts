@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import videoShotSkillSource from '../skills/video-shot-prompt/SKILL.md?raw'
 import type { StoryInput } from '../src/types/story.ts'
 import {
   DIALOGUE_LINE_MAX_HAN,
@@ -8,7 +8,7 @@ import {
 } from './publishSceneTool.ts'
 import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE, WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE } from './writeSceneVideoTool.ts'
 
-const videoShotSkill = readFileSync(new URL('../skills/video-shot-prompt/SKILL.md', import.meta.url), 'utf8')
+const videoShotSkill = videoShotSkillSource
   .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
 
 export type DirectorVideoMode = 'auto' | 'comfy'
