@@ -1,5 +1,7 @@
 # H3 Continuity Lab
 
+**在线试玩 / Play online：<https://interaction1.com>**（需要自带 API Key / bring your own API keys）
+
 H3 Continuity Lab is an interactive story game where an AI director writes each scene of a palace drama and turns it into a continuous, multi-segment video. You pick one of three choices (or type your own action), the director publishes the next scene, casts actors from your local actor library, and writes shot-by-shot prompts that are rendered with MiniMax H3 via fal or Comfy Cloud, each segment continuing from the last frame of the previous one. It is bring-your-own-key: your API keys stay in your browser, and the director agent runs entirely client-side. Built with React, TypeScript and Vite.
 
 ## 项目简介
