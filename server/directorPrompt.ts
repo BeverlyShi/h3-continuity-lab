@@ -16,7 +16,7 @@ import { MAX_GENERATE_ATTEMPTS } from './generateSegmentTool.ts'
 const videoShotSkill = readFileSync(new URL('../skills/video-shot-prompt/SKILL.md', import.meta.url), 'utf8')
   .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
 
-export type DirectorVideoMode = 'auto' | 'manual' | 'off'
+export type DirectorVideoMode = 'auto' | 'comfy' | 'manual' | 'off'
 
 export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 
@@ -33,7 +33,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 - narrative 中人物实际说出的每句对白必须用成对的中文双引号“”或英文双引号包住；双引号只用于人物对白，心声、书信文字、称谓及对白内部引用使用叙述或单引号，不要混用或嵌套双引号。
 - 构思在内心完成，只通过工具输出，不要在工具之外输出分析或正文。
 - 每回合的工作顺序：先 publish_scene 发布场景；如果工具结果列出待选角人物及候选演员，用 cast_scene 提交决定；然后逐段调用 write_segment 写第 1 段、generate_segment 生成第 1 段，再 write_segment 写第 2 段、generate_segment 生成第 2 段，如此往复直到最后一段（isLast）；最后 finish_turn 结束回合。工具结果末尾会提示下一步，跳步会被程序拒绝并告诉你先做什么。
-- 每次调用 generate_segment 都会暂停回合，等玩家上传该段视频后程序才会把实测结果交还给你，再继续写下一段；这是正常流程，不是错误。
+- 每次调用 generate_segment 都会暂停回合，等该段视频生成或上传完成后程序才会把实测结果交还给你，再继续写下一段；这是正常流程，不是错误。
 - 工具校验失败时根据反馈定向修正，并重新提交完整参数，不只提交修改片段。
 - 本局视频模式为“仅文字”时不会提供 write_segment 和 generate_segment，发布场景后直接 finish_turn。
 
@@ -42,7 +42,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 - publish_scene：本回合第一个工具，只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
 - cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。
 - write_segment：把已发布的 narrative 转成视频 prompt，一次只写一段。${WRITE_SEGMENT_STRUCTURE_GUIDANCE}
-- generate_segment：对已写好的段触发生成，随即暂停回合等待上传结果；结果会作为该次调用的返回值交还给你，包含实测时长和尾帧实测视觉状态。每段最多重拍 ${MAX_GENERATE_ATTEMPTS} 次。
+- generate_segment：对已写好的段触发生成，随即暂停回合等待视频生成或上传；结果会作为该次调用的返回值交还给你，包含实测时长和尾帧实测视觉状态。每段最多重拍 ${MAX_GENERATE_ATTEMPTS} 次。
 - finish_turn：全部完成后调用。视频计划无法完成时，通过 skipVideo.reason 说明后结束。
 
 ## Output Description
@@ -89,6 +89,7 @@ export const DIRECTOR_COMPACTION_INSTRUCTIONS = `这是互动文字游戏《后�
 
 const videoModeLabel: Record<DirectorVideoMode, string> = {
   auto: 'API 生成',
+  comfy: 'ComfyUI 生成',
   manual: '上传视频',
   off: '仅文字',
 }

@@ -84,7 +84,7 @@
 .game-video-badge.skipped { color: #64748b; background: #e2e8f0; }
 @keyframes game-video-badge-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 .game-video-modes { margin-bottom: 14px; }
-.game-video-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.game-video-mode-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
 .game-video-mode { padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; color: #475569; background: white; text-align: left; cursor: pointer; }
 .game-video-mode strong { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .game-video-mode > span { display: block; margin-top: 5px; font-size: 11px; line-height: 1.6; }
@@ -259,6 +259,10 @@
 .game-video-upload-help { margin: 6px 0 10px; color: #64748b; font-size: 11px; line-height: 1.7; }
 .game-video-timeline-item-wrap:has(.game-video-upload) { padding-bottom: 30px; }
 .game-video-upload { position: absolute; bottom: 0; right: 0; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 5px; color: #475569; background: white; font-size: 10px; cursor: pointer; }
+.game-video-clip-actions { position: absolute; bottom: 0; right: 0; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.game-video-timeline-item-wrap:has(.game-video-clip-actions > :nth-child(2)) { padding-bottom: 60px; }
+.game-video-clip-actions .game-video-upload { position: static; white-space: nowrap; }
+.game-video-upload.primary { border-color: #fda4af; color: #9f1239; background: #fff1f2; }
 .game-video-upload:disabled, .game-video-action:disabled { opacity: .45; cursor: not-allowed; }
 .game-video-prompt-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
 .game-video-action { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px; color: #475569; background: white; font-size: 10px; cursor: pointer; }

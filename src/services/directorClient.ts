@@ -20,7 +20,7 @@ export type StreamedDirectorTurn = {
   paused: boolean
 }
 
-export type DirectorVideoMode = 'auto' | 'manual' | 'off'
+export type DirectorVideoMode = 'auto' | 'comfy' | 'manual' | 'off'
 
 // 流结束时既没有 done 也没有 awaiting_upload，说明连接被意外打断（网络中断、代理超时等）。
 export async function readDirectorStream(

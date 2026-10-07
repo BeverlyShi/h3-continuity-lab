@@ -1,0 +1,27 @@
+{
+  "2": {
+    "class_type": "MinimaxHailuo03ReferenceNode",
+    "_meta": { "title": "官方模板 api_minimax_h3_max_r2v（参考图节点没有 Turbo 档）" },
+    "inputs": {
+      "model": "MiniMax H3 Max",
+      "model.prompt": "",
+      "model.resolution": "768P",
+      "model.ratio": "16:9",
+      "model.duration": 5,
+      "model.prompt_expansion_mode": "balanced",
+      "model.reference_detail": "high",
+      "seed": 0,
+      "watermark": false
+    }
+  },
+  "3": {
+    "class_type": "SaveVideo",
+    "_meta": { "title": "保存视频" },
+    "inputs": {
+      "video": ["2", 0],
+      "filename_prefix": "video/harem_h3_max_r2v",
+      "format": "auto",
+      "format.codec": "auto"
+    }
+  }
+}

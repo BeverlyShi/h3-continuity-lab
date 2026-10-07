@@ -3,7 +3,7 @@ import { generateSegmentSchema, type TailFrameVisualState } from '../src/types/s
 
 export const MAX_GENERATE_ATTEMPTS = 3
 
-export const GENERATE_SEGMENT_DESCRIPTION = `触发本段视频生成，程序会暂停回合等待玩家上传生成结果。该段必须已经通过 write_segment 写好；第 2 段起，上一段必须已经生成。每段最多重拍 ${MAX_GENERATE_ATTEMPTS} 次，超过后请改用 write_segment 重写本段，或在 finish_turn 中通过 skipVideo.reason 说明后结束。`
+export const GENERATE_SEGMENT_DESCRIPTION = `触发本段视频生成，程序会暂停回合，等待该段视频生成或上传。该段必须已经通过 write_segment 写好；第 2 段起，上一段必须已经生成。每段最多重拍 ${MAX_GENERATE_ATTEMPTS} 次，超过后请改用 write_segment 重写本段，或在 finish_turn 中通过 skipVideo.reason 说明后结束。`
 
 export type SegmentGenerationLookup = {
   sequence: number
@@ -39,7 +39,7 @@ export const createGenerateSegmentTool = (
     }
     await onGenerate({ sequence: input.sequence, toolCallId })
     return {
-      content: [{ type: 'text', text: '等待玩家上传本段视频。' }],
+      content: [{ type: 'text', text: '等待本段视频生成或上传。' }],
       details: { pending: true },
       terminate: false,
     }

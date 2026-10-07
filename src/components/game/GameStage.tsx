@@ -15,6 +15,7 @@ import {
   Upload,
   Volume2,
   VolumeX,
+  Workflow,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { isDirectorActive } from '../../services/directorStatus'
@@ -36,6 +37,8 @@ type GameStageProps = {
   onVideoModeChange: (next: NonNullable<GameScene['videoMode']>) => void
   onUploadVideo: (sceneId: string, sequence: number, file: File) => Promise<void>
   onRetrySegment: (sceneId: string) => void
+  // ComfyUI 模式按秒扣积分，每段都由玩家点击才提交。
+  onGenerateSegment: (sceneId: string, sequence: number) => void
   narrativeExpanded: boolean
   onNarrativeExpandedChange: (next: boolean) => void
 }
@@ -59,9 +62,12 @@ const formatTime = (seconds: number) => {
   return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, '0')}`
 }
 
+// API 生成与 ComfyUI 生成都由页面自动出片，界面文案统一说“生成”。
+const isGeneratedMode = (videoMode: NonNullable<GameScene['videoMode']>) => videoMode === 'auto' || videoMode === 'comfy'
+
 const clipStatusLabel = (clip: SceneVideoClip, videoMode: NonNullable<GameScene['videoMode']>) => {
   if (clip.status === 'written') return '已写好'
-  if (clip.status === 'awaiting_upload') return videoMode === 'auto' ? '等待生成' : '等待上传'
+  if (clip.status === 'awaiting_upload') return videoMode === 'comfy' ? '待点击生成' : isGeneratedMode(videoMode) ? '等待生成' : '等待上传'
   if (clip.status === 'generating') return '生成中'
   if (clip.status === 'analyzing') return '识别尾帧中'
   if (clip.status === 'ready') return '已完成'
@@ -109,7 +115,7 @@ const PENDING_CLIP_STATUSES: SceneVideoClip['status'][] = ['written', 'awaiting_
 export function GameStage(props: GameStageProps) {
   const {
     session, actors, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoMode, mediaRunning,
-    onStart, onVideoModeChange, onUploadVideo, onRetrySegment,
+    onStart, onVideoModeChange, onUploadVideo, onRetrySegment, onGenerateSegment,
     narrativeExpanded, onNarrativeExpandedChange,
   } = props
   const [reviewSceneId, setReviewSceneId] = useState('')
@@ -123,7 +129,7 @@ export function GameStage(props: GameStageProps) {
   const [liveStatusLabel, liveStatusClass] = getStatus(session, directorStatus)
   const pendingUpload = !isReviewing && session && session.pendingUpload?.sceneId === scene?.id ? session.pendingUpload : undefined
   const statusLabel = isReviewing ? `回看第 ${sceneIndex + 1} 幕`
-    : pendingUpload && !mediaRunning ? (videoMode === 'auto' ? '等待生成' : '等待上传')
+    : pendingUpload && !mediaRunning ? (isGeneratedMode(videoMode) ? '等待生成' : '等待上传')
     : liveStatusLabel
   const statusClass = isReviewing ? 'reviewing' : liveStatusClass
 
@@ -410,11 +416,23 @@ export function GameStage(props: GameStageProps) {
             <strong><Sparkles size={15} />API 生成</strong>
             <span>通过已接入的 fal API 自动生成并衔接视频。</span>
           </button>
+          <button
+            type="button"
+            className={`game-video-mode${videoMode === 'comfy' ? ' active' : ''}`}
+            aria-pressed={videoMode === 'comfy'}
+            disabled={mediaRunning || isDirectorActive(directorStatus) || (session ? session.status !== 'awaiting_action' : false)}
+            onClick={() => onVideoModeChange('comfy')}
+          >
+            <strong><Workflow size={15} />ComfyUI 生成</strong>
+            <span>用你的 Comfy Cloud 订阅跑 H3 官方工作流，每段点击后生成并衔接。</span>
+          </button>
         </div>
         <p className="game-video-mode-help">{modeForHelp === 'manual'
           ? '导演每写好一段就在这里等你上传；上传后导演按实测尾帧写下一段。'
           : modeForHelp === 'auto'
             ? '导演每写好一段自动调用 fal 生成，按实测尾帧写下一段。需要 FAL_KEY。'
+            : modeForHelp === 'comfy'
+              ? '导演每写好一段，由你点「生成视频」提交 Comfy H3 工作流（有首帧用 Turbo，开场参考图用 H3 Max），按实测尾帧写下一段。需要 COMFY_API_KEY。'
             : '仅续写故事与编写 Prompt，暂不生成或上传视频。'}</p>
         <div className="game-video-mode-footer">
           <small>视觉反馈当前分析最终尾帧，不包含整段视频的动作与音频。</small>
@@ -532,7 +550,9 @@ export function GameStage(props: GameStageProps) {
             <>
               {isWaitingForClip && !hasVideo && (
                 <div className="game-stage-notice">
-                  {pendingUpload ? `等待第 ${pendingUpload.sequence} 段视频${videoMode === 'auto' ? '生成' : '上传'}…` : '导演正在编写这一段…'}
+                  {!pendingUpload ? '导演正在编写这一段…'
+                    : videoMode === 'comfy' && !mediaRunning ? `第 ${pendingUpload.sequence} 段 Prompt 已写好，点时间轴上的「生成视频」开始（按秒扣 Comfy 积分）。`
+                      : `等待第 ${pendingUpload.sequence} 段视频${isGeneratedMode(videoMode) ? '生成' : '上传'}…`}
                 </div>
               )}
               {blockedClip && (
@@ -704,15 +724,28 @@ export function GameStage(props: GameStageProps) {
                     )}
                   </button>
                   {isUploadTarget && (
-                    <button
-                      className="game-video-upload"
-                      type="button"
-                      aria-label="上传片段视频"
-                      disabled={!canUpload}
-                      onClick={chooseUpload}
-                    >
-                      <Upload size={12} />上传视频
-                    </button>
+                    <div className="game-video-clip-actions">
+                      {videoMode === 'comfy' && clip.status === 'awaiting_upload' && (
+                        <button
+                          className="game-video-upload primary"
+                          type="button"
+                          aria-label={`用 Comfy 生成片段 ${clip.sequence}`}
+                          disabled={!canUpload}
+                          onClick={() => onGenerateSegment(scene.id, clip.sequence)}
+                        >
+                          <Workflow size={12} />生成视频
+                        </button>
+                      )}
+                      <button
+                        className="game-video-upload"
+                        type="button"
+                        aria-label="上传片段视频"
+                        disabled={!canUpload}
+                        onClick={chooseUpload}
+                      >
+                        <Upload size={12} />上传视频
+                      </button>
+                    </div>
                   )}
                   {clip.status === 'failed' && !isReviewing && session?.status === 'awaiting_upload' && (
                     <button
@@ -815,6 +848,7 @@ export function GameStage(props: GameStageProps) {
             <p className="game-cost-note">{!hasApiKey ? `请先在页面右上角配置 ${apiKeyLabel} API Key。`
               : videoMode === 'manual' ? '开始后导演会逐段编写 Prompt，等待你在外部生成并上传视频。'
                 : videoMode === 'auto' ? '开始后导演会逐段自动调用 fal 生成视频，消耗对应 API 额度。'
+                  : videoMode === 'comfy' ? '开始后导演会逐段编写 Prompt，每段由你点「生成视频」后调用 Comfy，按秒消耗积分。'
                   : '开始后续写故事与编写 Prompt。'}</p>
           </div>
         </div>

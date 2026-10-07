@@ -1,6 +1,6 @@
 import { Activity, Check, Film, Gamepad2, KeyRound, UserRound, Video } from 'lucide-react'
 import { useState } from 'react'
-import { ApiKeyDialog } from './components/ApiKeyDialog'
+import { ApiKeyDialog, type ApiKeys } from './components/ApiKeyDialog'
 import { GamePage } from './pages/GamePage'
 import { TracePage } from './pages/TracePage'
 import { VideoGenerationPage } from './pages/VideoGenerationPage'
@@ -10,10 +10,12 @@ import { useAgentTraces } from './hooks/useAgentTraces'
 import {
   loadApiKey,
   loadBigModelApiKey,
+  loadComfyApiKey,
   loadDeepSeekApiKey,
   loadOpenRouterApiKey,
   saveApiKey,
   saveBigModelApiKey,
+  saveComfyApiKey,
   saveDeepSeekApiKey,
   saveOpenRouterApiKey,
 } from './services/localStorage'
@@ -23,6 +25,7 @@ type Workspace = 'video' | 'game' | 'actors' | 'trace'
 function App() {
   const [workspace, setWorkspace] = useState<Workspace>('video')
   const [savedApiKey, setSavedApiKey] = useState(loadApiKey)
+  const [savedComfyApiKey, setSavedComfyApiKey] = useState(loadComfyApiKey)
   const [savedOpenRouterApiKey, setSavedOpenRouterApiKey] = useState(loadOpenRouterApiKey)
   const [savedDeepSeekApiKey, setSavedDeepSeekApiKey] = useState(loadDeepSeekApiKey)
   const [savedBigModelApiKey, setSavedBigModelApiKey] = useState(loadBigModelApiKey)
@@ -30,7 +33,9 @@ function App() {
   const { traces, updateTrace } = useAgentTraces()
   const actorLibrary = useActorLibrary()
 
-  const updateApiKeys = (falApiKey: string, openRouterApiKey: string, deepSeekApiKey: string, bigModelApiKey: string) => {
+  const updateApiKeys = ({ falApiKey, comfyApiKey, openRouterApiKey, deepSeekApiKey, bigModelApiKey }: ApiKeys) => {
+    setSavedComfyApiKey(comfyApiKey)
+    saveComfyApiKey(comfyApiKey)
     setSavedBigModelApiKey(bigModelApiKey)
     saveBigModelApiKey(bigModelApiKey)
     setSavedApiKey(falApiKey)
@@ -123,6 +128,7 @@ function App() {
       <div hidden={workspace !== 'game'}>
         <GamePage
           savedFalApiKey={savedApiKey}
+          savedComfyApiKey={savedComfyApiKey}
           savedOpenRouterApiKey={savedOpenRouterApiKey}
           savedDeepSeekApiKey={savedDeepSeekApiKey}
           savedBigModelApiKey={savedBigModelApiKey}
@@ -139,12 +145,13 @@ function App() {
       {isApiDialogOpen && (
         <ApiKeyDialog
           savedFalApiKey={savedApiKey}
+          savedComfyApiKey={savedComfyApiKey}
           savedOpenRouterApiKey={savedOpenRouterApiKey}
           savedDeepSeekApiKey={savedDeepSeekApiKey}
           savedBigModelApiKey={savedBigModelApiKey}
           onClose={() => setIsApiDialogOpen(false)}
           onSave={updateApiKeys}
-          onClear={() => updateApiKeys('', '', '', '')}
+          onClear={() => updateApiKeys({ falApiKey: '', comfyApiKey: '', openRouterApiKey: '', deepSeekApiKey: '', bigModelApiKey: '' })}
         />
       )}
     </div>

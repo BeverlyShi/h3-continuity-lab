@@ -12,7 +12,7 @@ import type {
 
 export type SceneVideoClip = VideoPromptSegment & {
   status: 'written' | 'awaiting_upload' | 'generating' | 'analyzing' | 'ready' | 'failed'
-  // written：prompt 已到，导演尚未要求生成；awaiting_upload：等玩家上传/等 fal；generating：fal 生成中（auto）
+  // written：prompt 已到，导演尚未要求生成；awaiting_upload：等玩家上传/等 fal 或 Comfy；generating：fal（auto）或 Comfy（comfy）生成中
   // analyzing：尾帧已交给服务端 resume，等 VLM 与导演续跑；ready：segment_generated 已到；failed：上传/生成/resume 出错，可重试
   toolCallId?: string
   referenceDescriptors?: VideoReferenceDescriptor[]
@@ -23,6 +23,8 @@ export type SceneVideoClip = VideoPromptSegment & {
   tailFrameUrl?: string
   actualDuration?: number
   visualState?: TailFrameVisualState
+  // Comfy 任务 ID：刷新后凭它接着查原任务，避免重复提交扣费；导演重拍（新的 toolCallId）时清空。
+  comfyJobId?: string
   error?: string
 }
 
@@ -36,7 +38,7 @@ export type GameScene = StoryScene & {
   castingError?: string
   videoRequest?: VideoGenerationRequest
   videoClips?: SceneVideoClip[]
-  videoMode?: 'auto' | 'manual' | 'off'
+  videoMode?: 'auto' | 'comfy' | 'manual' | 'off'
   videoSkippedReason?: string
   tailFrameUrl?: string
   tailVisualState?: TailFrameVisualState
@@ -45,7 +47,7 @@ export type GameScene = StoryScene & {
 
 export type GameSessionStatus = 'awaiting_agent' | 'awaiting_upload' | 'awaiting_action'
 // awaiting_agent：导演回合（含 resume 后的续跑）进行中
-// awaiting_upload：回合暂停，等玩家上传（manual）或 fal 生成（auto）第 pendingUpload.sequence 段
+// awaiting_upload：回合暂停，等玩家上传（manual）、fal 生成（auto）或 Comfy 生成（comfy）第 pendingUpload.sequence 段
 // awaiting_action：finish_turn 已通过，选项开放
 
 export type GameSession = {

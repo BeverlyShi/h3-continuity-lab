@@ -49,7 +49,7 @@ const isDirectorTurnContext = (context: DirectorTurnContext | undefined): contex
   (context.previousVisualState === undefined || Check(tailFrameVisualStateSchema, context.previousVisualState))
 
 const isDirectorVideoMode = (value: unknown): value is DirectorVideoMode =>
-  value === 'auto' || value === 'manual' || value === 'off'
+  value === 'auto' || value === 'comfy' || value === 'manual' || value === 'off'
 
 const isCastableActor = (value: unknown): value is CastableActor => {
   if (!value || typeof value !== 'object') return false

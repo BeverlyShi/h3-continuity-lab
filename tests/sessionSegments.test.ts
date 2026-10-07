@@ -90,6 +90,23 @@ test('markAwaitingUpload sets pendingUpload and clears media fields on a reshoot
   assert.equal(clip?.toolCallId, 'call-1b')
 })
 
+test('markAwaitingUpload keeps the Comfy job for the same call and drops it on a reshoot', () => {
+  const awaiting = (session: GameSession, toolCallId: string) => markAwaitingUpload(session, 'scene-1', {
+    sequence: 1, toolCallId, traceId: 'trace-1', prompt: '第 1 段', seconds: 5,
+    descriptors: [], references: { referenceImages: [] },
+  })
+  let session = awaiting(addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] }), 'call-1')
+  session = {
+    ...session,
+    currentScene: { ...session.currentScene!, videoClips: [{ ...session.currentScene!.videoClips![0], comfyJobId: 'job-1' }] },
+  }
+
+  // 刷新后与服务端对齐：仍是同一次 generate_segment，续查原任务，不重复扣费。
+  assert.equal(awaiting(session, 'call-1').currentScene?.videoClips?.[0].comfyJobId, 'job-1')
+  // 导演重拍是新的调用，必须重新提交。
+  assert.equal(awaiting(session, 'call-2').currentScene?.videoClips?.[0].comfyJobId, undefined)
+})
+
 test('commitSegmentMedia only accepts the pending sequence', () => {
   let session = addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] })
   session = markAwaitingUpload(session, 'scene-1', {
@@ -203,6 +220,11 @@ test('adoptServerTurnState surfaces a retry when the server has gone idle mid-tu
   assert.equal(result.needsRetry, true)
   assert.equal(result.session.status, 'awaiting_agent')
   assert.equal(result.session.pendingUpload, undefined)
+})
+
+test('adoptServerTurnState surfaces a retry when the first turn stopped before any scene was published', () => {
+  const session = makeSession({ status: 'awaiting_agent', turn: 1, currentScene: undefined, sceneHistory: [], pendingInput: { type: 'start' } })
+  assert.equal(adoptServerTurnState(session, { status: 'idle' }, { characterReferences: {} }).needsRetry, true)
 })
 
 test('adoptServerTurnState leaves an already-open turn untouched', () => {

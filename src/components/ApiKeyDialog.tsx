@@ -2,18 +2,28 @@ import { KeyRound, LockKeyhole, Trash2, X } from 'lucide-react'
 import { FormEvent, useState } from 'react'
 import { clearLocalMedia } from '../services/localData'
 
+export type ApiKeys = {
+  falApiKey: string
+  comfyApiKey: string
+  openRouterApiKey: string
+  deepSeekApiKey: string
+  bigModelApiKey: string
+}
+
 type ApiKeyDialogProps = {
   savedFalApiKey: string
+  savedComfyApiKey: string
   savedOpenRouterApiKey: string
   savedDeepSeekApiKey: string
   savedBigModelApiKey: string
   onClose: () => void
-  onSave: (falApiKey: string, openRouterApiKey: string, deepSeekApiKey: string, bigModelApiKey: string) => void
+  onSave: (keys: ApiKeys) => void
   onClear: () => void
 }
 
 export function ApiKeyDialog({
   savedFalApiKey,
+  savedComfyApiKey,
   savedOpenRouterApiKey,
   savedDeepSeekApiKey,
   savedBigModelApiKey,
@@ -22,6 +32,7 @@ export function ApiKeyDialog({
   onClear,
 }: ApiKeyDialogProps) {
   const [falApiKey, setFalApiKey] = useState(savedFalApiKey)
+  const [comfyApiKey, setComfyApiKey] = useState(savedComfyApiKey)
   const [openRouterApiKey, setOpenRouterApiKey] = useState(savedOpenRouterApiKey)
   const [deepSeekApiKey, setDeepSeekApiKey] = useState(savedDeepSeekApiKey)
   const [bigModelApiKey, setBigModelApiKey] = useState(savedBigModelApiKey)
@@ -40,7 +51,13 @@ export function ApiKeyDialog({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    onSave(falApiKey.trim(), openRouterApiKey.trim(), deepSeekApiKey.trim(), bigModelApiKey.trim())
+    onSave({
+      falApiKey: falApiKey.trim(),
+      comfyApiKey: comfyApiKey.trim(),
+      openRouterApiKey: openRouterApiKey.trim(),
+      deepSeekApiKey: deepSeekApiKey.trim(),
+      bigModelApiKey: bigModelApiKey.trim(),
+    })
   }
 
   return (
@@ -48,7 +65,7 @@ export function ApiKeyDialog({
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="api-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="dialog-heading">
           <div className="dialog-icon"><KeyRound size={18} /></div>
-          <div><h2 id="api-title">API 连接设置</h2><p>上传视频模式无需 fal Key；OpenRouter/DeepSeek/智谱用于导演，DeepSeek 还负责尾帧识别</p></div>
+          <div><h2 id="api-title">API 连接设置</h2><p>上传视频模式无需 fal / Comfy Key；OpenRouter/DeepSeek/智谱用于导演，DeepSeek 还负责尾帧识别</p></div>
           <button className="icon-button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
         </div>
         <form onSubmit={submit}>
@@ -63,6 +80,18 @@ export function ApiKeyDialog({
               placeholder="粘贴你的 FAL_KEY"
               autoComplete="off"
               autoFocus
+            />
+          </div>
+          <label htmlFor="comfy-api-key">COMFY_API_KEY（仅 ComfyUI 生成需要）</label>
+          <div className="input-with-icon">
+            <LockKeyhole size={15} />
+            <input
+              id="comfy-api-key"
+              type="password"
+              value={comfyApiKey}
+              onChange={(event) => setComfyApiKey(event.target.value)}
+              placeholder="粘贴 platform.comfy.org 生成的 comfyui- 开头的 Key"
+              autoComplete="off"
             />
           </div>
           <label htmlFor="openrouter-api-key">OPENROUTER_API_KEY</label>
@@ -110,9 +139,9 @@ export function ApiKeyDialog({
           </div>
           <div className="security-note">实验版会把 Key 明文保存在浏览器 localStorage；DeepSeek Vision 只在尾帧识别时调用。共享设备上请及时清除，正式产品应改为服务端密钥。</div>
           <div className="dialog-actions">
-            {(savedFalApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey || savedBigModelApiKey) && <button className="button button-danger" type="button" onClick={onClear}>清除 Keys</button>}
+            {(savedFalApiKey || savedComfyApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey || savedBigModelApiKey) && <button className="button button-danger" type="button" onClick={onClear}>清除 Keys</button>}
             <button className="button button-ghost" type="button" onClick={onClose}>取消</button>
-            <button className="button button-primary" type="submit" disabled={!falApiKey.trim() && !openRouterApiKey.trim() && !deepSeekApiKey.trim() && !bigModelApiKey.trim()}>保存设置</button>
+            <button className="button button-primary" type="submit" disabled={!falApiKey.trim() && !comfyApiKey.trim() && !openRouterApiKey.trim() && !deepSeekApiKey.trim() && !bigModelApiKey.trim()}>保存设置</button>
           </div>
         </form>
       </div>

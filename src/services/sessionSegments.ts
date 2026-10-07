@@ -82,6 +82,8 @@ export const markAwaitingUpload = (session: GameSession, sceneId: string, input:
     }
     const updated: SceneVideoClip = clearClipMedia({
       ...base,
+      // 同一次 generate_segment（刷新后与服务端对齐）保留 Comfy 任务；导演重拍是新的调用，要重新提交。
+      comfyJobId: base.toolCallId === input.toolCallId ? base.comfyJobId : undefined,
       prompt: input.prompt,
       status: 'awaiting_upload',
       toolCallId: input.toolCallId,
@@ -92,7 +94,7 @@ export const markAwaitingUpload = (session: GameSession, sceneId: string, input:
     const videoClips = [
       ...clips.filter((clip) => clip.sequence < input.sequence),
       updated,
-      ...clips.filter((clip) => clip.sequence > input.sequence).map(clearClipMedia),
+      ...clips.filter((clip) => clip.sequence > input.sequence).map((clip) => ({ ...clearClipMedia(clip), comfyJobId: undefined })),
     ]
     return { ...scene, videoClips }
   })
@@ -241,7 +243,10 @@ export const adoptServerTurnState = (
   references: Omit<ResolveReferenceContext, 'currentClips'>,
 ): AdoptServerTurnStateResult => {
   const sceneId = session.currentScene?.id
-  if (!sceneId) return { session, needsRetry: false }
+  // 第一幕在 publish_scene 之前中断：本地只有待处理的输入、还没有场景，服务端空闲时同样交给玩家重试。
+  if (!sceneId) {
+    return { session, needsRetry: serverState.status === 'idle' && session.status === 'awaiting_agent' }
+  }
 
   if (serverState.status === 'idle') {
     if (session.status === 'awaiting_upload' || session.status === 'awaiting_agent') {

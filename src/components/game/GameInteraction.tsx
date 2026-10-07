@@ -2,12 +2,13 @@ import { FormEvent, useState } from 'react'
 import { Bot, LoaderCircle, RotateCcw, Send } from 'lucide-react'
 import { isDirectorActive } from '../../services/directorStatus'
 import type { DirectorStatus } from '../../types/director'
-import type { GameSession } from '../../types/game'
+import type { GameScene, GameSession } from '../../types/game'
 import type { StoryChoice } from '../../types/story'
 
 type GameInteractionProps = {
   session: GameSession
   directorStatus: DirectorStatus
+  videoMode: NonNullable<GameScene['videoMode']>
   onChoose: (choice: StoryChoice) => boolean
   onSubmitFreeform: (text: string) => boolean
   onRetry: () => void
@@ -16,6 +17,7 @@ type GameInteractionProps = {
 export function GameInteraction({
   session,
   directorStatus,
+  videoMode,
   onChoose,
   onSubmitFreeform,
   onRetry,
@@ -54,13 +56,13 @@ export function GameInteraction({
 
   if (session.status === 'awaiting_upload') {
     const pendingUpload = session.pendingUpload
-    const mode = session.currentScene?.videoMode === 'auto' ? '生成' : '上传'
+    const mode = videoMode === 'auto' || videoMode === 'comfy' ? '生成' : '上传'
     return (
       <section className="game-interaction-card waiting" aria-live="polite">
         <LoaderCircle className="spin" size={20} />
         <div>
           <h2>等待这一段视频</h2>
-          <p>{pendingUpload ? `导演在等待第 ${pendingUpload.sequence} 段视频${mode}，完成后会继续写下一段。` : '导演在等待这一段视频，完成后会继续写下一段。'}</p>
+          <p>{pendingUpload ? `导演在等待第 ${pendingUpload.sequence} 段视频${mode}，完成后会继续写下一段。` : '导演在等待这一段视频，完成后会继续写下一段。'}{videoMode === 'comfy' ? '点时间轴上的「生成视频」开始。' : ''}</p>
         </div>
       </section>
     )

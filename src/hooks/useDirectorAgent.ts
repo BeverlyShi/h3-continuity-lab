@@ -133,7 +133,7 @@ export function useDirectorAgent(
             descriptors: event.referenceImages,
             references: resolved,
           })
-          append('status', `等待第 ${event.sequence} 段视频${videoMode === 'auto' ? '生成' : '上传'}。`)
+          append('status', `等待第 ${event.sequence} 段视频${videoMode === 'auto' || videoMode === 'comfy' ? '生成' : '上传'}。`)
           const clip = game.getSessionSnapshot()?.currentScene?.videoClips?.find((item) => item.sequence === event.sequence)
           const warning = clip ? onAwaitingUpload?.(sceneId, clip) : undefined
           if (warning) append('error', warning)
@@ -295,7 +295,7 @@ export function useDirectorAgent(
 
   const syncTurnState = useCallback(async () => {
     const session = game.getSessionSnapshot()
-    if (!session?.currentScene || session.status === 'awaiting_action') return { needsRetry: false }
+    if (!session || session.status === 'awaiting_action') return { needsRetry: false }
     try {
       const serverState = await fetchDirectorTurnState(session.id)
       return game.adoptServerTurnState(serverState, { characterReferences: characterReferencesRef.current })
