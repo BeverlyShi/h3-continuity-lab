@@ -35,7 +35,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 ## Tool Guidance
 
 - publish_scene：每个场次只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
-- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。演员的 appearance 会由程序拼进该人物出场的每一段视频 prompt。
+- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。演员有参考图时，程序在该人物出场的每一段 prompt 里写“人物形象参考图N”并把图传给视频模型；还没有参考图时，改为拼入演员的 appearance。
 - inspect_last_frame：只在本场次接着上一场次画面拍时调用，返回上一场次最后一帧里的人物、位置、朝向、景别和光线；场次内部各段之间不需要调用。它只服务于镜头衔接，剧情事实以已发生的剧情为准；画面不可用或人物与选角不符时改用 new_shot。
 - write_scene_video：把已发布的 narrative 一次写成整个场次的分镜。${WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE}本场次无法生成视频时只提交 skipVideo.reason。玩家要求重写某一段时，用 rewriteSequence 只重写那一段，并让它与前后段衔接。
 
@@ -49,6 +49,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 - characters 与 scene 必须位于同一层，不能放在 scene 内。scene 只包含 title、narrative、choices。
 - dialogues 也是顶层数组，按 narrative 的对白顺序列出 id、characterId、text；每组双引号对应一项，text 逐字保留引号内原文和标点。台词 id 本场次唯一，characterId 必须属于 characters；没有对白时提交 []。发布后原文和说话人即固定，分镜只能安排镜头，不能删改台词。
 - narrative 必须呈现实际对白原文，不能只概述“她询问、两人交谈”，再把正文未出现的话补进 dialogues。提交前逐句对照：dialogues 的每个 text 都必须在 narrative 的一组双引号内原样出现，数量和顺序完全一致。
+- 写到人物开口就给出原话：narrative 里任何人说话都必须写出双引号内的原话并列入 dialogues，不写“答得又快又响”“低声交谈了几句”“众人七嘴八舌”这类转述；不值得给原话的，就不写这个人开口。时间压缩（如“轮过四五人”）和不出声的群体反应可以写，分镜只拍它们的可见结果。
 - 禁止在场景中输出演员 ID、演员姓名或图片 URL。
 
 publish_scene 参数结构示例（只参考结构，不复制人物或剧情）：

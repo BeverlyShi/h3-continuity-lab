@@ -622,12 +622,6 @@ async function runAgentSession({
   let rewritten = false
   const sceneCharacters = () => state.scenePublish?.characters ?? []
   const lookupActor = (characterId: string) => lookupCastingBookActor(book, characterId)
-  const lookupAppearance = (characterId: string) => {
-    const actorId = book.bindings.get(characterId)
-    const actor = actorId ? book.actors.find((candidate) => candidate.id === actorId) : undefined
-    const character = sceneCharacters().find((candidate) => candidate.id === characterId)
-    return actor?.appearance && character ? { name: character.name, appearance: actor.appearance } : undefined
-  }
 
   // 交齐即停：剧情、选角、分镜（或跳过视频的理由）都有了就结束，不再多花一次模型调用。
   const isComplete = () => {
@@ -780,7 +774,7 @@ async function runAgentSession({
         style: state.video.style,
         videoPrompts,
       }
-      videoPlan = toDurableValue(compileVideoPlan(request, lookupAppearance))
+      videoPlan = toDurableValue(compileVideoPlan(request))
       send({
         type: 'video_plan',
         video: videoPlan,

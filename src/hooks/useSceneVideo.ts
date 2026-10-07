@@ -5,10 +5,9 @@ import { createFalVideoGenerator } from '../services/falVideoGenerator'
 import { resolveReferenceDescriptors } from '../services/sessionSegments'
 import { readVideoTailFrame } from '../services/videoTailFrame'
 import { deleteUploadedVideo, saveUploadedVideo } from '../services/uploadedVideoStorage'
-import { buildClipPrompt } from '../services/videoReferencePrompt'
+import { buildClipGenerationInput } from '../services/videoReferencePrompt'
 import type { Actor } from '../types/actor'
 import type { GameScene, SceneVideoClip } from '../types/game'
-import type { VideoInputReferenceImage } from '../types/video'
 import type { useGameSession } from './useGameSession'
 
 type GameController = ReturnType<typeof useGameSession>
@@ -46,6 +45,8 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
     setMediaBusy(busy)
   }, [])
 
+  const findActor = useCallback((actorId: string) => actors.find((actor) => actor.id === actorId), [actors])
+
   // 演员参考图按演员库实时解析：玩家在演员库补上参考图后，再生成就会用上。
   const resolveClipReferences = useCallback((sceneId: string, clip: SceneVideoClip) => {
     const scene = game.getSessionSnapshot()?.sceneHistory.find((item) => item.id === sceneId)
@@ -79,7 +80,7 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
     if (busyRef.current) throw new Error('请等待当前视频处理完成。')
     const clip = findClip(game, sceneId, sequence)
     if (!isCurrentScene(game, sceneId) || !clip) throw new Error('这一段已经不在当前场次，请刷新后重试。')
-    if (clip.status === 'waiting') throw new Error('请先完成上一段，这一段要以上一段的尾帧开场。')
+    if (clip.status === 'waiting') throw new Error('请先完成上一段，这一段要用上一段的尾帧作画面参考。')
     if (clip.status === 'generating') throw new Error('这一段正在生成，请稍候。')
     if (!file.size || (file.type && !file.type.startsWith('video/'))) throw new Error('请选择可播放的视频文件。')
 
@@ -95,14 +96,11 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
   const runComfy = useCallback(async (sceneId: string, clip: SceneVideoClip) => {
     let jobId = clip.comfyJobId
     if (!jobId) {
-      const startImage = clip.startImageUrl ? await toImageDataUrl(clip.startImageUrl) : undefined
-      const referenceImages = startImage ? [] : await Promise.all((clip.referenceImages ?? [])
-        .filter((reference) => reference.type === 'character' && reference.imageUrl)
-        .map((reference) => toImageDataUrl(reference.imageUrl!)))
+      const input = buildClipGenerationInput(clip.prompt, clip.referenceImages ?? [], findActor)
+      const referenceImages = await Promise.all(input.images.map((image) => toImageDataUrl(image.imageUrl)))
       const submitted = await submitComfySegment(comfyApiKey, {
-        prompt: buildClipPrompt(clip),
+        prompt: input.prompt,
         seconds: clip.endTime - clip.startTime,
-        ...(startImage ? { startImage } : {}),
         ...(referenceImages.length ? { referenceImages } : {}),
       })
       jobId = submitted.jobId
@@ -122,20 +120,13 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
     const blob = await fetchComfyVideo(comfyApiKey, jobId)
     const file = new File([blob], `comfy-${clip.sequence}.mp4`, { type: blob.type || 'video/mp4' })
     await storeVideoFile(sceneId, clip.sequence, file)
-  }, [comfyApiKey, game, storeVideoFile])
+  }, [comfyApiKey, findActor, game, storeVideoFile])
 
   const runFal = useCallback(async (sceneId: string, clip: SceneVideoClip) => {
-    const characterReferences = (clip.referenceImages ?? [])
-      .filter((reference): reference is VideoInputReferenceImage & { type: 'character' } => reference.type === 'character')
-      .map((reference) => ({
-        characterName: reference.label.replace('人物参考 · ', ''),
-        actorId: reference.actorId ?? '',
-        imageUrl: reference.imageUrl ?? '',
-      }))
+    const input = buildClipGenerationInput(clip.prompt, clip.referenceImages ?? [], findActor)
     const generator = createFalVideoGenerator(falApiKey)
-    const result = await generator.generate(clip.prompt, clip.endTime - clip.startTime, clip.sequence, {
-      startImageUrl: clip.startImageUrl,
-      characterReferences,
+    const result = await generator.generate(input.prompt, clip.endTime - clip.startTime, clip.sequence, {
+      referenceImageUrls: input.images.map((image) => image.imageUrl),
     })
     const tailFrameUrl = await generator.createTailFrameUrl(result.videoUrl)
     await game.commitClipMedia(sceneId, clip.sequence, {
@@ -143,7 +134,7 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
       tailFrameUrl,
       actualDuration: clip.endTime - clip.startTime,
     })
-  }, [falApiKey, game])
+  }, [falApiKey, findActor, game])
 
   // 生成单段：成功返回 true；只在 auto（fal）与 comfy 模式下可用。
   const generateClip = useCallback(async (sceneId: string, sequence: number) => {

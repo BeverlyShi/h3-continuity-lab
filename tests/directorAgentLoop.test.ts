@@ -98,16 +98,14 @@ test('one scene runs straight through: publish, cast, whole-scene storyboard, th
       assert.ok(plan?.type === 'video_plan')
       assert.equal(plan.fromSequence, 1)
       assert.equal(plan.video.totalDuration, 15)
-      assert.deepEqual(plan.references, [
-        [
-          { type: 'character', characterId: 'heroine', actorId: 'actor-young' },
-          { type: 'character', characterId: 'steward', actorId: 'actor-elder' },
-        ],
-        [{ type: 'start_frame', sequence: 1 }],
-      ])
+      const cast = [
+        { type: 'character', characterId: 'heroine', actorId: 'actor-young' },
+        { type: 'character', characterId: 'steward', actorId: 'actor-elder' },
+      ]
+      assert.deepEqual(plan.references, [cast, [...cast, { type: 'start_frame', sequence: 1 }]])
       const first = plan.video.videoPrompts[0].prompt
       assert.ok(first.startsWith(storyboard.style))
-      assert.match(first, /人物外观：掌事姑姑——四十余岁，深青宫装，发髻一丝不乱。/)
+      assert.doesNotMatch(first, /人物外观|四十余岁/, '人物行由前端在生成时拼接')
       assert.match(first, /掌事姑姑说：“你识字吗？”/)
       assert.match(first, /无音乐，无旁白。$/)
       assert.equal(outcome.video?.videoPrompts.length, 2)
@@ -158,7 +156,7 @@ test('continuing from the previous scene requires inspecting its last frame firs
       assert.deepEqual(inspected[0], { apiKey: 'test-deepseek-key', imageUrl: previousScene.tailFrameDataUrl, characters: scene.characters, signal: undefined })
       const plan = events.find((event) => event.type === 'video_plan')
       assert.ok(plan?.type === 'video_plan')
-      assert.deepEqual(plan.references[0], [{ type: 'previous_scene_tail_frame' }])
+      assert.deepEqual(plan.references[0].at(-1), { type: 'previous_scene_tail_frame' })
 
       // 上一场次尾帧图片不写进 session；看过的画面状态留着供重写。
       const saved = findRewritableScene(await readEntries('loop-continue'))

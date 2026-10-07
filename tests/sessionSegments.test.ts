@@ -81,7 +81,7 @@ test('applyVideoPlan creates clips: the first is pending with resolved reference
   const next = applyVideoPlan(makeSession(), 'scene-1', plan(3), references)
   assert.deepEqual(clips(next).map((clip) => clip.status), ['pending', 'waiting', 'waiting'])
   assert.deepEqual(clips(next)[0].referenceImages, [
-    { type: 'character', imageUrl: 'heroine.jpg', label: '人物参考 · 沈清禾', actorId: 'actor-1' },
+    { type: 'character', imageUrl: 'heroine.jpg', label: '沈清禾', actorId: 'actor-1' },
   ])
   assert.deepEqual(clips(next)[1].referenceDescriptors, [{ type: 'start_frame', sequence: 1 }])
   assert.equal(next.currentScene?.videoRequest?.videoPrompts.length, 3)
@@ -126,7 +126,7 @@ test('a ready clip unlocks the next clip with its tail frame as the start image'
   assert.equal(first.actualDuration, 5.2)
   assert.equal(second.status, 'pending')
   assert.equal(second.startImageUrl, 'tail-1.jpg')
-  assert.deepEqual(second.referenceImages, [{ type: 'start_frame', imageUrl: 'tail-1.jpg', label: '起始尾帧' }])
+  assert.deepEqual(second.referenceImages, [{ type: 'start_frame', imageUrl: 'tail-1.jpg', label: '上一段最后一帧' }])
   assert.equal(third.status, 'waiting')
   assert.equal(session.status, 'awaiting_video')
   assert.equal(session.currentScene?.tailFrameUrl, undefined)
@@ -237,8 +237,8 @@ test('resolveReferenceDescriptors resolves the three descriptor kinds and report
     previousSceneTailFrameUrl: 'prev-tail.jpg',
   })
   assert.deepEqual(result.referenceImages, [
-    { type: 'character', imageUrl: 'heroine.jpg', label: '人物参考 · 沈清禾', actorId: 'actor-1' },
-    { type: 'start_frame', imageUrl: 'prev-tail.jpg', label: '起始尾帧' },
+    { type: 'character', imageUrl: 'heroine.jpg', label: '沈清禾', actorId: 'actor-1' },
+    { type: 'start_frame', imageUrl: 'prev-tail.jpg', label: '上一场次最后一帧' },
   ])
   assert.equal(result.startImageUrl, 'prev-tail.jpg')
   assert.deepEqual(result.missing, ['ghost'])

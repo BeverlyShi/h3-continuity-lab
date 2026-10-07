@@ -1,10 +1,8 @@
 import { createFalClient } from '@fal-ai/client'
 import type { VideoGenerator } from '../types/video'
 import { extractVideoTailFrame } from './videoTailFrame'
-import { buildVideoReferencePrompt } from './videoReferencePrompt'
 
 const H3_MAX_TEXT_TO_VIDEO = 'minimax/h3-max/text-to-video'
-const H3_MAX_IMAGE_TO_VIDEO = 'minimax/h3-max/image-to-video'
 const H3_MAX_REFERENCE_TO_VIDEO = 'minimax/h3-max/reference-to-video'
 
 type H3MaxResult = {
@@ -20,34 +18,20 @@ export const createFalVideoGenerator = (apiKey: string): VideoGenerator => {
   })
 
   return {
+    // prompt 已含人物行与参考图号；有参考图（人物图、上一段尾帧）就走参考图生成，否则文生视频。
     async generate(prompt, duration, _sequence, conditioning) {
-      const startImageUrl = conditioning?.startImageUrl
-      const characterReferences = startImageUrl ? [] : conditioning?.characterReferences ?? []
-      const referenceImageUrls = characterReferences.map((reference) => reference.imageUrl)
-      const referenceImages = startImageUrl
-        ? [{ type: 'start_frame' as const, imageUrl: startImageUrl, label: '起始尾帧' }]
-        : characterReferences.map((reference) => ({
-            type: 'character' as const, imageUrl: reference.imageUrl, label: reference.characterName,
-          }))
-      const endpoint = startImageUrl
-        ? H3_MAX_IMAGE_TO_VIDEO
-        : referenceImageUrls.length
-          ? H3_MAX_REFERENCE_TO_VIDEO
-          : H3_MAX_TEXT_TO_VIDEO
+      const referenceImageUrls = conditioning?.referenceImageUrls ?? []
       const result = await fal.subscribe(
-        endpoint,
+        referenceImageUrls.length ? H3_MAX_REFERENCE_TO_VIDEO : H3_MAX_TEXT_TO_VIDEO,
         {
           input: {
-            prompt: buildVideoReferencePrompt(prompt, referenceImages),
+            prompt,
             duration,
             resolution: '768P',
             prompt_expansion_mode: 'balanced',
             enable_safety_checker: true,
-            ...(startImageUrl
-              ? { image_url: startImageUrl }
-              : referenceImageUrls.length
-                ? { reference_image_urls: referenceImageUrls, aspect_ratio: '16:9' }
-                : { aspect_ratio: '16:9' }),
+            aspect_ratio: '16:9',
+            ...(referenceImageUrls.length ? { reference_image_urls: referenceImageUrls } : {}),
           },
         },
       )

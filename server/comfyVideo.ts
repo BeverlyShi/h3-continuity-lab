@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 
-// 三份工作流取自 Comfy 官方 H3 模板（API 格式），程序只填 prompt、秒数、种子和图片，其余参数保持模板原值。
+// 工作流取自 Comfy 官方 H3 模板（API 格式），程序只填 prompt、秒数、种子和图片，其余参数保持模板原值。
 export const COMFY_BASE_URL = 'https://cloud.comfy.org'
 
 type WorkflowNode = { class_type: string; inputs: Record<string, unknown>; _meta?: { title: string } }
@@ -10,7 +10,6 @@ const loadWorkflow = (name: string): ComfyWorkflow =>
   JSON.parse(readFileSync(new URL(`./comfy/workflows/${name}.json`, import.meta.url), 'utf8')) as ComfyWorkflow
 
 const WORKFLOWS = {
-  i2v: loadWorkflow('h3_max_turbo_i2v'),
   t2v: loadWorkflow('h3_max_turbo_t2v'),
   r2v: loadWorkflow('h3_max_r2v'),
 }
@@ -21,15 +20,14 @@ const MAX_REFERENCE_IMAGES = 9
 export type ComfySegmentRequest = {
   prompt: string
   seconds: number
-  // data:image/ 或 http(s) 地址；有首帧时忽略人物参考图，与 fal 的规则一致。
-  startImage?: string
+  // data:image/ 或 http(s) 地址，顺序即 prompt 里的图号：人物参考图在前，上一段尾帧（画面参考）在最后。
   referenceImages?: string[]
 }
 
 export type ComfyWorkflowKind = keyof typeof WORKFLOWS
 
 export const chooseWorkflowKind = (request: ComfySegmentRequest): ComfyWorkflowKind =>
-  request.startImage ? 'i2v' : request.referenceImages?.length ? 'r2v' : 't2v'
+  request.referenceImages?.length ? 'r2v' : 't2v'
 
 export const validateComfySegmentRequest = (value: unknown): ComfySegmentRequest => {
   if (!value || typeof value !== 'object') throw new Error('请求内容无效。')
@@ -40,7 +38,6 @@ export const validateComfySegmentRequest = (value: unknown): ComfySegmentRequest
   }
   const isImage = (image: unknown): image is string =>
     typeof image === 'string' && /^(data:image\/|https?:\/\/)/.test(image)
-  if (body.startImage !== undefined && !isImage(body.startImage)) throw new Error('首帧图片地址无效。')
   if (body.referenceImages !== undefined) {
     if (!Array.isArray(body.referenceImages) || !body.referenceImages.every(isImage)) throw new Error('参考图地址无效。')
     if (body.referenceImages.length > MAX_REFERENCE_IMAGES) throw new Error(`参考图最多 ${MAX_REFERENCE_IMAGES} 张。`)
@@ -48,12 +45,11 @@ export const validateComfySegmentRequest = (value: unknown): ComfySegmentRequest
   return {
     prompt: body.prompt,
     seconds: body.seconds!,
-    ...(body.startImage ? { startImage: body.startImage } : {}),
     ...(body.referenceImages?.length ? { referenceImages: body.referenceImages } : {}),
   }
 }
 
-// uploadedImages 是已上传到 Comfy 的文件名：i2v 只用第一张作首帧，r2v 依次接入 image_1..image_N。
+// uploadedImages 是已上传到 Comfy 的文件名，r2v 依次接入 image_1..image_N。
 export const buildComfyWorkflow = (
   kind: ComfyWorkflowKind,
   input: { prompt: string; seconds: number; seed: number; uploadedImages: string[] },
@@ -63,9 +59,6 @@ export const buildComfyWorkflow = (
   video['model.prompt'] = input.prompt
   video['model.duration'] = input.seconds
   video.seed = input.seed
-  if (kind === 'i2v') {
-    workflow['1'].inputs.image = input.uploadedImages[0]
-  }
   if (kind === 'r2v') {
     input.uploadedImages.forEach((image, index) => {
       const nodeId = `${10 + index}`
@@ -158,7 +151,7 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
   return {
     async submitSegment(request) {
       const kind = chooseWorkflowKind(request)
-      const sources = kind === 'i2v' ? [request.startImage!] : kind === 'r2v' ? request.referenceImages! : []
+      const sources = request.referenceImages ?? []
       const uploadedImages = await Promise.all(sources.map(uploadImage))
       const workflow = buildComfyWorkflow(kind, {
         prompt: request.prompt,

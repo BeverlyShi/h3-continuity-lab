@@ -11,7 +11,7 @@ import type {
 
 export type SceneVideoClip = VideoPromptSegment & {
   status: 'waiting' | 'pending' | 'generating' | 'ready' | 'failed'
-  // waiting：等上一段完成（首帧来自上一段尾帧）；pending：可以生成或上传；generating：fal（auto）或 Comfy（comfy）生成中
+  // waiting：等上一段完成（画面参考帧来自上一段尾帧）；pending：可以生成或上传；generating：fal（auto）或 Comfy（comfy）生成中
   // ready：视频与尾帧已就绪；failed：上传或生成出错，可重试、重新上传或让导演重写
   referenceDescriptors?: VideoReferenceDescriptor[]
   referenceImages?: VideoInputReferenceImage[]
@@ -37,7 +37,7 @@ export type GameScene = StoryScene & {
   videoClips?: SceneVideoClip[]
   videoMode?: 'auto' | 'comfy' | 'manual' | 'off'
   videoSkippedReason?: string
-  // 本场次最后一段的尾帧：下一场次导演选择接着拍时，用它作首帧并交给 inspect_last_frame。
+  // 本场次最后一段的尾帧：下一场次导演选择接着拍时，用它作画面参考帧并交给 inspect_last_frame。
   tailFrameUrl?: string
 }
 

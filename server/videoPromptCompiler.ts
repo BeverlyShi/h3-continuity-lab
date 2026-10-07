@@ -1,31 +1,13 @@
 import type { VideoGenerationRequest, VideoPromptSegment } from '../src/types/story.ts'
 
-export type CharacterAppearance = { name: string; appearance: string }
+// 最终 prompt = 场次画面风格 + 分镜正文。人物行（参考图号或外貌描写）由前端在生成时按演员库拼接：参考图可能在分镜写完后才补上。
+export const compileVideoPrompt = (segment: VideoPromptSegment, style: string) =>
+  [style.trim(), `${segment.prompt.trim()}无音乐，无旁白。`].filter(Boolean).join('\n\n')
 
-// 最终 prompt = 场次画面风格 + 本段出场人物外观 + 分镜正文。人物外观由程序按选角拼接，不靠导演每段重抄。
-export const compileVideoPrompt = (
-  segment: VideoPromptSegment,
-  style: string,
-  lookupAppearance: (characterId: string) => CharacterAppearance | undefined = () => undefined,
-) => {
-  const appearances = segment.characterIds.flatMap((characterId) => {
-    const found = lookupAppearance(characterId)
-    return found?.appearance.trim() ? [`${found.name}——${found.appearance.trim().replace(/[。；;.]+$/, '')}`] : []
-  })
-  return [
-    style.trim(),
-    appearances.length ? `人物外观：${appearances.join('；')}。` : '',
-    `${segment.prompt.trim()}无音乐，无旁白。`,
-  ].filter(Boolean).join('\n\n')
-}
-
-export const compileVideoPlan = (
-  request: VideoGenerationRequest,
-  lookupAppearance?: (characterId: string) => CharacterAppearance | undefined,
-): VideoGenerationRequest => ({
+export const compileVideoPlan = (request: VideoGenerationRequest): VideoGenerationRequest => ({
   ...request,
   videoPrompts: request.videoPrompts.map((segment) => ({
     ...segment,
-    prompt: compileVideoPrompt(segment, request.style, lookupAppearance),
+    prompt: compileVideoPrompt(segment, request.style),
   })),
 })

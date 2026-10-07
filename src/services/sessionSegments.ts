@@ -20,6 +20,10 @@ const patchScene = (session: GameSession, sceneId: string, patch: (scene: GameSc
   }
 }
 
+export const PREVIOUS_SEGMENT_FRAME_LABEL = '上一段最后一帧'
+export const PREVIOUS_SCENE_FRAME_LABEL = '上一场次最后一帧'
+
+// startImageUrl 是画面参考帧（上一段或上一场次的最后一帧），和人物参考图一起按 r2v 传给模型。
 export type ResolvedSegmentReferences = {
   referenceImages: VideoInputReferenceImage[]
   startImageUrl?: string
@@ -50,8 +54,8 @@ export const resolveReferenceDescriptors = (
       }
       referenceImages.push({
         type: 'character',
-        imageUrl: reference.imageUrl,
-        label: `人物参考 · ${reference.characterName}`,
+        ...(reference.imageUrl ? { imageUrl: reference.imageUrl } : {}),
+        label: reference.characterName,
         actorId: reference.actorId,
       })
       continue
@@ -62,7 +66,7 @@ export const resolveReferenceDescriptors = (
         continue
       }
       startImageUrl = ctx.previousSceneTailFrameUrl
-      referenceImages.push({ type: 'start_frame', imageUrl: ctx.previousSceneTailFrameUrl, label: '起始尾帧' })
+      referenceImages.push({ type: 'start_frame', imageUrl: ctx.previousSceneTailFrameUrl, label: PREVIOUS_SCENE_FRAME_LABEL })
       continue
     }
     const source = ctx.currentClips.find((clip) => clip.sequence === descriptor.sequence)
@@ -71,7 +75,7 @@ export const resolveReferenceDescriptors = (
       continue
     }
     startImageUrl = source.tailFrameUrl
-    referenceImages.push({ type: 'start_frame', imageUrl: source.tailFrameUrl, label: '起始尾帧' })
+    referenceImages.push({ type: 'start_frame', imageUrl: source.tailFrameUrl, label: PREVIOUS_SEGMENT_FRAME_LABEL })
   }
 
   return { referenceImages, startImageUrl, missing }
@@ -89,7 +93,7 @@ const clearClipMedia = (clip: SceneVideoClip): SceneVideoClip => ({
   referenceImages: undefined,
 })
 
-// 第 sequence 段之后的段作废：首帧要等前一段重新完成，统一回到 waiting。
+// 第 sequence 段之后的段作废：画面参考帧要等前一段重新完成，统一回到 waiting。
 const resetClipsAfter = (clips: SceneVideoClip[], sequence: number) => clips.map((clip) =>
   clip.sequence > sequence ? { ...clearClipMedia(clip), status: 'waiting' as const } : clip)
 
@@ -178,7 +182,7 @@ export type CommitClipMediaInput = {
   actualDuration: number
 }
 
-// 某段就绪：之后的段重新排队，下一段以这段尾帧开场；最后一段就绪即开放选择。
+// 某段就绪：之后的段重新排队，下一段以这段尾帧为画面参考；最后一段就绪即开放选择。
 export const commitClipMedia = (
   session: GameSession,
   sceneId: string,
