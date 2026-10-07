@@ -2,7 +2,6 @@
 export type ComfySegmentRequest = {
   prompt: string
   seconds: number
-  startImage?: string
   referenceImages?: string[]
 }
 

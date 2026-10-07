@@ -48,7 +48,7 @@ test('both structure examples in the prompt validate against each other', () => 
   assert.ok(result.kind === 'plan')
   assert.equal(result.segments.length, 2)
   assert.match(result.segments[0].prompt, /你识字吗？/)
-  assert.match(result.segments[1].prompt, /^0–4秒：承接上一段画面/)
+  assert.match(result.segments[1].prompt, /^0–3秒：承接上一段画面/)
 })
 
 test('the agent exposes the scene tools to one Agent instance without forcing tool choice', async () => {

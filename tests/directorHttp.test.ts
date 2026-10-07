@@ -164,7 +164,7 @@ test('a scene continues from the previous frame over HTTP, and the rewrite endpo
       const events = await readNdjson(turnResponse)
       assert.equal(events.filter((event) => event.type === 'error').length, 0)
       const plan = events.find((event) => event.type === 'video_plan')
-      assert.deepEqual(plan.references[0], [{ type: 'previous_scene_tail_frame' }])
+      assert.deepEqual(plan.references[0].at(-1), { type: 'previous_scene_tail_frame' })
       assert.equal(plan.fromSequence, 1)
       assert.equal(events.at(-1)?.type, 'done')
 

@@ -100,7 +100,7 @@ export const scenePublishSchema = Type.Object({
 
 export const writeSceneVideoSchema = Type.Object({
   opening: Type.Optional(Type.Union([Type.Literal('continue'), Type.Literal('new_shot')], {
-    description: 'continue：第 1 段以上一场次最后一帧为首帧接着拍，需先调用 inspect_last_frame；new_shot：换场景或换时间，第 1 段用人物参考图开场。整场写作时必填，重写单段时省略。',
+    description: 'continue：第 1 段以上一场次最后一帧为画面参考接着拍，需先调用 inspect_last_frame；new_shot：换场景或换时间，第 1 段只用人物参考图开场。整场写作时必填，重写单段时省略。',
   })),
   style: Type.Optional(Type.String({ minLength: 10, maxLength: 400, description: '整个场次统一的画面质感、色调和光源，一句话。整场写作时必填，重写单段时省略。' })),
   segments: Type.Optional(Type.Array(videoPlanSegmentSchema, {

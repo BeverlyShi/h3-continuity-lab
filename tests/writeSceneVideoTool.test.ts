@@ -69,23 +69,32 @@ test('rewriting one segment keeps the others and re-validates the whole scene', 
   assert.throws(() => prepareSceneVideo({ rewriteSequence: 2, segments: [stealing] }, { ...ctx, rewrite }), /台词 line_1 重复安排/)
 })
 
-test('segment references: the first segment follows the opening, later segments start from the previous one', () => {
+test('segment references: every segment lists its cast actors, then the frame it continues from', () => {
   const segments = [{ sequence: 1, characterIds: ['heroine', 'steward', 'extra'] }, { sequence: 2, characterIds: ['heroine'] }]
   const lookup = (id: string) => id === 'extra' ? undefined : { actorId: `actor-${id}` }
+  const heroine = { type: 'character', characterId: 'heroine', actorId: 'actor-heroine' }
+  const steward = { type: 'character', characterId: 'steward', actorId: 'actor-steward' }
   assert.deepEqual(describeSegmentReferences('new_shot', segments, lookup), [
-    [{ type: 'character', characterId: 'heroine', actorId: 'actor-heroine' }, { type: 'character', characterId: 'steward', actorId: 'actor-steward' }],
-    [{ type: 'start_frame', sequence: 1 }],
+    [heroine, steward],
+    [heroine, { type: 'start_frame', sequence: 1 }],
   ])
-  assert.deepEqual(describeSegmentReferences('continue', segments, lookup)[0], [{ type: 'previous_scene_tail_frame' }])
+  assert.deepEqual(describeSegmentReferences('continue', segments, lookup)[0], [heroine, steward, { type: 'previous_scene_tail_frame' }])
 })
 
-test('the compiled prompt puts style, cast appearances and the shots together', () => {
+test('the compiled prompt is style plus shots; the cast line is added at generation time', () => {
   const prompt = compileVideoPrompt(
-    { sequence: 1, startTime: 0, endTime: 5, characterIds: ['heroine', 'steward', 'extra'], prompt: '0–5秒：两人对视。' },
+    { sequence: 1, startTime: 0, endTime: 5, characterIds: ['heroine', 'steward'], prompt: '0–5秒：两人对视。' },
     '写实古装画面。',
-    (id) => id === 'heroine' ? { name: '女主', appearance: '十七岁，素色襦裙。' } : id === 'steward' ? { name: '掌事姑姑', appearance: '四十余岁，深青宫装' } : undefined,
   )
-  assert.equal(prompt, '写实古装画面。\n\n人物外观：女主——十七岁，素色襦裙；掌事姑姑——四十余岁，深青宫装。\n\n0–5秒：两人对视。无音乐，无旁白。')
+  assert.equal(prompt, '写实古装画面。\n\n0–5秒：两人对视。无音乐，无旁白。')
+})
+
+test('a character who opens their mouth without a line placeholder is rejected', () => {
+  const [first, second] = storyboard.segments
+  const mute = { ...second, prompt: second.prompt.replace('她抬起眼与掌事姑姑对视。', '她抬起眼开口，声音又响又快。') }
+  assert.throws(() => prepareSceneVideo({ ...storyboard, segments: [first, mute] }, ctx), /写了“开口”却没有台词占位符/)
+  const negated = { ...second, prompt: second.prompt.replace('她抬起眼与掌事姑姑对视。', '她抬起眼，没有回答。') }
+  assert.equal(prepareSceneVideo({ ...storyboard, segments: [first, negated] }, ctx).kind, 'plan')
 })
 
 test('the tool refuses to run until its precondition is met and reports the plan in one line per segment', async () => {

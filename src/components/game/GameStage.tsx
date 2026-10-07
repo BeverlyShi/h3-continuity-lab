@@ -21,11 +21,12 @@ import {
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { MAX_REWRITE_REASON_LENGTH } from '../../hooks/useDirectorAgent'
 import { isDirectorActive } from '../../services/directorStatus'
-import { buildClipPrompt } from '../../services/videoReferencePrompt'
+import { buildCharacterReferences } from '../../services/casting'
+import { resolveReferenceDescriptors } from '../../services/sessionSegments'
+import { buildClipGenerationInput } from '../../services/videoReferencePrompt'
 import type { DirectorStatus } from '../../types/director'
 import type { GameScene, GameSession, SceneVideoClip } from '../../types/game'
 import type { Actor } from '../../types/actor'
-import type { VideoInputReferenceImage } from '../../types/video'
 
 type GameStageProps = {
   session: GameSession | null
@@ -373,7 +374,6 @@ export function GameStage(props: GameStageProps) {
     ? Math.min(timelineSelection.index, Math.max(0, videoClips.length - 1))
     : Math.max(0, defaultSelectedIndex)
   const promptClip = videoClips[timelineSelectedIndex] ?? videoClips[0]
-  const promptText = promptClip ? buildClipPrompt(promptClip) : ''
 
   const promptClipHasLater = Boolean(promptClip && videoClips.some((clip) => clip.sequence > promptClip.sequence))
 
@@ -415,9 +415,20 @@ export function GameStage(props: GameStageProps) {
     } catch (error) { setActionMessage(error instanceof Error ? error.message : '参考图下载失败') }
   }
   const actorsById = new Map(actors.map((actor) => [actor.id, actor]))
-  // 演员参考图只按 actorId 存档，展示时用当前演员库解析。
-  const resolveReferenceImage = (reference: VideoInputReferenceImage) => reference.imageUrl
-    ?? (reference.actorId ? actorsById.get(reference.actorId)?.referenceImageUrl : undefined)
+  // 还没生成的段按当前演员库和已就绪的尾帧实时解析：这里展示的就是点生成时会提交的 prompt 和参考图。
+  const promptReferences = !promptClip
+    ? []
+    : isCurrent && session && (promptClip.status === 'pending' || promptClip.status === 'waiting')
+      ? resolveReferenceDescriptors(promptClip.referenceDescriptors ?? [], {
+          characterReferences: buildCharacterReferences(session.characters, actors, session.castings),
+          currentClips: videoClips,
+          previousSceneTailFrameUrl: sceneIndex > 0 ? session.sceneHistory[sceneIndex - 1].tailFrameUrl : undefined,
+        }).referenceImages
+      : promptClip.referenceImages ?? []
+  const promptInput = promptClip
+    ? buildClipGenerationInput(promptClip.prompt, promptReferences, (actorId) => actorsById.get(actorId))
+    : undefined
+  const promptText = promptInput?.prompt ?? ''
   const charactersById = new Map((session?.characters ?? []).map((character) => [character.id, character]))
   const sceneCharacterIds = scene?.characterIds ?? [
     ...new Set(scene?.videoRequest?.videoPrompts.flatMap((segment) => segment.characterIds) ?? []),
@@ -425,15 +436,15 @@ export function GameStage(props: GameStageProps) {
   const castingsByCharacterId = new Map(
     (scene?.castings ?? []).map((casting) => [casting.characterId, casting.actorId]),
   )
-  // 换场景开场时第 1 段用人物参考图；演员库里还没有参考图的演员按文字描述生成。
-  const firstClip = videoClips[0]
-  const actorsMissingReference = isCurrent && firstClip && firstClip.status !== 'ready'
-    ? [...new Set((firstClip.referenceDescriptors ?? []).flatMap((descriptor) => {
-        if (descriptor.type !== 'character') return []
-        const actor = actorsById.get(descriptor.actorId)
-        if (actor?.referenceImageUrl) return []
-        return [actor?.name ?? charactersById.get(descriptor.characterId)?.name ?? descriptor.characterId]
-      }))]
+  // 每段都用人物参考图；演员库里还没有参考图的演员按文字描述生成。
+  const actorsMissingReference = isCurrent
+    ? [...new Set(videoClips.filter((clip) => clip.status !== 'ready').flatMap((clip) =>
+        (clip.referenceDescriptors ?? []).flatMap((descriptor) => {
+          if (descriptor.type !== 'character') return []
+          const actor = actorsById.get(descriptor.actorId)
+          if (actor?.referenceImageUrl) return []
+          return [actor?.name ?? charactersById.get(descriptor.characterId)?.name ?? descriptor.characterId]
+        })))]
     : []
 
   return (
@@ -491,7 +502,7 @@ export function GameStage(props: GameStageProps) {
           : modeForHelp === 'auto'
             ? '导演写好整场分镜后，页面自动调用 fal 逐段生成，每段以上一段的尾帧开场。需要 FAL_KEY。'
             : modeForHelp === 'comfy'
-              ? '导演写好整场分镜后，由你点击生成，按秒消耗 Comfy 积分（有首帧用 Turbo，开场参考图用 H3 Max）。需要 COMFY_API_KEY。'
+              ? '导演写好整场分镜后，由你点击生成，按秒消耗 Comfy 积分（有参考图用 H3 Max 参考生成，没有参考图用 Turbo 文生）。需要 COMFY_API_KEY。'
             : '仅续写故事，不生成或上传视频。'}</p>
         <div className="game-video-mode-footer">
           <small>下一场次开始时，导演可以查看本场次最后一帧，决定接着拍还是换场景。</small>
@@ -725,7 +736,7 @@ export function GameStage(props: GameStageProps) {
                   ? `生成本场次视频（共 ${remainingSeconds} 秒）`
                   : `继续生成剩余 ${remainingClips.length} 段（共 ${remainingSeconds} 秒）`}
               </button>
-              {videoMode === 'comfy' && <small>按秒消耗 Comfy 积分，逐段生成，每段以上一段的尾帧开场。</small>}
+              {videoMode === 'comfy' && <small>按秒消耗 Comfy 积分，逐段生成，每段以上一段的尾帧作为画面参考。</small>}
             </div>
           )}
           {actorsMissingReference.length > 0 && (
@@ -765,7 +776,7 @@ export function GameStage(props: GameStageProps) {
                     <span
                       className={`game-video-timeline-link${clip.startImageUrl ? ' linked' : ''}`}
                       title={clip.startImageUrl
-                        ? '已使用上一段尾帧作为起始画面'
+                        ? '已使用上一段尾帧作为画面参考图'
                         : '等待上一段尾帧'}
                     >
                       <Link2 size={11} />
@@ -886,37 +897,33 @@ export function GameStage(props: GameStageProps) {
               </div>
               <div className="game-video-prompt-reference-section" aria-label="本段生成参考图">
                 <strong className="game-video-prompt-reference-title">本段生成参考图</strong>
-                {promptClip.status === 'waiting' ? (
-                  <p className="game-video-prompt-reference-status">等上一段完成后，以它的尾帧作为起始画面。</p>
-                ) : promptClip.referenceImages && promptClip.referenceImages.length > 0 ? (
+                {promptInput && (promptInput.images.length > 0 || promptInput.textOnlyCharacters.length > 0) && (
                   <div className="game-video-prompt-references">
-                    {promptClip.referenceImages.map((reference, index) => {
-                      const imageUrl = resolveReferenceImage(reference)
-                      if (!imageUrl) {
-                        return (
-                          <div className="game-video-reference" key={`${reference.type}:${reference.actorId ?? index}`}>
-                            <span className="game-video-prompt-reference-status">{reference.label} · 演员已删除</span>
-                          </div>
-                        )
-                      }
+                    {promptInput.images.map((image, index) => {
+                      const label = `图${index + 1} · ${image.label}`
                       return (
-                        <div className="game-video-reference" key={`${reference.type}:${reference.actorId ?? imageUrl}`}>
-                          <a
-                            href={imageUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={`查看${reference.label}`}
-                          >
-                            <img src={imageUrl} alt={reference.label} loading="lazy" decoding="async" />
-                            <span>{reference.label}</span>
+                        <div className="game-video-reference" key={`${index}:${image.imageUrl}`}>
+                          <a href={image.imageUrl} target="_blank" rel="noreferrer" title={`查看${label}`}>
+                            <img src={image.imageUrl} alt={label} loading="lazy" decoding="async" />
+                            <span>{label}</span>
                           </a>
-                          <button type="button" className="game-video-action" onClick={() => { void downloadReference(imageUrl, reference.label) }}><Download size={11} />下载参考图</button>
+                          <button type="button" className="game-video-action" onClick={() => { void downloadReference(image.imageUrl, image.label) }}><Download size={11} />下载参考图</button>
                         </div>
                       )
                     })}
+                    {promptInput.textOnlyCharacters.map((character) => (
+                      <div className="game-video-reference" key={`text:${character.name}`}>
+                        <span className="game-video-prompt-reference-status">
+                          {character.name} · {character.actorMissing ? '演员已删除' : '无参考图，按文字描述'}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ) : (
-                  <p className="game-video-prompt-reference-status">本段没有可用的参考图，将按纯文字 Prompt 生成。</p>
+                )}
+                {promptClip.status === 'waiting' ? (
+                  <p className="game-video-prompt-reference-status">上一段最后一帧：等上一段完成后作为画面参考图加入。</p>
+                ) : promptInput && !promptInput.images.length && !promptInput.textOnlyCharacters.length && (
+                  <p className="game-video-prompt-reference-status">本段没有参考图，将按纯文字 Prompt 生成。</p>
                 )}
               </div>
             </div>

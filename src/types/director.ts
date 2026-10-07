@@ -78,7 +78,7 @@ export type DirectorStreamEvent =
   | { type: 'scene'; scene: StoryScene; characters: SceneCharacter[] }
   | { type: 'cast'; casting: SceneCastingResult }
   | { type: 'cast_error'; message: string }
-  // video.videoPrompts 已编译为最终 prompt；references[i] 是第 i+1 段的起始画面描述符；
+  // video.videoPrompts 已编译（风格 + 正文，人物行由前端生成时拼接）；references[i] 是第 i+1 段的参考图描述符；
   // fromSequence 起的各段需要（重新）生成：整场写作为 1，导演重写第 N 段时为 N。
   | { type: 'video_plan'; video: VideoGenerationRequest; references: VideoReferenceDescriptor[][]; fromSequence: number }
   | { type: 'video_plan_error'; message: string }

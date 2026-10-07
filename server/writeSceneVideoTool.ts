@@ -18,6 +18,8 @@ const MAX_TOTAL_SECONDS = 45
 const MIN_SEGMENTS = 2
 const TIME_BLOCK_PATTERN = /^\s*(\d+)\s*[–—-]\s*(\d+)\s*秒[：:]/gm
 const PLACEHOLDER_PATTERN = /\{\{\s*([^{}]*?)\s*\}\}/g
+// 画面里有人张嘴就必须对应一句台词；否定说法（没有回答、不答话）不算开口。
+const SPEECH_VERB_PATTERN = /(?<!没有|没|未|不)(开口|说道|答道|问道|喊道|应声|回答|答话|说话)/
 
 export const WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE = JSON.stringify({
   opening: 'new_shot',
@@ -26,19 +28,19 @@ export const WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE = JSON.stringify({
     {
       characters: ['heroine', 'steward'],
       seconds: 5,
-      prompt: '0–3秒：双人中景，平视，镜头固定。女主怀抱青色包袱站在画面左侧，身体朝右；掌事姑姑站在画面右侧。两人面对面相对而立，相距一步，姑姑看着女主，女主垂着眼帘。掌事姑姑面向左侧的女主开口，{{line_1}}安静。\n\n3–5秒：镜头硬切为双人中近景，平视，固定。女主在画面左侧抬起头面向右侧，双手仍抱着包袱；掌事姑姑在画面右侧。两人面对面相距一步，女主与她对视。画外传来轻微风声。',
+      prompt: '0–2秒：全景，平视，镜头固定。女主怀抱青色包袱站在画面左侧，身体朝右；掌事姑姑站在画面右侧面向她。两人面对面相对而立，相距一步。宫墙在背景。安静。\n\n2–5秒：镜头硬切为掌事姑姑近景，平视，固定。画面只有掌事姑姑一人，画框从胸口到头顶，她面向画面左侧，目光从上往下打量，再抬回平视，开口，{{line_1}}',
     },
     {
       characters: ['heroine', 'steward'],
       seconds: 10,
-      prompt: '0–4秒：承接上一段画面，镜头固定。女主垂下眼帘，双手把包袱抱得更紧；掌事姑姑的目光停在她脸上。安静。\n\n4–10秒：镜头硬切为女主近景，平视，缓缓推近。她直起身，面向画面右侧，双手仍抱着包袱。画外传来轻微风声。',
+      prompt: '0–3秒：承接上一段画面，镜头固定。掌事姑姑的目光仍停在画面左侧。安静。\n\n3–6秒：镜头硬切为女主近景，平视，固定。画面只有女主一人，画框从胸口到头顶，她面向画面右侧垂着眼帘，双手把包袱抱得更紧。安静。\n\n6–10秒：镜头硬切为过肩近景，平视，固定。前景是掌事姑姑虚化的肩头，位于画面右侧；焦点在画面左侧女主的脸上，她抬起眼与掌事姑姑对视。画外传来轻微风声。',
     },
   ],
 })
 
 export const WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE = '整场写作提交 opening、style 和 2–3 段 segments，每段只有 characters、seconds、prompt。prompt 由“0–3秒：”形式的时间块组成，从 0 秒开始首尾相接，最后一块结束于 seconds；在实际说话位置写 {{台词ID}} 占位符，程序替换为姓名和原文。重写单段时只提交 rewriteSequence 和只含该段的 segments。不提交 sequence、isLast、beats、audio 或任何时间字段。'
 
-export const WRITE_SCENE_VIDEO_DESCRIPTION = `把已发布的 narrative 一次写成整个场次的视频分镜，不发展剧情，不改台词。${WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE}每段 5–15 秒，整场 2–3 段、15–45 秒，每段 seconds 不低于本段台词字数 ÷ ${SPEECH_RATE_HAN_PER_SECOND} 再加 1 秒。全场每句台词按原顺序恰好使用一次。段与段之间用上一段最后一帧接上，是连续画面，切镜只能放在段内部；第 2 段起开头写“承接上一段画面”，不重述站位和构图，只写这一段的变化。opening 为 continue 时第 1 段以上一场次最后一帧开场，必须先调用 inspect_last_frame，首镜按它返回的画面写；new_shot 用于换场景或换时间，第 1 段用人物参考图开场。人物外观由程序自动拼进 prompt，正文用人物姓名，不出现人物 ID。本场次不适合生成视频时只提交 skipVideo.reason。同一回合再次整场提交会覆盖上一次。`
+export const WRITE_SCENE_VIDEO_DESCRIPTION = `把已发布的 narrative 一次写成整个场次的视频分镜，不发展剧情，不改台词。${WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE}每段 5–15 秒，整场 2–3 段、15–45 秒，每段 seconds 不低于本段台词字数 ÷ ${SPEECH_RATE_HAN_PER_SECOND} 再加 1 秒。全场每句台词按原顺序恰好使用一次；画面里有人开口就必须写台词占位符，没有原话的开口会被拒绝。第 2 段起程序把上一段最后一帧作为画面参考图传给模型，后一段从这个画面接着拍，切镜只能放在段内部；第 2 段起开头写“承接上一段画面”，不重述站位和构图，只写这一段的变化。opening 为 continue 时第 1 段以上一场次最后一帧为画面参考，必须先调用 inspect_last_frame，首镜按它返回的画面写；new_shot 用于换场景或换时间，第 1 段只用人物参考图。人物的参考图编号或外貌描写由程序拼进 prompt，正文只用人物姓名，不出现人物 ID、不写图号。本场次不适合生成视频时只提交 skipVideo.reason。同一回合再次整场提交会覆盖上一次。`
 
 export const prepareWriteSceneVideoArguments = (args: unknown): WriteSceneVideoInput => {
   if (Check(writeSceneVideoSchema, args)) return args
@@ -96,6 +98,13 @@ export const validateSceneSegments = (
       const lastEnd = blocks[blocks.length - 1][1]
       if (lastEnd !== segment.seconds) {
         issues.push(`第 ${number} 段最后一个时间块结束于 ${lastEnd} 秒，与 seconds=${segment.seconds} 不一致`)
+      }
+    }
+
+    for (const sentence of segment.prompt.split(/(?<=[。！？；\n])/)) {
+      const verb = sentence.match(SPEECH_VERB_PATTERN)?.[1]
+      if (verb && !/\{\{[^{}]*\}\}/.test(sentence)) {
+        issues.push(`第 ${number} 段“${sentence.trim()}”写了“${verb}”却没有台词占位符：没有原话的开口模型只会生成随机人声，删掉这个开口，或改成不出声的可见动作`)
       }
     }
 
@@ -169,19 +178,19 @@ export const validateSceneSegments = (
 
 export type ActorLookup = (characterId: string) => { actorId: string } | undefined
 
-// 第 1 段：接着拍用上一场次最后一帧；换场景按 characters 顺序列出已绑定演员的人物（参考图由前端按演员库解析）。
-// 第 2 段起：以上一段最后一帧为首帧。
+// 每段都按 r2v 生成：先列本段已绑定演员的人物（参考图和外貌由前端按演员库解析），再接画面参考帧——
+// 第 2 段起是上一段最后一帧；第 1 段接着拍时是上一场次最后一帧，换场景时没有。
 export const describeSegmentReferences = (
   opening: SceneVideoOpening,
   segments: Pick<VideoPromptSegment, 'sequence' | 'characterIds'>[],
   lookupActor: ActorLookup,
 ): VideoReferenceDescriptor[][] => segments.map((segment): VideoReferenceDescriptor[] => {
-  if (segment.sequence > 1) return [{ type: 'start_frame', sequence: segment.sequence - 1 }]
-  if (opening === 'continue') return [{ type: 'previous_scene_tail_frame' }]
-  return segment.characterIds.flatMap((characterId): VideoReferenceDescriptor[] => {
+  const characters = segment.characterIds.flatMap((characterId): VideoReferenceDescriptor[] => {
     const actor = lookupActor(characterId)
     return actor ? [{ type: 'character', characterId, actorId: actor.actorId }] : []
   })
+  if (segment.sequence > 1) return [...characters, { type: 'start_frame', sequence: segment.sequence - 1 }]
+  return opening === 'continue' ? [...characters, { type: 'previous_scene_tail_frame' }] : characters
 })
 
 export type SceneVideoResult =

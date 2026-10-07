@@ -42,3 +42,11 @@ test('builds one composite three-view reference for each cast character', () => 
     },
   })
 })
+
+test('an actor still waiting for a reference image is listed without one, to be described in text', () => {
+  const pending: Actor = { id: 'actor-pending', name: '演员丙', gender: 'female', minAge: 40, maxAge: 55, appearance: '四十余岁', createdAt: 3 }
+  const references = buildCharacterReferences(characters, [...actors, pending], [
+    { characterId: 'matron', actorId: 'actor-pending' },
+  ])
+  assert.deepEqual(references, { matron: { characterName: '教引嬷嬷', actorId: 'actor-pending' } })
+})
