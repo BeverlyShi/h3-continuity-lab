@@ -1,4 +1,4 @@
-import type { AgentMessage } from '@earendil-works/pi-agent-core/node'
+import type { AgentMessage } from '@earendil-works/pi-agent-core'
 import type { TraceUsage } from '../src/types/director.ts'
 
 type AssistantAgentMessage = Extract<AgentMessage, { role: 'assistant' }>

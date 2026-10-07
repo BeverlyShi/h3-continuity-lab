@@ -6,18 +6,19 @@ import {
   DEFAULT_COMPACTION_SETTINGS,
   estimateContextTokens,
   InMemoryTelemetryContext,
-  JsonlSessionRepo,
-  NodeExecutionEnv,
   prepareCompaction,
   shouldCompact,
   uuidv7,
   type AgentMessage,
   type CompactionEntry,
   type Entry,
+  type JsonlSessionCreateOptions,
+  type JsonlSessionListOptions,
   type JsonlSessionMetadata,
   type Session,
+  type SessionRepo,
   type ShouldStopAfterTurnContext,
-} from '@earendil-works/pi-agent-core/node'
+} from '@earendil-works/pi-agent-core'
 import {
   createModels,
   type Api,
@@ -27,7 +28,6 @@ import {
 } from '@earendil-works/pi-ai'
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter'
-import { resolve } from 'node:path'
 import { getDirectorApiModelId, getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
 import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
 import type { AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
@@ -71,11 +71,12 @@ const MAX_DIRECTOR_OUTPUT_TOKENS = 4_096
 const DIRECTOR_TIMEOUT_MS = 45_000
 // 工具连续校验失败达到该次数后结束回合，避免模型反复重写。
 const MAX_TOOL_ATTEMPTS = 3
-const traceEnvironment = new NodeExecutionEnv({ cwd: process.cwd() })
-const traceRepo = new JsonlSessionRepo({
-  fs: traceEnvironment,
-  sessionsRoot: resolve(process.cwd(), '.agent-traces'),
-})
+
+// 会话存储由运行环境注入；scope 是会话列表与创建时用的 cwd 键。
+export type DirectorSessionStore = {
+  repo: SessionRepo<JsonlSessionMetadata, JsonlSessionCreateOptions, JsonlSessionListOptions>
+  scope: string
+}
 
 type DirectorStreamPolicy = Pick<SimpleStreamOptions, 'maxTokens' | 'reasoning' | 'samplingParams'>
 
@@ -255,14 +256,14 @@ const projectTraceEntries = (traceId: string, entries: Entry[]): AgentTraceEntry
   return projected
 }
 
-const getOrCreateSession = async (gameSessionId: string) => {
-  const existing = (await traceRepo.list({ cwd: process.cwd() }))
+const getOrCreateSession = async (store: DirectorSessionStore, gameSessionId: string) => {
+  const existing = (await store.repo.list({ cwd: store.scope }))
     .find((metadata) => metadata.id === gameSessionId)
-  if (existing) return traceRepo.open(existing)
+  if (existing) return store.repo.open(existing)
 
-  return traceRepo.create({
+  return store.repo.create({
     id: gameSessionId,
-    cwd: process.cwd(),
+    cwd: store.scope,
     metadata: {
       kind: 'palace-story-director',
       storyId: 'palace-validation',
@@ -843,6 +844,7 @@ const closeUnresolvedToolCall = async (session: Session<JsonlSessionMetadata>, e
 }
 
 export type DirectorAgentRequest = {
+  store: DirectorSessionStore
   apiKey: string
   modelId: DirectorModelId
   thinkingEnabled?: boolean
@@ -863,6 +865,7 @@ export async function runDirectorAgent(request: DirectorAgentRequest): Promise<D
 }
 
 async function runPersistentDirector({
+  store,
   apiKey,
   modelId,
   thinkingEnabled = false,
@@ -877,7 +880,7 @@ async function runPersistentDirector({
   send,
 }: DirectorAgentRequest): Promise<DirectorTurnOutcome> {
   const startedAt = Date.now()
-  const session = await getOrCreateSession(context.sessionId)
+  const session = await getOrCreateSession(store, context.sessionId)
   let persistedEntries = await closeUnresolvedToolCall(session, await session.findEntries({ order: 'oldestFirst' }))
 
   const startSeq = lastSequence(persistedEntries)
@@ -917,6 +920,7 @@ async function runPersistentDirector({
 }
 
 export type RewriteDirectorRequest = {
+  store: DirectorSessionStore
   sessionId: string
   sequence: number
   reason: string
@@ -935,6 +939,7 @@ export async function rewriteDirectorSegment(request: RewriteDirectorRequest): P
 }
 
 async function runRewriteDirector({
+  store,
   sessionId,
   sequence,
   reason,
@@ -947,7 +952,7 @@ async function runRewriteDirector({
   send,
 }: RewriteDirectorRequest): Promise<DirectorTurnOutcome> {
   const startedAt = Date.now()
-  const session = await getOrCreateSession(sessionId)
+  const session = await getOrCreateSession(store, sessionId)
   let entries = await session.findEntries({ order: 'oldestFirst' })
   const scene = findRewritableScene(entries)
   if (!scene?.video) throw new Error('当前场次没有可重写的分镜。')

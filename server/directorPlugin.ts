@@ -8,6 +8,7 @@ import type { DirectorTurnContext } from '../src/types/game.ts'
 import { sceneCharacterSchema, storyInputSchema } from '../src/types/story.ts'
 import { rewriteDirectorSegment, runDirectorAgent } from './directorAgent.ts'
 import type { DirectorVideoMode } from './directorPrompt.ts'
+import { createNodeSessionStore } from './nodeSessionStore.ts'
 import type { analyzeTailFrame } from './tailFrameVision.ts'
 
 export type DirectorPluginOptions = {
@@ -114,6 +115,7 @@ const streamDirector = async (
 }
 
 export function directorPlugin(options: DirectorPluginOptions = {}): Plugin {
+  const store = createNodeSessionStore()
   return {
     name: 'local-pi-director',
     configureServer(server) {
@@ -149,6 +151,7 @@ export function directorPlugin(options: DirectorPluginOptions = {}): Plugin {
           }
 
           await runDirectorAgent({
+            store,
             apiKey: requireModelKey(req, body.model),
             modelId: body.model,
             thinkingEnabled: body.thinkingEnabled === true,
@@ -197,6 +200,7 @@ export function directorPlugin(options: DirectorPluginOptions = {}): Plugin {
           }
 
           await rewriteDirectorSegment({
+            store,
             sessionId: body.sessionId,
             sequence: body.sequence as number,
             reason: body.reason.trim(),

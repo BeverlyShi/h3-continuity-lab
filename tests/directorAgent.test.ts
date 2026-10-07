@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { Entry, ShouldStopAfterTurnContext } from '@earendil-works/pi-agent-core/node'
+import type { Entry, ShouldStopAfterTurnContext } from '@earendil-works/pi-agent-core'
 import {
   createRetryingStopCondition,
   getDirectorStreamPolicy,
