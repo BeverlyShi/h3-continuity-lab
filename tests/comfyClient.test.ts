@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   createComfyProxyFetch,
   fetchComfyVideo,
-  getComfySegment,
+  getComfyJobStatus,
   submitComfySegment,
 } from '../src/services/comfyClient.ts'
 
@@ -47,7 +47,7 @@ test('submits, polls and downloads through /api/comfy/ with the key header', asy
   })
   try {
     assert.equal((await submitComfySegment('comfyui-test', { prompt: 'p', seconds: 5 })).jobId, 'job-1')
-    assert.deepEqual(await getComfySegment('comfyui-test', 'job-1'), { status: 'completed' })
+    assert.deepEqual(await getComfyJobStatus('comfyui-test', 'job-1'), { status: 'completed' })
     const blob = await fetchComfyVideo('comfyui-test', 'job-1')
     assert.equal(blob.type, 'video/mp4')
     assert.equal(await blob.text(), 'video-bytes')
@@ -75,7 +75,7 @@ test('validates the segment request in the browser before submitting', async () 
 test('shows proxy errors from the JSON error field', async () => {
   const stub = installFetch(() => jsonResponse({ error: '缺少 Comfy API Key。' }, 401))
   try {
-    await assert.rejects(getComfySegment('k', 'job-1'), /HTTP 401（API Key 无效）：缺少 Comfy API Key。/)
+    await assert.rejects(getComfyJobStatus('k', 'job-1'), /HTTP 401（API Key 无效）：缺少 Comfy API Key。/)
   } finally {
     stub.restore()
   }

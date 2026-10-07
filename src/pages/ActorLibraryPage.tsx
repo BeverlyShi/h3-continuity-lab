@@ -1,5 +1,6 @@
-import { ClipboardCopy, ImagePlus, Plus, Trash2, Upload, UserRound, X } from 'lucide-react'
+import { ClipboardCopy, ImagePlus, LoaderCircle, Plus, Sparkles, Trash2, Upload, UserRound, X } from 'lucide-react'
 import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { portraitPromptFor, type ActorPortraits } from '../hooks/useActorPortraits'
 import type { Actor, ActorDraft, ActorGender } from '../types/actor'
 
 type ActorLibraryPageProps = {
@@ -9,6 +10,7 @@ type ActorLibraryPageProps = {
   onAdd: (draft: ActorDraft) => Promise<Actor>
   onRemove: (actorId: string) => Promise<void>
   onSetImage: (actorId: string, referenceImageUrl: string) => Promise<void>
+  portraits: Pick<ActorPortraits, 'generatePortrait' | 'generatingIds' | 'canGenerate'>
 }
 
 const readImage = (file: File) => new Promise<string>((resolve, reject) => {
@@ -18,7 +20,7 @@ const readImage = (file: File) => new Promise<string>((resolve, reject) => {
   reader.readAsDataURL(file)
 })
 
-export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSetImage }: ActorLibraryPageProps) {
+export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSetImage, portraits }: ActorLibraryPageProps) {
   const [formOpen, setFormOpen] = useState(false)
   const [name, setName] = useState('')
   const [gender, setGender] = useState<ActorGender>('female')
@@ -58,7 +60,7 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSe
 
   const copyPrompt = async (actor: Actor) => {
     try {
-      await navigator.clipboard.writeText(actor.imagePrompt ?? '')
+      await navigator.clipboard.writeText(portraitPromptFor(actor) ?? '')
       setCopiedActorId(actor.id)
       setTimeout(() => { setCopiedActorId((current) => (current === actor.id ? '' : current)) }, 2000)
     } catch (reason) {
@@ -110,7 +112,7 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSe
         <div>
           <span className="actor-eyebrow"><UserRound size={14} />角色参考演员</span>
           <h1>演员库</h1>
-          <p>上传一张 16:9、纯白背景的人物三视图；导演在库中找不到合适演员时会新建演员并给出生图 prompt。</p>
+          <p>上传一张 16:9、纯白背景的人物三视图；导演在库中找不到合适演员时会新建演员，ComfyUI 模式下自动生成三视图。</p>
         </div>
         <button className="button button-primary" onClick={() => setFormOpen(true)}>
           <Plus size={15} />新增演员
@@ -128,14 +130,19 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSe
         </div>
       ) : (
         <section className="actor-grid" aria-label="演员列表">
-          {actors.map((actor) => (
+          {actors.map((actor) => {
+            const generating = portraits.generatingIds.has(actor.id)
+            const portraitPrompt = portraitPromptFor(actor)
+            return (
             <article className="actor-card" key={actor.id}>
               <div className="actor-card-image">
                 {actor.referenceImageUrl ? (
                   <>
                     <img src={actor.referenceImageUrl} alt={`${actor.name}三视图`} />
-                    <span>三视图</span>
+                    <span>{generating ? '重新生成中…' : '三视图'}</span>
                   </>
+                ) : generating ? (
+                  <div className="actor-card-pending"><LoaderCircle size={26} className="spin" />正在生成参考图…</div>
                 ) : (
                   <div className="actor-card-pending"><UserRound size={26} />待生成参考图</div>
                 )}
@@ -155,11 +162,24 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSe
                   <Trash2 size={14} />
                 </button>
               </div>
+              {actor.portraitError && !generating && (
+                <p className="actor-card-error" role="alert">参考图生成失败：{actor.portraitError}</p>
+              )}
               <div className="actor-card-actions">
+                {portraits.canGenerate && portraitPrompt && (
+                  <button
+                    type="button"
+                    disabled={generating}
+                    title="用 ComfyUI（GPT Image 2）生成 16:9 三视图，约 $0.05 一张"
+                    onClick={() => { void portraits.generatePortrait(actor.id, { force: true }) }}
+                  >
+                    <Sparkles size={13} />{generating ? '生成中…' : actor.portraitError ? '重试生成' : actor.referenceImageUrl ? '重新生成' : 'ComfyUI 生成'}
+                  </button>
+                )}
                 <button
                   type="button"
-                  disabled={!actor.imagePrompt}
-                  title={actor.imagePrompt ?? '该演员没有生图 prompt'}
+                  disabled={!portraitPrompt}
+                  title={portraitPrompt ?? '该演员没有生图 prompt'}
                   onClick={() => { void copyPrompt(actor) }}
                 >
                   <ClipboardCopy size={13} />{copiedActorId === actor.id ? '已复制' : '复制 prompt'}
@@ -170,7 +190,8 @@ export function ActorLibraryPage({ actors, loading, error, onAdd, onRemove, onSe
                 </label>
               </div>
             </article>
-          ))}
+            )
+          })}
         </section>
       )}
 

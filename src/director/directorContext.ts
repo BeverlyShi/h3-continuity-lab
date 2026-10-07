@@ -1,8 +1,10 @@
 import type { Entry } from '@earendil-works/pi-agent-core'
+import { stripCharacterRoster } from './characterRoster.ts'
 
 type MessageEntry = Extract<Entry, { type: 'message' }>
 type AssistantMessage = Extract<MessageEntry['message'], { role: 'assistant' }>
 type ToolResultMessage = Extract<MessageEntry['message'], { role: 'toolResult' }>
+type UserMessage = Extract<MessageEntry['message'], { role: 'user' }>
 type ToolCallContent = Extract<AssistantMessage['content'][number], { type: 'toolCall' }>
 
 const DIRECTOR_TRACE_CUSTOM_TYPE = 'director_trace'
@@ -109,6 +111,13 @@ const compressToolCallArguments = (content: ToolCallContent, index: ToolCallInde
   return { ...content, arguments: sequence === undefined ? {} : { sequence } }
 }
 
+const stripUserRoster = (message: UserMessage): UserMessage => ({
+  ...message,
+  content: typeof message.content === 'string'
+    ? stripCharacterRoster(message.content)
+    : message.content.map((item) => (item.type === 'text' ? { ...item, text: stripCharacterRoster(item.text) } : item)),
+})
+
 const projectTurn = (turnEntries: Entry[]): Entry[] => {
   const messageEntries = turnEntries.filter((entry): entry is MessageEntry => entry.type === 'message')
   const index = buildToolCallIndex(messageEntries)
@@ -118,6 +127,7 @@ const projectTurn = (turnEntries: Entry[]): Entry[] => {
   return turnEntries.map((entry): Entry => {
     if (entry.type !== 'message') return entry
     const { message } = entry
+    if (message.role === 'user') return { ...entry, message: stripUserRoster(message) }
     if (message.role === 'assistant') {
       const content: AssistantMessage['content'] = message.content.flatMap((item): AssistantMessage['content'] => {
         if (item.type === 'thinking') return []
@@ -134,7 +144,7 @@ const projectTurn = (turnEntries: Entry[]): Entry[] => {
   })
 }
 
-// 以 director_trace 边界切出当前这次运行（完整保留）和之前的历史场次（每个工具往返压成一行；剧情、人物、台词、选角原样保留）。
+// 以 director_trace 边界切出当前这次运行（完整保留）和之前的历史场次（每个工具往返压成一行；剧情、人物、台词、选角原样保留；旧的人物名册去掉）。
 export const projectHistory = (entries: Entry[]): Entry[] => {
   const boundaryIndices = entries.reduce<number[]>((acc, entry, index) => {
     if (entry.type === 'custom' && entry.customType === DIRECTOR_TRACE_CUSTOM_TYPE) acc.push(index)

@@ -34,7 +34,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 ## Tool Guidance
 
 - publish_scene：每个场次只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
-- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。演员有参考图时，程序在该人物出场的每一段 prompt 里写“人物形象参考图N”并把图传给视频模型；还没有参考图时，改为拼入演员的 appearance。
+- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图参考图。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。演员有参考图时，程序在该人物出场的每一段 prompt 里写“人物形象参考图N”并把图传给视频模型；还没有参考图时，改为拼入演员的 appearance。
 - inspect_last_frame：只在本场次接着上一场次画面拍时调用，返回上一场次最后一帧里的人物、位置、朝向、景别和光线；场次内部各段之间不需要调用。它只服务于镜头衔接，剧情事实以已发生的剧情为准；画面不可用或人物与选角不符时改用 new_shot。
 - write_scene_video：把已发布的 narrative 一次写成整个场次的分镜。${WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE}本场次无法生成视频时只提交 skipVideo.reason。玩家要求重写某一段时，用 rewriteSequence 只重写那一段，并让它与前后段衔接。
 
@@ -44,7 +44,7 @@ export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 
 - scene.narrative 简洁完整，篇幅以本场次内容为准，避免无关铺陈和重复描写；写清地点、人物动作和关键冲突，结尾留下一个尚未解决的问题或抉择。narrative 的事件量以 15–45 秒能拍完为准。
 - scene.choices 必须提供 3 个方向明显不同的选项，每项不超过 30 字，id 只能是 "1"、"2"、"3"。
-- characters 必须列出本场次实际出场的全部人物，包括无台词者、背景人物和结尾新出现的人物；未命名者用原文称谓，不编造身份；每个人物都包含稳定的 id、name、gender、minAge、maxAge。同一人物跨场次复用原 id。
+- characters 必须列出本场次实际出场的全部人物，包括无台词者、背景人物和结尾新出现的人物；未命名者用原文称谓，不编造身份；每个人物都包含稳定的 id、name、gender、minAge、maxAge。同一人物跨场次复用原 id：玩家输入后附有已登场人物名册，老人物一律从名册取 id，称谓变了也不换 id。
 - characters 与 scene 必须位于同一层，不能放在 scene 内。scene 只包含 title、narrative、choices。
 - dialogues 也是顶层数组，按 narrative 的对白顺序列出 id、characterId、text；每组双引号对应一项，text 逐字保留引号内原文和标点。台词 id 本场次唯一，characterId 必须属于 characters；没有对白时提交 []。发布后原文和说话人即固定，分镜只能安排镜头，不能删改台词。
 - narrative 必须呈现实际对白原文，不能只概述“她询问、两人交谈”，再把正文未出现的话补进 dialogues。提交前逐句对照：dialogues 的每个 text 都必须在 narrative 的一组双引号内原样出现，数量和顺序完全一致。
@@ -86,6 +86,8 @@ const videoModeLabel: Record<DirectorVideoMode, string> = {
 export type StoryInputOptions = {
   videoMode?: DirectorVideoMode
   hasPreviousFrame?: boolean
+  // 已登场人物名册（characterRoster.ts），单独成段放在最后，历史投影时整段去掉。
+  roster?: string
 }
 
 export const buildStoryInputMessage = (input: StoryInput, options: StoryInputOptions = {}) => {
@@ -102,6 +104,7 @@ export const buildStoryInputMessage = (input: StoryInput, options: StoryInputOpt
   if (options.videoMode) {
     parts.push(`本局视频模式：${videoModeLabel[options.videoMode]}。${options.hasPreviousFrame ? '上一场次有视频，接着拍时可以调用 inspect_last_frame 查看它的最后一帧。' : '上一场次没有可接的视频画面，本场次第 1 段用人物参考图开场（opening: new_shot）。'}`)
   }
+  if (options.roster) parts.push(options.roster)
   return parts.join('\n\n')
 }
 

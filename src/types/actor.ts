@@ -10,6 +10,9 @@ export type Actor = {
   referenceImageUrl?: string
   appearance?: string
   imagePrompt?: string
+  // ComfyUI 生成三视图的任务：刷新后接着查同一个任务，不重复扣费；出图后清掉。
+  portraitJobId?: string
+  portraitError?: string
   createdAt: number
 }
 

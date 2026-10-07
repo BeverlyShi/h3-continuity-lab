@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { fetchComfyVideo, getComfySegment, submitComfySegment } from '../services/comfyClient'
+import { fetchComfyVideo, getComfyJobStatus, submitComfySegment } from '../services/comfyClient'
 import { blobToDataUrl, toImageDataUrl } from '../services/dataUrl'
 import { createFalVideoGenerator } from '../services/falVideoGenerator'
 import { resolveReferenceDescriptors } from '../services/sessionSegments'
@@ -19,7 +19,9 @@ type UseSceneVideoParams = {
   // 新分镜到达时是否自动整场生成：auto 恒为 true，comfy 取玩家的「自动生成」开关。
   autoGenerate: boolean
   game: GameController
-  actors: Actor[]
+  getActors: () => Actor[]
+  // 提交前等这些演员的参考图生成结束：图出来了这一段就用图，失败则按文字外观生成。
+  preparePortraits: (actorIds: Iterable<string>) => Promise<void>
 }
 
 const COMFY_POLL_INTERVAL_MS = 5_000
@@ -34,7 +36,7 @@ const findClip = (game: GameController, sceneId: string, sequence: number): Scen
   return scene?.videoClips?.find((clip) => clip.sequence === sequence)
 }
 
-export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, autoGenerate, game, actors }: UseSceneVideoParams) {
+export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, autoGenerate, game, getActors, preparePortraits }: UseSceneVideoParams) {
   const busyRef = useRef(false)
   const [mediaBusy, setMediaBusy] = useState(false)
   // 自动生成时新分镜到达可能还有上一段在生成：记下场次，等手上的任务结束后接着生成。
@@ -45,17 +47,17 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, autoGenerate,
     setMediaBusy(busy)
   }, [])
 
-  const findActor = useCallback((actorId: string) => actors.find((actor) => actor.id === actorId), [actors])
+  const findActor = useCallback((actorId: string) => getActors().find((actor) => actor.id === actorId), [getActors])
 
-  // 演员参考图按演员库实时解析：玩家在演员库补上参考图后，再生成就会用上。
+  // 演员参考图按演员库实时解析：参考图生成好或玩家在演员库补上后，再生成就会用上。
   const resolveClipReferences = useCallback((sceneId: string, clip: SceneVideoClip) => {
     const scene = game.getSessionSnapshot()?.sceneHistory.find((item) => item.id === sceneId)
     return resolveReferenceDescriptors(clip.referenceDescriptors ?? [], {
-      characterReferences: game.getCharacterReferences(actors),
+      characterReferences: game.getCharacterReferences(getActors()),
       currentClips: scene?.videoClips ?? [],
       previousSceneTailFrameUrl: game.getPreviousSceneTailFrameUrl(sceneId),
     })
-  }, [actors, game])
+  }, [game, getActors])
 
   // Comfy 生成后存视频：抽尾帧 → 存本地 → 提交该段媒体。
   const storeVideoFile = useCallback(async (sceneId: string, sequence: number, file: File) => {
@@ -93,7 +95,7 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, autoGenerate,
 
     const deadline = Date.now() + COMFY_POLL_TIMEOUT_MS
     for (;;) {
-      const state = await getComfySegment(comfyApiKey, jobId)
+      const state = await getComfyJobStatus(comfyApiKey, jobId)
       if (state.status === 'completed') break
       if (state.status === 'failed') throw new ComfyJobFailedError(state.error)
       // 超时不作废任务 ID：任务可能还在排队，重试时继续查同一个任务，不重复扣费。
@@ -129,6 +131,8 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, autoGenerate,
 
     setBusy(true)
     try {
+      await preparePortraits((existing.referenceDescriptors ?? []).flatMap((descriptor) =>
+        descriptor.type === 'character' ? [descriptor.actorId] : []))
       game.markClipGenerating(sceneId, sequence, resolveClipReferences(sceneId, existing))
       const clip = findClip(game, sceneId, sequence)
       if (!clip) return false
@@ -144,7 +148,7 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, autoGenerate,
     } finally {
       setBusy(false)
     }
-  }, [comfyApiKey, falApiKey, game, resolveClipReferences, runComfy, runFal, setBusy, videoMode])
+  }, [comfyApiKey, falApiKey, game, resolveClipReferences, runComfy, runFal, setBusy, videoMode, preparePortraits])
 
   // 整场生成：从第一个未就绪的段开始依次生成，遇到失败、玩家跳过或场次变化就停。
   const generateScene = useCallback(async (sceneId: string) => {

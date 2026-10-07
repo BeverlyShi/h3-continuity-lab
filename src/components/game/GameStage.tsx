@@ -30,6 +30,8 @@ import type { Actor } from '../../types/actor'
 type GameStageProps = {
   session: GameSession | null
   actors: Actor[]
+  // 正在用 ComfyUI 生成三视图的演员。
+  generatingPortraitIds?: ReadonlySet<string>
   hasApiKey: boolean
   apiKeyLabel?: string
   directorStatus: DirectorStatus
@@ -119,7 +121,7 @@ const PENDING_CLIP_STATUSES: SceneVideoClip['status'][] = ['waiting', 'pending',
 
 export function GameStage(props: GameStageProps) {
   const {
-    session, actors, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoMode, mediaRunning,
+    session, actors, generatingPortraitIds, hasApiKey, apiKeyLabel = 'OpenRouter', directorStatus, videoMode, mediaRunning,
     onStart, onVideoModeChange, comfyAutoGenerate, onComfyAutoGenerateChange, onGenerateClip, onGenerateScene, onRewriteSegment,
     narrativeExpanded, onNarrativeExpandedChange,
   } = props
@@ -430,8 +432,15 @@ export function GameStage(props: GameStageProps) {
         (clip.referenceDescriptors ?? []).flatMap((descriptor) => {
           if (descriptor.type !== 'character') return []
           const actor = actorsById.get(descriptor.actorId)
-          if (actor?.referenceImageUrl) return []
+          if (actor?.referenceImageUrl || generatingPortraitIds?.has(descriptor.actorId)) return []
           return [actor?.name ?? charactersById.get(descriptor.characterId)?.name ?? descriptor.characterId]
+        })))]
+    : []
+  const actorsGeneratingPortrait = isCurrent
+    ? [...new Set(videoClips.filter((clip) => clip.status !== 'ready').flatMap((clip) =>
+        (clip.referenceDescriptors ?? []).flatMap((descriptor) => {
+          if (descriptor.type !== 'character' || !generatingPortraitIds?.has(descriptor.actorId)) return []
+          return [actorsById.get(descriptor.actorId)?.name ?? descriptor.actorId]
         })))]
     : []
 
@@ -537,10 +546,13 @@ export function GameStage(props: GameStageProps) {
                   )
                 }
                 if (!actor.referenceImageUrl) {
+                  const portraitState = generatingPortraitIds?.has(actor.id)
+                    ? '参考图生成中…'
+                    : actor.portraitError ? '参考图生成失败，可到演员库重试' : '待生成参考图'
                   return (
-                    <div className="game-cast-card pending" key={characterId}>
+                    <div className="game-cast-card pending" key={characterId} title={actor.portraitError}>
                       <span className="game-cast-placeholder"><UserRound size={16} /></span>
-                      <div><strong>{actor.name}</strong><small>待生成参考图</small></div>
+                      <div><strong>{actor.name}</strong><small>{portraitState}</small></div>
                     </div>
                   )
                 }
@@ -724,9 +736,14 @@ export function GameStage(props: GameStageProps) {
               {videoMode === 'comfy' && <small>按秒消耗 Comfy 积分，逐段生成，每段以上一段的尾帧作为画面参考。</small>}
             </div>
           )}
+          {actorsGeneratingPortrait.length > 0 && (
+            <p className="game-video-upload-help" role="status">
+              正在用 ComfyUI 生成参考图：{actorsGeneratingPortrait.join('、')}。生成视频时会先等参考图出来。
+            </p>
+          )}
           {actorsMissingReference.length > 0 && (
             <p className="game-video-reference-warning" role="status">
-              本场次有演员还没有参考图：{actorsMissingReference.join('、')}。可以先到演员库生成参考图，也可以直接按文字描述生成。
+              本场次有演员还没有参考图：{actorsMissingReference.join('、')}。{videoMode === 'comfy' ? '生成视频时会先用 ComfyUI 补生成参考图（生成失败过的演员请到演员库重试），也可以直接按文字描述生成。' : '可以先到演员库生成参考图，也可以直接按文字描述生成。'}
             </p>
           )}
           {mediaRunning && <p className="game-video-upload-help" role="status">正在处理视频…</p>}

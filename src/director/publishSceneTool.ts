@@ -114,6 +114,8 @@ export type PublishSceneToolOptions = {
   isPublished?: () => boolean
   // 发布成功后附在工具结果里的选角状态说明。
   describeCasting?: (turn: ScenePublish) => string
+  // 结构校验之外、依赖本局状态的检查（如老人物换了 id），返回的问题非空即拒绝发布。
+  checkCharacters?: (turn: ScenePublish) => string[]
 }
 
 export const createPublishSceneTool = (
@@ -129,6 +131,8 @@ export const createPublishSceneTool = (
   execute: async (_toolCallId, turn) => {
     if (options.isPublished?.()) throw new Error('本场次场景已经发布，不能重复发布；请继续选角或编写分镜。')
     assertValidScenePublish(turn)
+    const issues = options.checkCharacters?.(turn) ?? []
+    if (issues.length) throw new Error(`人物 id 与已登场人物名册冲突：\n- ${issues.join('\n- ')}\n修正后重新提交完整 JSON。`)
     await onPublish?.(turn)
     const text = ['场景已发布。', options.describeCasting?.(turn)].filter(Boolean).join('\n')
     return {

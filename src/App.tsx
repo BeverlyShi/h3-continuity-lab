@@ -5,6 +5,7 @@ import { GamePage } from './pages/GamePage'
 import { TracePage } from './pages/TracePage'
 import { ActorLibraryPage } from './pages/ActorLibraryPage'
 import { useActorLibrary } from './hooks/useActorLibrary'
+import { useActorPortraits } from './hooks/useActorPortraits'
 import { useAgentTraces } from './hooks/useAgentTraces'
 import {
   loadApiKey,
@@ -31,6 +32,7 @@ function App() {
   const [isApiDialogOpen, setIsApiDialogOpen] = useState(false)
   const { traces, updateTrace } = useAgentTraces()
   const actorLibrary = useActorLibrary()
+  const portraits = useActorPortraits(savedComfyApiKey, actorLibrary)
 
   const updateApiKeys = ({ falApiKey, comfyApiKey, openRouterApiKey, deepSeekApiKey, bigModelApiKey }: ApiKeys) => {
     setSavedComfyApiKey(comfyApiKey)
@@ -108,6 +110,7 @@ function App() {
           onAdd={actorLibrary.addActor}
           onRemove={actorLibrary.removeActor}
           onSetImage={actorLibrary.setActorImage}
+          portraits={portraits}
         />
       </div>
       <div hidden={workspace !== 'game'}>
@@ -120,7 +123,9 @@ function App() {
           onTraceUpdate={updateTrace}
           onRequestApiKey={() => setIsApiDialogOpen(true)}
           actors={actorLibrary.actors}
+          getActors={actorLibrary.getActors}
           onActorsCreated={actorLibrary.addCreatedActors}
+          portraits={portraits}
         />
       </div>
       {import.meta.env.DEV && (
