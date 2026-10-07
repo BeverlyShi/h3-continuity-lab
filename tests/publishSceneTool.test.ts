@@ -5,7 +5,7 @@ import {
   DIALOGUE_MAX_LINES,
   DIALOGUE_TOTAL_MAX_HAN,
   prepareScenePublishArguments,
-} from '../server/publishSceneTool.ts'
+} from '../src/director/publishSceneTool.ts'
 import type { ScenePublish } from '../src/types/story.ts'
 
 const turn: ScenePublish = {

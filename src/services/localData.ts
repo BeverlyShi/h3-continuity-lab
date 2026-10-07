@@ -1,6 +1,7 @@
+import { clearDirectorSessions } from '../director/sessionDatabase.ts'
 import { clearSessionImages } from './sessionImageStorage.ts'
 
-// 只清理游戏存档与视频数据；API Key、模型偏好和演员库保持不变。
+// 只清理游戏存档、导演会话历史与视频数据；API Key、模型偏好和演员库保持不变。
 const CLEARED_STORAGE_KEYS = [
   'h3-continuity-lab:game-session',
   'h3-continuity-lab:projects',
@@ -26,4 +27,5 @@ export const clearLocalMedia = async () => {
   })
   await deleteDatabase(UPLOADED_VIDEO_DATABASE)
   await clearSessionImages().catch(() => {})
+  await clearDirectorSessions()
 }

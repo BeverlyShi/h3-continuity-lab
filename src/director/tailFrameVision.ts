@@ -3,7 +3,7 @@ import {
   tailFrameVisualStateSchema,
   type SceneCharacter,
   type TailFrameVisualState,
-} from '../src/types/story.ts'
+} from '../types/story.ts'
 
 export const DEEPSEEK_VISION_MODEL = 'deepseek-v4-flash-vision-exp'
 const DEEPSEEK_CHAT_URL = 'https://api.deepseek.com/chat/completions'

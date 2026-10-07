@@ -5,7 +5,7 @@ import {
   createRetryingStopCondition,
   getDirectorStreamPolicy,
   stripTrailingFailedTurns,
-} from '../server/directorAgent.ts'
+} from '../src/director/directorAgent.ts'
 
 const usage = {
   input: 1,

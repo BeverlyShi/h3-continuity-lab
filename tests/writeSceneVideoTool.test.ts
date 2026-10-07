@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
-import { compileVideoPrompt } from '../server/videoPromptCompiler.ts'
+import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../src/director/publishSceneTool.ts'
+import { compileVideoPrompt } from '../src/director/videoPromptCompiler.ts'
 import {
   createWriteSceneVideoTool,
   describeSegmentReferences,
   prepareSceneVideo,
   WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE,
-} from '../server/writeSceneVideoTool.ts'
+} from '../src/director/writeSceneVideoTool.ts'
 
 const scene = JSON.parse(SCENE_PUBLISH_ARGUMENTS_EXAMPLE)
 const storyboard = JSON.parse(WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE)

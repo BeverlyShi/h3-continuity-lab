@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { analyzeTailFrame, DEEPSEEK_VISION_MODEL } from '../server/tailFrameVision.ts'
-import { createInspectLastFrameTool } from '../server/inspectLastFrameTool.ts'
+import { analyzeTailFrame, DEEPSEEK_VISION_MODEL } from '../src/director/tailFrameVision.ts'
+import { createInspectLastFrameTool } from '../src/director/inspectLastFrameTool.ts'
 import type { TailFrameVisualState } from '../src/types/story.ts'
 
 const characters = [

@@ -1,7 +1,7 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import { Type, type Static } from 'typebox'
-import type { CastableActor, CharacterCasting, CreatedActor, SceneCastingResult } from '../src/types/actor.ts'
-import type { SceneCharacter } from '../src/types/story.ts'
+import type { CastableActor, CharacterCasting, CreatedActor, SceneCastingResult } from '../types/actor.ts'
+import type { SceneCharacter } from '../types/story.ts'
 import { buildActorImagePrompt } from './actorPortraitPrompt.ts'
 
 export const MAX_CANDIDATES_PER_CHARACTER = 8

@@ -9,7 +9,7 @@ import {
   type VideoPromptSegment,
   type VideoReferenceDescriptor,
   type WriteSceneVideoInput,
-} from '../src/types/story.ts'
+} from '../types/story.ts'
 import { countHanCharacters } from './textMetrics.ts'
 
 export const SPEECH_RATE_HAN_PER_SECOND = 3.5

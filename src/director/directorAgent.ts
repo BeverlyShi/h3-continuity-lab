@@ -28,11 +28,11 @@ import {
 } from '@earendil-works/pi-ai'
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { openrouterProvider } from '@earendil-works/pi-ai/providers/openrouter'
-import { getDirectorApiModelId, getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../src/config/directorModels.ts'
-import type { CastableActor, CharacterCasting, SceneCastingResult } from '../src/types/actor.ts'
-import type { AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../src/types/director.ts'
-import type { DirectorTurnContext } from '../src/types/game.ts'
-import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../src/types/story.ts'
+import { getDirectorApiModelId, getDirectorModelLabel, getDirectorModelProvider, type DirectorModelId } from '../config/directorModels.ts'
+import type { CastableActor, CharacterCasting, SceneCastingResult } from '../types/actor.ts'
+import type { AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from '../types/director.ts'
+import type { DirectorTurnContext } from '../types/game.ts'
+import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../types/story.ts'
 import {
   buildRewriteMessage,
   buildStoryInputMessage,
