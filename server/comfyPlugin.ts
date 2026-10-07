@@ -1,84 +1,59 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import type { Plugin } from 'vite'
-import { createComfyClient, validateComfySegmentRequest, type ComfyClient } from './comfyVideo.ts'
+import { COMFY_PROXY_PREFIX, handleComfyProxy } from '../worker/comfyProxy.ts'
 
-export type ComfyPluginOptions = {
-  // 测试注入假的 Comfy 客户端；生产环境省略，直连 Comfy Cloud。
-  createClient?: (apiKey: string) => ComfyClient
-}
-
-// 参考图可能有多张 data URL，比导演接口的上限放宽。
-const MAX_BODY_BYTES = 30_000_000
-
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  let body = ''
-  for await (const chunk of req) {
-    body += chunk
-    if (Buffer.byteLength(body) > MAX_BODY_BYTES) throw new Error('请求内容过大。')
+// 开发服务器上的薄壳：Node 请求转成 Request 交给转发处理函数，上线后同一个函数跑在 Cloudflare Worker 里。
+const toRequest = (req: IncomingMessage): Request => {
+  const protocol = 'encrypted' in req.socket && req.socket.encrypted ? 'https' : 'http'
+  const url = new URL(req.url ?? '/', `${protocol}://${req.headers.host ?? 'localhost'}`)
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(req.headers)) {
+    // HTTP/2 的伪头（:authority 等）不是合法的头名。
+    if (value === undefined || name.startsWith(':')) continue
+    for (const item of Array.isArray(value) ? value : [value]) headers.append(name, item)
   }
-  return JSON.parse(body)
+  const hasBody = req.method !== 'GET' && req.method !== 'HEAD'
+  const init: RequestInit & { duplex?: 'half' } = {
+    method: req.method,
+    headers,
+    ...(hasBody ? { body: Readable.toWeb(req) as ReadableStream, duplex: 'half' } : {}),
+  }
+  return new Request(url, init)
 }
 
-const readComfyKey = (req: IncomingMessage) => {
-  const key = req.headers['x-comfy-key']
-  if (typeof key !== 'string' || !key.trim()) throw new Error('请先配置 COMFY_API_KEY。')
-  return key.trim()
+const sendResponse = async (res: ServerResponse, response: Response) => {
+  res.statusCode = response.status
+  response.headers.forEach((value, name) => res.setHeader(name, value))
+  if (!response.body) {
+    res.end()
+    return
+  }
+  await pipeline(Readable.fromWeb(response.body as NodeReadableStream), res)
 }
 
-const readJobId = (req: IncomingMessage) => {
-  const id = new URL(req.url ?? '', 'http://localhost').searchParams.get('id')
-  if (!id?.trim()) throw new Error('缺少 Comfy 任务 ID。')
-  return id.trim()
-}
-
-const sendJson = (res: ServerResponse, statusCode: number, value: unknown) => {
-  res.statusCode = statusCode
-  res.setHeader('Content-Type', 'application/json; charset=utf-8')
-  res.end(JSON.stringify(value))
-}
-
-const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
-
-export function comfyPlugin(options: ComfyPluginOptions = {}): Plugin {
-  const createClient = options.createClient ?? ((apiKey: string) => createComfyClient(apiKey))
+export function comfyPlugin(): Plugin {
   return {
-    name: 'local-comfy-video',
+    name: 'local-comfy-proxy',
     configureServer(server) {
-      // 必须先于 /api/comfy/segment 注册：connect 按前缀匹配，否则 /video 会被下面那个处理器吞掉。
-      server.middlewares.use('/api/comfy/segment/video', async (req, res, next) => {
-        if (req.method !== 'GET') {
+      server.middlewares.use(async (req, res, next) => {
+        // 先按前缀筛：不是转发层的请求不要碰它的 body。
+        if (!req.url?.startsWith(COMFY_PROXY_PREFIX)) {
           next()
           return
         }
         try {
-          const video = await createClient(readComfyKey(req)).fetchVideo(readJobId(req))
-          res.statusCode = 200
-          res.setHeader('Content-Type', video.headers.get('content-type') ?? 'video/mp4')
-          const length = video.headers.get('content-length')
-          if (length) res.setHeader('Content-Length', length)
-          if (!video.body) throw new Error('Comfy 视频内容为空。')
-          Readable.fromWeb(video.body as import('node:stream/web').ReadableStream).pipe(res)
-        } catch (error) {
-          sendJson(res, 400, { error: errorMessage(error, '下载 Comfy 视频失败。') })
-        }
-      })
-
-      server.middlewares.use('/api/comfy/segment', async (req, res, next) => {
-        try {
-          if (req.method === 'POST') {
-            const client = createClient(readComfyKey(req))
-            const request = validateComfySegmentRequest(await readJson(req))
-            sendJson(res, 200, await client.submitSegment(request))
+          const response = await handleComfyProxy(toRequest(req))
+          if (!response) {
+            next()
             return
           }
-          if (req.method === 'GET') {
-            sendJson(res, 200, await createClient(readComfyKey(req)).getSegment(readJobId(req)))
-            return
-          }
-          next()
+          await sendResponse(res, response)
         } catch (error) {
-          sendJson(res, 400, { error: errorMessage(error, 'Comfy 请求失败。') })
+          if (res.headersSent) res.destroy(error instanceof Error ? error : undefined)
+          else next(error)
         }
       })
     },

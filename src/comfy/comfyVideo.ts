@@ -1,5 +1,5 @@
-import h3MaxR2v from './comfy/workflows/h3_max_r2v.json' with { type: 'json' }
-import h3MaxTurboT2v from './comfy/workflows/h3_max_turbo_t2v.json' with { type: 'json' }
+import h3MaxR2v from './workflows/h3_max_r2v.json' with { type: 'json' }
+import h3MaxTurboT2v from './workflows/h3_max_turbo_t2v.json' with { type: 'json' }
 
 // 工作流取自 Comfy 官方 H3 模板（API 格式），分辨率改成最低档 480P、参考细节改成 standard 换出片速度；程序只填 prompt、秒数、种子和图片，其余参数保持模板原值。
 export const COMFY_BASE_URL = 'https://cloud.comfy.org'
@@ -189,10 +189,8 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
       const file = findVideoFile(job)
       if (!file) throw new Error('Comfy 任务没有产出视频文件。')
       const query = new URLSearchParams({ filename: file.filename, subfolder: file.subfolder ?? '', type: file.type ?? 'output' })
-      // /api/view 返回 302 到短时签名地址；签名地址本身不需要鉴权。
-      const view = await fetchImpl(`${COMFY_BASE_URL}/api/view?${query}`, { headers, redirect: 'manual' })
-      const location = view.headers.get('location')
-      const video = location ? await fetchImpl(location) : view
+      // /api/view 返回 302 到短时签名地址；转发层不带 key 去取签名地址，浏览器这里直接拿到视频。
+      const video = await fetchImpl(`${COMFY_BASE_URL}/api/view?${query}`, { headers })
       if (!video.ok) throw await comfyError(video, '下载视频')
       return video
     },
