@@ -123,3 +123,11 @@ test('submits a portrait job and downloads the image output, not a video', async
   await assert.rejects(client.fetchVideo('job-img'), /没有产出视频文件/)
   await assert.rejects(client.submitPortrait('  '), /缺少生图 prompt/)
 })
+
+test('a dropped connection says which step broke instead of a bare Failed to fetch', async () => {
+  const fakeFetch = (async () => { throw new TypeError('Failed to fetch') }) as unknown as typeof fetch
+  await assert.rejects(
+    createComfyClient('k', fakeFetch).getJobStatus('job-1'),
+    /Comfy 查询任务时网络中断（Failed to fetch）/,
+  )
+})

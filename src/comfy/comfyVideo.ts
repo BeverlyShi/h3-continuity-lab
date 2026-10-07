@@ -147,13 +147,23 @@ const findOutputFile = (job: JobDetail, kind: keyof typeof OUTPUT_PATTERNS): Out
 export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetch): ComfyClient => {
   const headers = { 'X-API-Key': apiKey }
 
+  // 浏览器 fetch 连不上（本站转发服务停了或重启、断网）只会抛 “Failed to fetch”，这里补上是哪一步断的。
+  const send = async (action: string, url: string, init?: RequestInit) => {
+    try {
+      return await fetchImpl(url, init)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      throw new Error(`Comfy ${action}时网络中断（${detail}）：请确认页面所在的服务仍在运行、网络正常后点重试。`, { cause: error })
+    }
+  }
+
   const uploadImage = async (source: string, index: number) => {
     const { bytes, extension } = await readImageBytes(source)
     const form = new FormData()
     form.append('image', bytes, `harem-${Date.now()}-${index}.${extension}`)
     form.append('type', 'input')
     form.append('overwrite', 'true')
-    const response = await fetchImpl(`${COMFY_BASE_URL}/api/upload/image`, { method: 'POST', headers, body: form })
+    const response = await send('上传图片', `${COMFY_BASE_URL}/api/upload/image`, { method: 'POST', headers, body: form })
     if (!response.ok) throw await comfyError(response, '上传图片')
     const json = await response.json() as { name?: string; subfolder?: string }
     if (!json.name) throw new Error('Comfy 上传图片后没有返回文件名。')
@@ -161,13 +171,13 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
   }
 
   const getJob = async (jobId: string): Promise<JobDetail> => {
-    const response = await fetchImpl(`${COMFY_BASE_URL}/api/jobs/${encodeURIComponent(jobId)}`, { headers })
+    const response = await send('查询任务', `${COMFY_BASE_URL}/api/jobs/${encodeURIComponent(jobId)}`, { headers })
     if (!response.ok) throw await comfyError(response, '查询任务')
     return await response.json() as JobDetail
   }
 
   const submitWorkflow = async (workflow: ComfyWorkflow) => {
-    const response = await fetchImpl(`${COMFY_BASE_URL}/api/prompt`, {
+    const response = await send('提交工作流', `${COMFY_BASE_URL}/api/prompt`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       // H3、GPT Image 都是合作节点，提交时还要在 extra_data 里带上同一个 key 才会计费到账户。
@@ -188,7 +198,7 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
     const file = findOutputFile(job, kind)
     if (!file) throw new Error(kind === 'video' ? 'Comfy 任务没有产出视频文件。' : 'Comfy 任务没有产出图片文件。')
     const query = new URLSearchParams({ filename: file.filename, subfolder: file.subfolder ?? '', type: file.type ?? 'output' })
-    const response = await fetchImpl(`${COMFY_BASE_URL}/api/view?${query}`, { headers })
+    const response = await send(kind === 'video' ? '下载视频' : '下载图片', `${COMFY_BASE_URL}/api/view?${query}`, { headers })
     if (!response.ok) throw await comfyError(response, kind === 'video' ? '下载视频' : '下载图片')
     return response
   }
@@ -215,7 +225,7 @@ export const createComfyClient = (apiKey: string, fetchImpl: typeof fetch = fetc
     },
 
     async getJobStatus(jobId) {
-      const response = await fetchImpl(`${COMFY_BASE_URL}/api/job/${encodeURIComponent(jobId)}/status`, { headers })
+      const response = await send('查询任务', `${COMFY_BASE_URL}/api/job/${encodeURIComponent(jobId)}/status`, { headers })
       if (!response.ok) throw await comfyError(response, '查询任务')
       const json = await response.json() as { status?: string; error_message?: string | null }
       const status = json.status ?? ''
