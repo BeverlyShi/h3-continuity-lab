@@ -32,8 +32,8 @@ type GamePageProps = {
 
 const DIRECTOR_MODEL_STORAGE_KEY = 'palace-director-model'
 const DIRECTOR_THINKING_STORAGE_KEY = 'palace-director-thinking-enabled'
-const VIDEO_GENERATION_STORAGE_KEY = 'palace-video-generation-enabled'
 const VIDEO_MODE_STORAGE_KEY = 'palace-video-mode'
+const COMFY_AUTO_GENERATE_STORAGE_KEY = 'h3-game-comfy-auto'
 
 const loadDirectorModel = (): DirectorModelId => {
   try {
@@ -54,11 +54,18 @@ const loadDirectorThinking = () => {
 
 const loadVideoMode = (): NonNullable<GameScene['videoMode']> => {
   try {
-    const mode = localStorage.getItem(VIDEO_MODE_STORAGE_KEY)
-    if (mode === 'auto' || mode === 'comfy' || mode === 'manual' || mode === 'off') return mode
-    return localStorage.getItem(VIDEO_GENERATION_STORAGE_KEY) === 'on' ? 'auto' : 'manual'
+    // 旧版的「上传视频」「仅文字」已下线，连同无值一律落到 ComfyUI。
+    return localStorage.getItem(VIDEO_MODE_STORAGE_KEY) === 'auto' ? 'auto' : 'comfy'
   } catch {
-    return 'manual'
+    return 'comfy'
+  }
+}
+
+const loadComfyAutoGenerate = () => {
+  try {
+    return localStorage.getItem(COMFY_AUTO_GENERATE_STORAGE_KEY) === 'on'
+  } catch {
+    return false
   }
 }
 
@@ -70,27 +77,31 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
   const activeApiKey = { deepseek: savedDeepSeekApiKey, openrouter: savedOpenRouterApiKey, bigmodel: savedBigModelApiKey }[activeModelProvider]
   const apiKeyLabel = { deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' }[activeModelProvider]
   const [videoMode, setVideoMode] = useState(loadVideoMode)
+  const [comfyAutoGenerate, setComfyAutoGenerate] = useState(loadComfyAutoGenerate)
+  const autoGenerate = videoMode === 'auto' || comfyAutoGenerate
   const [narrativeExpanded, setNarrativeExpanded] = useState(true)
 
   const sceneVideo = useSceneVideo({
     falApiKey: savedFalApiKey,
     comfyApiKey: savedComfyApiKey,
     videoMode,
+    autoGenerate,
     game,
     actors,
   })
   const { generateScene: generateSceneVideo } = sceneVideo
 
-  // ComfyUI 模式按秒扣积分：分镜就绪后不自动提交，等玩家在时间轴上点「生成本场次视频」。
+  // ComfyUI 模式按秒扣积分：没开「自动生成」时分镜就绪后不自动提交，等玩家在时间轴上点「生成本场次视频」。
   const onVideoPlanReady: OnVideoPlanReady = useCallback((sceneId) => {
     if (videoMode === 'comfy') {
-      return savedComfyApiKey ? undefined : '未配置 Comfy API Key，请先在设置里配置，或逐段上传视频。'
+      if (!savedComfyApiKey) return '未配置 Comfy API Key，请先在设置里配置。'
+      if (comfyAutoGenerate) void generateSceneVideo(sceneId)
+      return undefined
     }
-    if (videoMode !== 'auto') return undefined
-    if (!savedFalApiKey) return '未配置 fal API Key，请逐段上传视频，或先在设置里配置 fal Key。'
+    if (!savedFalApiKey) return '未配置 fal API Key，请先在设置里配置。'
     void generateSceneVideo(sceneId)
     return undefined
-  }, [generateSceneVideo, savedComfyApiKey, savedFalApiKey, videoMode])
+  }, [comfyAutoGenerate, generateSceneVideo, savedComfyApiKey, savedFalApiKey, videoMode])
 
   const director = useDirectorAgent(
     game,
@@ -108,14 +119,23 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
 
   const mediaRunning = game.restoringVideos || sceneVideo.mediaBusy
 
-  // 存档与本地视频都恢复完成后：刷新前已提交的 Comfy 任务（已在扣费）接着查结果；没提交过的段不自动提交。
+  // 存档与本地视频都恢复完成后：刷新前已提交的 Comfy 任务（已在扣费）接着查结果；
+  // 开了「自动生成」时整场接着生成（有任务 ID 的段续查原任务，不重复提交），没开时没提交过的段不自动提交。
   useEffect(() => {
     if (game.loading || game.restoringVideos) return
-    const scene = game.getSessionSnapshot()?.currentScene
-    const clip = scene?.videoClips?.find((item) => item.comfyJobId && item.status !== 'ready')
-    if (videoMode !== 'comfy' || !savedComfyApiKey || !scene || !clip) return
+    const session = game.getSessionSnapshot()
+    const scene = session?.currentScene
+    if (videoMode !== 'comfy' || !savedComfyApiKey || !scene) return
+    if (comfyAutoGenerate) {
+      if (session.status === 'awaiting_video' && scene.videoClips?.some((item) => item.status !== 'ready')) {
+        void generateSceneVideo(scene.id)
+      }
+      return
+    }
+    const clip = scene.videoClips?.find((item) => item.comfyJobId && item.status !== 'ready')
+    if (!clip) return
     void sceneVideo.generateClip(scene.id, clip.sequence)
-    // 只在存档加载完成的那一刻检查一次，之后的生成都由玩家点击触发。
+    // 只在存档加载完成的那一刻检查一次，之后的生成由玩家点击或新分镜触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.loading, game.restoringVideos])
 
@@ -130,9 +150,18 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
     }
   }
 
-  const uploadClip = (sceneId: string, sequence: number, file: File) => sceneVideo.uploadClip(sceneId, sequence, file)
+  const switchComfyAutoGenerate = (enabled: boolean) => {
+    if (videoMode !== 'comfy' || mediaRunning || isDirectorActive(director.status)) return
+    if (game.session && game.session.status !== 'awaiting_action') return
+    setComfyAutoGenerate(enabled)
+    try {
+      localStorage.setItem(COMFY_AUTO_GENERATE_STORAGE_KEY, enabled ? 'on' : 'off')
+    } catch {
+      // 存不进 localStorage 时仅影响刷新后的默认值
+    }
+  }
 
-  const hasVideoKey = videoMode === 'auto' ? Boolean(savedFalApiKey) : videoMode === 'comfy' ? Boolean(savedComfyApiKey) : false
+  const hasVideoKey = videoMode === 'auto' ? Boolean(savedFalApiKey) : Boolean(savedComfyApiKey)
 
   const generateClip = (sceneId: string, sequence: number) => {
     if (!hasVideoKey) {
@@ -248,7 +277,8 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
             mediaRunning={mediaRunning}
             onStart={startStory}
             onVideoModeChange={switchVideoMode}
-            onUploadClip={uploadClip}
+            comfyAutoGenerate={comfyAutoGenerate}
+            onComfyAutoGenerateChange={switchComfyAutoGenerate}
             onGenerateClip={generateClip}
             onGenerateScene={generateScene}
             onRewriteSegment={rewriteSegment}
@@ -263,6 +293,7 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
               session={game.session}
               directorStatus={director.status}
               videoMode={videoMode}
+              comfyAutoGenerate={comfyAutoGenerate}
               mediaRunning={mediaRunning}
               onChoose={director.submitChoice}
               onSubmitFreeform={director.submitFreeform}

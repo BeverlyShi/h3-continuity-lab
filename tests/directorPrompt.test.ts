@@ -53,7 +53,8 @@ test('both structure examples in the prompt validate against each other', () => 
 
 test('the agent exposes the scene tools to one Agent instance without forcing tool choice', async () => {
   const source = await readFile(new URL('../server/directorAgent.ts', import.meta.url), 'utf8')
-  assert.match(source, /publishSceneTool,\s*castSceneTool,\s*\.\.\.\(videoEnabled \? \[inspectLastFrameTool, writeSceneVideoTool\] : \[\]\),/)
+  assert.match(source, /\[publishSceneTool, castSceneTool, inspectLastFrameTool, writeSceneVideoTool\]/)
+  assert.doesNotMatch(source, /videoEnabled/)
   assert.match(source, /rewrite\s*\?\s*\[writeSceneVideoTool\]/)
   assert.equal((source.match(/new Agent\(/g) ?? []).length, 1)
   assert.doesNotMatch(source, /tool_choice|narrativeReview|DIRECTOR_VIDEO_SYSTEM_PROMPT|generate_segment|finish_turn/)
@@ -71,9 +72,10 @@ test('the scene message carries the player input, video mode and whether a previ
   assert.match(withFrame, /本局视频模式：ComfyUI 生成/)
   assert.match(withFrame, /可以调用 inspect_last_frame/)
 
-  const textOnly = buildStoryInputMessage({ type: 'start' }, { videoMode: 'off' })
-  assert.match(textOnly, /请开始故事/)
-  assert.match(textOnly, /仅文字.*不提供 inspect_last_frame 和 write_scene_video/)
+  const start = buildStoryInputMessage({ type: 'start' }, { videoMode: 'comfy' })
+  assert.match(start, /请开始故事/)
+  assert.doesNotMatch(start, /仅文字|上传视频|不提供 inspect_last_frame/)
+  assert.doesNotMatch(DIRECTOR_SYSTEM_PROMPT, /仅文字/)
   assert.doesNotMatch(buildStoryInputMessage({ type: 'start' }), /视频模式/)
 })
 

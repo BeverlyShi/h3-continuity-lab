@@ -15,7 +15,7 @@ const waitForVideoEvent = (video: HTMLVideoElement, eventName: 'loadedmetadata' 
     }
     const timeout = window.setTimeout(() => {
       cleanup()
-      reject(new Error('视频读取超时，请检查文件后重新上传。'))
+      reject(new Error('视频读取超时，请重试这一段。'))
     }, 20_000)
     video.addEventListener(eventName, handleEvent, { once: true })
     video.addEventListener('error', handleError, { once: true })

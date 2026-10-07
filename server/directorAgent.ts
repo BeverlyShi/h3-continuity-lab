@@ -614,7 +614,6 @@ async function runAgentSession({
     : `Pi 故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 构思下一个场次。` })
 
   // 一次运行的状态：工具只在这里写入 state，程序据此守住依赖、判断是否交齐。
-  const videoEnabled = state.videoMode !== 'off'
   const rewrite = mode.kind === 'rewrite' ? mode : undefined
   const book = state.castingBook ? importCastingBook(state.castingBook) : createCastingBook(state.actors, state.castings)
   if (state.scenePublish) book.speakingCharacterIds = new Set(state.scenePublish.dialogues.map((dialogue) => dialogue.characterId))
@@ -627,7 +626,7 @@ async function runAgentSession({
   const isComplete = () => {
     if (rewrite) return rewritten
     if (!state.scenePublish || !isCastingComplete(book, state.scenePublish.characters)) return false
-    return !videoEnabled || Boolean(state.video) || Boolean(state.skipVideoReason)
+    return Boolean(state.video) || Boolean(state.skipVideoReason)
   }
 
   const publishSceneTool = createPublishSceneTool((turn) => {
@@ -641,7 +640,7 @@ async function runAgentSession({
   })
 
   const castSceneTool = createCastSceneTool(book, sceneCharacters, () => {
-    send({ type: 'status', text: videoEnabled ? '选角已确定，正在编写本场次分镜。' : '选角已确定。' })
+    send({ type: 'status', text: '选角已确定，正在编写本场次分镜。' })
   })
 
   const inspectLastFrameTool = createInspectLastFrameTool({
@@ -694,11 +693,7 @@ async function runAgentSession({
       model,
       tools: rewrite
         ? [writeSceneVideoTool]
-        : [
-            publishSceneTool,
-            castSceneTool,
-            ...(videoEnabled ? [inspectLastFrameTool, writeSceneVideoTool] : []),
-          ],
+        : [publishSceneTool, castSceneTool, inspectLastFrameTool, writeSceneVideoTool],
       messages: initialMessages,
       thinkingLevel: getDirectorStreamPolicy(state.modelId, state.thinkingEnabled).reasoning ?? 'off',
     },
@@ -760,7 +755,7 @@ async function runAgentSession({
     }
 
     let videoPlan: VideoGenerationRequest | undefined
-    if (videoEnabled && state.video) {
+    if (state.video) {
       const segments = validateSceneSegments(state.video.segments, state.scenePublish.characters, state.scenePublish.dialogues)
       const videoPrompts = segments.map((segment) => ({
         sequence: segment.sequence,
@@ -781,7 +776,7 @@ async function runAgentSession({
         references: describeSegmentReferences(state.video.opening, videoPrompts, lookupActor),
         fromSequence: rewrite?.sequence ?? 1,
       })
-    } else if (videoEnabled) {
+    } else {
       const message = state.skipVideoReason
         ? `导演跳过了本场次视频：${state.skipVideoReason}`
         : lastToolError

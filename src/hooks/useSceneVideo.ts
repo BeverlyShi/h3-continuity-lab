@@ -16,6 +16,8 @@ type UseSceneVideoParams = {
   falApiKey: string
   comfyApiKey: string
   videoMode: NonNullable<GameScene['videoMode']>
+  // 新分镜到达时是否自动整场生成：auto 恒为 true，comfy 取玩家的「自动生成」开关。
+  autoGenerate: boolean
   game: GameController
   actors: Actor[]
 }
@@ -32,12 +34,10 @@ const findClip = (game: GameController, sceneId: string, sequence: number): Scen
   return scene?.videoClips?.find((clip) => clip.sequence === sequence)
 }
 
-const isCurrentScene = (game: GameController, sceneId: string) => game.getSessionSnapshot()?.currentScene?.id === sceneId
-
-export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors }: UseSceneVideoParams) {
+export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, autoGenerate, game, actors }: UseSceneVideoParams) {
   const busyRef = useRef(false)
   const [mediaBusy, setMediaBusy] = useState(false)
-  // auto 模式下新分镜到达时可能还有上一段在生成：记下场次，等手上的任务结束后接着生成。
+  // 自动生成时新分镜到达可能还有上一段在生成：记下场次，等手上的任务结束后接着生成。
   const queuedSceneRef = useRef<string | null>(null)
 
   const setBusy = useCallback((busy: boolean) => {
@@ -57,7 +57,7 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
     })
   }, [actors, game])
 
-  // 上传与 Comfy 共用：抽尾帧 → 存本地 → 提交该段媒体。
+  // Comfy 生成后存视频：抽尾帧 → 存本地 → 提交该段媒体。
   const storeVideoFile = useCallback(async (sceneId: string, sequence: number, file: File) => {
     const videoUrl = URL.createObjectURL(file)
     const uploadId = crypto.randomUUID()
@@ -75,22 +75,6 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
       }
     }
   }, [game])
-
-  const uploadClip = useCallback(async (sceneId: string, sequence: number, file: File) => {
-    if (busyRef.current) throw new Error('请等待当前视频处理完成。')
-    const clip = findClip(game, sceneId, sequence)
-    if (!isCurrentScene(game, sceneId) || !clip) throw new Error('这一段已经不在当前场次，请刷新后重试。')
-    if (clip.status === 'waiting') throw new Error('请先完成上一段，这一段要用上一段的尾帧作画面参考。')
-    if (clip.status === 'generating') throw new Error('这一段正在生成，请稍候。')
-    if (!file.size || (file.type && !file.type.startsWith('video/'))) throw new Error('请选择可播放的视频文件。')
-
-    setBusy(true)
-    try {
-      await storeVideoFile(sceneId, sequence, file)
-    } finally {
-      setBusy(false)
-    }
-  }, [game, setBusy, storeVideoFile])
 
   // clip 已有 comfyJobId（刷新前提交过或上次超时）时只接着查原任务，不重复提交扣费。
   const runComfy = useCallback(async (sceneId: string, clip: SceneVideoClip) => {
@@ -136,10 +120,10 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
     })
   }, [falApiKey, findActor, game])
 
-  // 生成单段：成功返回 true；只在 auto（fal）与 comfy 模式下可用。
+  // 生成单段：成功返回 true；auto 走 fal，comfy 走 Comfy Cloud。
   const generateClip = useCallback(async (sceneId: string, sequence: number) => {
     if (busyRef.current) return false
-    const mode = videoMode === 'auto' ? (falApiKey ? 'fal' : null) : videoMode === 'comfy' ? (comfyApiKey ? 'comfy' : null) : null
+    const mode = videoMode === 'auto' ? (falApiKey ? 'fal' : null) : (comfyApiKey ? 'comfy' : null)
     const existing = findClip(game, sceneId, sequence)
     if (!mode || !existing || existing.status === 'waiting' || existing.status === 'generating') return false
 
@@ -165,7 +149,7 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
   // 整场生成：从第一个未就绪的段开始依次生成，遇到失败、玩家跳过或场次变化就停。
   const generateScene = useCallback(async (sceneId: string) => {
     if (busyRef.current) {
-      if (videoMode === 'auto') queuedSceneRef.current = sceneId
+      if (autoGenerate) queuedSceneRef.current = sceneId
       return
     }
     let target: string | null = sceneId
@@ -183,7 +167,7 @@ export function useSceneVideo({ falApiKey, comfyApiKey, videoMode, game, actors 
       queuedSceneRef.current = null
       target = queued !== target ? queued : null
     }
-  }, [game, generateClip, videoMode])
+  }, [autoGenerate, game, generateClip])
 
-  return { uploadClip, generateClip, generateScene, mediaBusy }
+  return { generateClip, generateScene, mediaBusy }
 }

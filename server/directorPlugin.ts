@@ -46,7 +46,7 @@ const isDirectorTurnContext = (context: DirectorTurnContext | undefined): contex
   (context.previousScene === undefined || isPreviousScene(context.previousScene))
 
 const isDirectorVideoMode = (value: unknown): value is DirectorVideoMode =>
-  value === 'auto' || value === 'comfy' || value === 'manual' || value === 'off'
+  value === 'auto' || value === 'comfy'
 
 const isCastableActor = (value: unknown): value is CastableActor => {
   if (!value || typeof value !== 'object') return false
