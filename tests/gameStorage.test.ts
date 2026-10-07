@@ -3,7 +3,7 @@ import test from 'node:test'
 import { clearGameSession, loadGameSession, saveGameSession } from '../src/services/gameStorage.ts'
 import { clearLocalMedia } from '../src/services/localData.ts'
 import { installMemorySessionImages } from './helpers/memorySessionImages.ts'
-import type { GameScene, GameSession } from '../src/types/game.ts'
+import type { GameScene, GameSession, SceneVideoClip } from '../src/types/game.ts'
 
 const tailFrame = `data:image/jpeg;base64,${'a'.repeat(200_000)}`
 
@@ -97,16 +97,28 @@ test('drops a lost tail frame when the image record is gone', async () => {
   })
 })
 
-test('marks an interrupted generating clip as failed and keeps its Comfy job', async () => {
+test('marks an interrupted generating clip as failed and keeps its job', async () => {
   await withStorage(async () => {
-    const scene = makeScene('one', { videoMode: 'comfy' })
-    scene.videoClips![0] = { ...scene.videoClips![0], status: 'generating', comfyJobId: 'job-1', tailFrameUrl: undefined, startImageUrl: undefined }
+    const scene = makeScene('one', { videoMode: 'auto' })
+    scene.videoClips![0] = { ...scene.videoClips![0], status: 'generating', jobId: 'fal:minimax/h3-max/text-to-video:req-1', tailFrameUrl: undefined, startImageUrl: undefined }
     localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify(makeSession([scene])))
     const restored = (await loadGameSession())!
     const clip = restored.sceneHistory[0].videoClips?.[0]
     assert.equal(clip?.status, 'failed')
     assert.match(clip?.error ?? '', /中断/)
-    assert.equal(clip?.comfyJobId, 'job-1', '刷新后凭任务 ID 接着查原任务，不重复扣费')
+    assert.equal(clip?.jobId, 'fal:minimax/h3-max/text-to-video:req-1', '刷新后凭任务 ID 接着查原任务，不重复扣费')
+  })
+})
+
+test('migrates the legacy comfyJobId to a comfy-prefixed jobId', async () => {
+  await withStorage(async () => {
+    const scene = makeScene('one', { videoMode: 'comfy' })
+    scene.videoClips![0] = { ...scene.videoClips![0], status: 'generating', comfyJobId: 'job-1', tailFrameUrl: undefined, startImageUrl: undefined } as SceneVideoClip
+    localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify(makeSession([scene])))
+    const restored = (await loadGameSession())!
+    const clip = restored.sceneHistory[0].videoClips?.[0]
+    assert.equal(clip?.jobId, 'comfy:job-1')
+    assert.equal('comfyJobId' in (clip ?? {}), false, '旧字段不再残留')
   })
 })
 

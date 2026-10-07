@@ -133,20 +133,20 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
 
   const mediaRunning = game.restoringVideos || sceneVideo.mediaBusy
 
-  // 存档与本地视频都恢复完成后：刷新前已提交的 Comfy 任务（已在扣费）接着查结果；
-  // 开了「自动生成」时整场接着生成（有任务 ID 的段续查原任务，不重复提交），没开时没提交过的段不自动提交。
+  // 存档与本地视频都恢复完成后：刷新前已提交的生成任务（已在扣费）按任务 ID 前缀接着查结果，key 检查交给后端层；
+  // 自动生成时整场接着生成（有任务 ID 的段续查原任务，不重复提交），否则没提交过的段不自动提交。
   useEffect(() => {
     if (game.loading || game.restoringVideos) return
     const session = game.getSessionSnapshot()
     const scene = session?.currentScene
-    if (videoMode !== 'comfy' || !savedComfyApiKey || !scene) return
-    if (comfyAutoGenerate) {
+    if (!scene) return
+    if (autoGenerate) {
       if (session.status === 'awaiting_video' && scene.videoClips?.some((item) => item.status !== 'ready')) {
         void generateSceneVideo(scene.id)
       }
       return
     }
-    const clip = scene.videoClips?.find((item) => item.comfyJobId && item.status !== 'ready')
+    const clip = scene.videoClips?.find((item) => item.jobId && item.status !== 'ready')
     if (!clip) return
     void sceneVideo.generateClip(scene.id, clip.sequence)
     // 只在存档加载完成的那一刻检查一次，之后的生成由玩家点击或新分镜触发。

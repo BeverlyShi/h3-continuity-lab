@@ -9,7 +9,7 @@ import {
   markClipGenerating,
   PLAYER_SKIPPED_VIDEO_REASON,
   resolveReferenceDescriptors,
-  setClipComfyJob,
+  setClipJob,
   skipSceneVideo,
   type VideoPlanInput,
 } from '../src/services/sessionSegments.ts'
@@ -95,7 +95,7 @@ test('applyVideoPlan ignores a scene that is no longer current', () => {
 
 test('a rewrite keeps the earlier clips and resets the rewritten clip and everything after it', () => {
   let session = planned()
-  session = setClipComfyJob(session, 'scene-1', 1, 'job-old')
+  session = setClipJob(session, 'scene-1', 1, 'job-old')
   session = commitClipMedia(session, 'scene-1', 1, media(1, 'upload-1'))
   session = commitClipMedia(session, 'scene-1', 2, media(2, 'upload-2'))
 
@@ -139,11 +139,11 @@ test('the last ready clip completes the scene and opens the choices', () => {
   assert.equal(session.status, 'awaiting_action')
 })
 
-test('committing media clears the Comfy job id', () => {
-  let session = setClipComfyJob(planned(), 'scene-1', 1, 'job-1')
-  assert.equal(clips(session)[0].comfyJobId, 'job-1')
+test('committing media clears the generation job id', () => {
+  let session = setClipJob(planned(), 'scene-1', 1, 'job-1')
+  assert.equal(clips(session)[0].jobId, 'job-1')
   session = commitClipMedia(session, 'scene-1', 1, media(1))
-  assert.equal(clips(session)[0].comfyJobId, undefined)
+  assert.equal(clips(session)[0].jobId, undefined)
 })
 
 test('regenerating a ready clip sends every later clip back to waiting and reopens the video stage', () => {
@@ -174,23 +174,23 @@ test('replacing a ready clip by upload also invalidates the later clips', () => 
 })
 
 test('generating a pending clip keeps its Comfy job and the session status', () => {
-  let session = setClipComfyJob(planned(), 'scene-1', 1, 'job-1')
+  let session = setClipJob(planned(), 'scene-1', 1, 'job-1')
   session = failClip(session, 'scene-1', 1, '超时')
   const generating = markClipGenerating(session, 'scene-1', 1, { referenceImages: [] })
   assert.equal(clips(generating)[0].status, 'generating')
-  assert.equal(clips(generating)[0].comfyJobId, 'job-1')
+  assert.equal(clips(generating)[0].jobId, 'job-1')
   assert.equal(clips(generating)[0].error, undefined)
   assert.equal(generating.status, 'awaiting_video')
 })
 
-test('failClip marks the clip failed and drops the Comfy job only when asked', () => {
-  const session = setClipComfyJob(planned(), 'scene-1', 1, 'job-1')
+test('failClip marks the clip failed and drops the generation job only when asked', () => {
+  const session = setClipJob(planned(), 'scene-1', 1, 'job-1')
   const kept = failClip(session, 'scene-1', 1, '网络中断')
   assert.equal(clips(kept)[0].status, 'failed')
   assert.equal(clips(kept)[0].error, '网络中断')
-  assert.equal(clips(kept)[0].comfyJobId, 'job-1')
+  assert.equal(clips(kept)[0].jobId, 'job-1')
   assert.equal(kept.status, 'awaiting_video')
-  assert.equal(clips(failClip(session, 'scene-1', 1, '任务失败', { dropComfyJob: true }))[0].comfyJobId, undefined)
+  assert.equal(clips(failClip(session, 'scene-1', 1, '任务失败', { dropJob: true }))[0].jobId, undefined)
 })
 
 test('finishDirectorRun waits for video when the director handed over a plan', () => {

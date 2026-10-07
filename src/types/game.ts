@@ -20,8 +20,8 @@ export type SceneVideoClip = VideoPromptSegment & {
   videoUrl?: string
   tailFrameUrl?: string
   actualDuration?: number
-  // Comfy 任务 ID：刷新后凭它接着查原任务，避免重复提交扣费；该段被导演重写或作废时清空。
-  comfyJobId?: string
+  // 生成任务 ID（带后端前缀）：刷新后凭它接着查原任务，避免重复提交扣费；该段被导演重写或作废时清空。
+  jobId?: string
   error?: string
 }
 
