@@ -25,7 +25,6 @@ button { color: inherit; }
 .topbar-start { min-width: 0; display: flex; align-items: center; gap: 22px; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 650; }
 .brand-mark { width: 28px; height: 28px; display: grid; place-items: center; color: white; background: #0f172a; border-radius: 7px; }
-.badge { padding: 2px 7px; border: 1px solid #e2e8f0; border-radius: 99px; color: #64748b; background: #f8fafc; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .workspace-tabs { display: flex; align-items: center; gap: 4px; }
 .workspace-tabs button { height: 30px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 6px; color: #64748b; background: transparent; font-size: 12px; font-weight: 600; cursor: pointer; transition: color .15s, background .15s; }
 .workspace-tabs button:hover { color: #334155; background: #f1f5f9; }

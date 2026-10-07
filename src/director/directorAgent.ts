@@ -414,7 +414,7 @@ async function runAgentSession({
   const models = createModels()
   models.setProvider({ deepseek: deepseekProvider, openrouter: openrouterProvider, bigmodel: bigmodelProvider }[provider]())
   const model = models.getModel(provider, getDirectorApiModelId(state.modelId))
-  if (!model) throw new Error(`Pi 未找到 ${provider} 模型 ${state.modelId}。`)
+  if (!model) throw new Error(`未找到 ${provider} 模型 ${state.modelId}。`)
 
   const completeSimple = models.completeSimple.bind(models)
   models.completeSimple = (compactModel, compactContext, options) => completeSimple(
@@ -611,8 +611,8 @@ async function runAgentSession({
 
   send({ type: 'trace_started', traceId: state.traceId, harnessSessionId: metadata.id, startedAt: state.startedAt })
   send({ type: 'status', text: mode.kind === 'rewrite'
-    ? `Pi 故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 重写第 ${mode.sequence} 段。`
-    : `Pi 故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 构思下一个场次。` })
+    ? `故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 重写第 ${mode.sequence} 段。`
+    : `故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 构思下一个场次。` })
 
   // 一次运行的状态：工具只在这里写入 state，程序据此守住依赖、判断是否交齐。
   const rewrite = mode.kind === 'rewrite' ? mode : undefined
@@ -739,7 +739,7 @@ async function runAgentSession({
     if (!state.scenePublish) {
       throw new Error(lastToolError
         ? `publish_scene 连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastToolError}`
-        : 'Pi Agent 没有调用 publish_scene 发布场景。')
+        : '导演没有调用 publish_scene 发布场景。')
     }
 
     let castingResult: SceneCastingResult | undefined

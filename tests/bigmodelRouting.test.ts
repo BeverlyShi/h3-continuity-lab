@@ -54,7 +54,7 @@ test('the browser director requires and sends only the BigModel credential upstr
         context: { ok: true, sessionId: `session-${key || 'missing'}`, turn: 1, input: { type: 'start' } },
         onEvent: () => {},
         runtime,
-      }), key ? /TEST_BIGMODEL_RESPONSE/ : /请先配置 BIGMODEL_API_KEY/)
+      }), key ? /TEST_BIGMODEL_RESPONSE/ : /请先在设置里填写 智谱 BigModel API Key/)
       assert.equal(upstreamCalls - previousCalls, key ? 1 : 0)
     }
   } finally {

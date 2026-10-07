@@ -51,7 +51,7 @@ const requireModelKey = (modelId: DirectorModelId, keys: DirectorKeys) => {
   const provider = getDirectorModelProvider(modelId)
   const apiKey = { deepseek: keys.deepseekApiKey, openrouter: keys.openRouterApiKey, bigmodel: keys.bigModelApiKey }[provider]?.trim()
   if (!apiKey) {
-    throw new Error(`请先配置 ${{ deepseek: 'DEEPSEEK_API_KEY', openrouter: 'OPENROUTER_API_KEY', bigmodel: 'BIGMODEL_API_KEY' }[provider]}。`)
+    throw new Error(`请先在设置里填写 ${{ deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' }[provider]} API Key。`)
   }
   return apiKey
 }
@@ -168,7 +168,7 @@ export async function streamDirectorTurn({
     })
   })
 
-  if (!scene || !characters) throw new Error('Pi Agent 没有发布故事场景。')
+  if (!scene || !characters) throw new Error('导演没有发布故事场景。')
   return { scene, characters, ...(casting ? { casting } : {}), video }
 }
 

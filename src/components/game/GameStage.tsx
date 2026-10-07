@@ -447,7 +447,7 @@ export function GameStage(props: GameStageProps) {
               </span>
             )}
           </div>
-          <p>{scene ? `《后宫》· 第 ${scene.turn} 场次` : 'Pi 故事导演将主动决定第一场次'}</p>
+          <p>{scene ? `《后宫》· 第 ${scene.turn} 场次` : '故事导演将主动决定第一场次'}</p>
         </div>
         <span className={`game-status ${statusClass}`}><span />{statusLabel}</span>
       </div>
@@ -492,10 +492,10 @@ export function GameStage(props: GameStageProps) {
           </div>
         </div>
         <p className="game-video-mode-help">{modeForHelp === 'auto'
-          ? '导演写好整场分镜后，页面自动调用 fal 逐段生成，每段以上一段的尾帧开场。需要 FAL_KEY。'
+          ? '导演写好整场分镜后，页面自动调用 fal 逐段生成，每段以上一段的尾帧开场。需要在设置里填写 fal API Key。'
           : comfyAutoGenerate
-            ? '导演写好整场分镜后，页面自动逐段提交 ComfyUI 生成，按秒消耗 Comfy 积分（有参考图用 H3 Max 参考生成，没有参考图用 Turbo 文生）。需要 COMFY_API_KEY。'
-            : '导演写好整场分镜后，由你点击生成，按秒消耗 Comfy 积分（有参考图用 H3 Max 参考生成，没有参考图用 Turbo 文生）。需要 COMFY_API_KEY。'}</p>
+            ? '导演写好整场分镜后，页面自动逐段提交 ComfyUI 生成，按秒消耗 Comfy 积分（有参考图用 H3 Max 参考生成，没有参考图用 Turbo 文生）。需要在设置里填写 Comfy API Key。'
+            : '导演写好整场分镜后，由你点击生成，按秒消耗 Comfy 积分（有参考图用 H3 Max 参考生成，没有参考图用 Turbo 文生）。需要在设置里填写 Comfy API Key。'}</p>
         <div className="game-video-mode-footer">
           <small>下一场次开始时，导演可以查看本场次最后一帧，决定接着拍还是换场景。</small>
         </div>
@@ -625,7 +625,7 @@ export function GameStage(props: GameStageProps) {
           ) : (
             <div className="game-story-empty">
               <span className="game-player-icon"><Sparkles size={25} /></span>
-              <strong>{session ? 'Pi 导演正在写第一场次' : '宫门尚未开启'}</strong>
+              <strong>{session ? '导演正在写第一场次' : '宫门尚未开启'}</strong>
               <span>{hasApiKey ? '点击开始，让故事从一名秀女入宫的那一天展开' : `配置 ${apiKeyLabel} Key 后开始故事`}</span>
             </div>
           )}
