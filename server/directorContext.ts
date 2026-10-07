@@ -88,13 +88,23 @@ const summarizeToolResult = (
     const details = message.details as { durationSeconds?: number } | undefined
     return `第 ${sequence ?? '?'} 段已生成${details?.durationSeconds !== undefined ? `，实测 ${details.durationSeconds} 秒` : ''}`
   }
+  if (message.toolName === 'write_scene_video') {
+    const firstLine = textFromContent(message.content).split('\n')[0] ?? ''
+    return firstLine.replace(/：$/, '')
+  }
+  if (message.toolName === 'inspect_last_frame') return '已查看上一场次最后一帧'
+  // 旧版逐段循环留下的历史。
   if (message.toolName === 'finish_turn') return '回合已结束'
   return textFromContent(message.content).split('\n')[0] ?? ''
 }
 
 const compressToolCallArguments = (content: ToolCallContent, index: ToolCallIndex): ToolCallContent => {
   if (content.name === 'publish_scene' || content.name === 'cast_scene') return content
-  if (content.name === 'finish_turn') return { ...content, arguments: {} }
+  if (content.name === 'write_scene_video') {
+    const args = content.arguments as { rewriteSequence?: unknown }
+    return { ...content, arguments: typeof args.rewriteSequence === 'number' ? { rewriteSequence: args.rewriteSequence } : {} }
+  }
+  if (content.name === 'inspect_last_frame' || content.name === 'finish_turn') return { ...content, arguments: {} }
   const sequence = index.sequenceByToolCallId.get(content.id)
   return { ...content, arguments: sequence === undefined ? {} : { sequence } }
 }
@@ -124,7 +134,7 @@ const projectTurn = (turnEntries: Entry[]): Entry[] => {
   })
 }
 
-// 以 director_trace 边界切出当前回合（完整保留）和之前的历史回合（每个工具往返压成一行）。
+// 以 director_trace 边界切出当前这次运行（完整保留）和之前的历史场次（每个工具往返压成一行；剧情、人物、台词、选角原样保留）。
 export const projectHistory = (entries: Entry[]): Entry[] => {
   const boundaryIndices = entries.reduce<number[]>((acc, entry, index) => {
     if (entry.type === 'custom' && entry.customType === DIRECTOR_TRACE_CUSTOM_TYPE) acc.push(index)

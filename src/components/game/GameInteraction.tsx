@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react'
-import { Bot, LoaderCircle, RotateCcw, Send } from 'lucide-react'
+import { Bot, Film, LoaderCircle, RotateCcw, Send } from 'lucide-react'
 import { isDirectorActive } from '../../services/directorStatus'
 import type { DirectorStatus } from '../../types/director'
 import type { GameScene, GameSession } from '../../types/game'
@@ -9,18 +9,28 @@ type GameInteractionProps = {
   session: GameSession
   directorStatus: DirectorStatus
   videoMode: NonNullable<GameScene['videoMode']>
+  mediaRunning: boolean
   onChoose: (choice: StoryChoice) => boolean
   onSubmitFreeform: (text: string) => boolean
   onRetry: () => void
+  onSkipVideo: () => void
+}
+
+const videoHint = (videoMode: NonNullable<GameScene['videoMode']>, mediaRunning: boolean) => {
+  if (videoMode === 'comfy') return mediaRunning ? 'Comfy 正在生成，完成一段后需要再点击继续。' : '点时间轴上的「生成本场次视频」开始，按秒消耗 Comfy 积分。'
+  if (videoMode === 'auto') return mediaRunning ? '正在自动逐段生成。' : '自动生成已停止，可以在时间轴上重试这一段或上传视频。'
+  return '请在时间轴上逐段上传视频，每段要以上一段的尾帧开场。'
 }
 
 export function GameInteraction({
   session,
   directorStatus,
   videoMode,
+  mediaRunning,
   onChoose,
   onSubmitFreeform,
   onRetry,
+  onSkipVideo,
 }: GameInteractionProps) {
   const [text, setText] = useState('')
 
@@ -36,10 +46,10 @@ export function GameInteraction({
         <section className="game-interaction-card waiting recoverable" aria-live="polite">
           <RotateCcw size={20} />
           <div>
-            <h2>上次续写已中断</h2>
-            <p>玩家输入仍已保存，可以让 Pi Agent 重试本回合。</p>
+            <h2>上次写作已中断</h2>
+            <p>玩家输入仍已保存，可以让 Pi 导演重写本场次。</p>
           </div>
-          <button className="button button-secondary" onClick={onRetry}>重试当前回合</button>
+          <button className="button button-secondary" onClick={onRetry}>重试本场次</button>
         </section>
       )
     }
@@ -47,23 +57,22 @@ export function GameInteraction({
       <section className="game-interaction-card waiting" aria-live="polite">
         <LoaderCircle className="spin" size={20} />
         <div>
-          <h2>Pi 导演正在逐段编写并核对视频</h2>
-          <p>模型会一段段写好 Prompt、等待生成或上传，再继续写下一段。</p>
+          <h2>Pi 导演正在写本场次</h2>
+          <p>导演会一次写好剧情、选角和整场分镜。</p>
         </div>
       </section>
     )
   }
 
-  if (session.status === 'awaiting_upload') {
-    const pendingUpload = session.pendingUpload
-    const mode = videoMode === 'auto' || videoMode === 'comfy' ? '生成' : '上传'
+  if (session.status === 'awaiting_video') {
     return (
-      <section className="game-interaction-card waiting" aria-live="polite">
-        <LoaderCircle className="spin" size={20} />
+      <section className="game-interaction-card waiting video" aria-live="polite">
+        {mediaRunning ? <LoaderCircle className="spin" size={20} /> : <Film size={20} />}
         <div>
-          <h2>等待这一段视频</h2>
-          <p>{pendingUpload ? `导演在等待第 ${pendingUpload.sequence} 段视频${mode}，完成后会继续写下一段。` : '导演在等待这一段视频，完成后会继续写下一段。'}{videoMode === 'comfy' ? '点时间轴上的「生成视频」开始。' : ''}</p>
+          <h2>本场次视频完成后开放选择</h2>
+          <p>{videoHint(videoMode, mediaRunning)}</p>
         </div>
+        <button className="button button-secondary" disabled={isDirectorActive(directorStatus)} onClick={onSkipVideo}>跳过视频，直接选择</button>
       </section>
     )
   }
@@ -73,7 +82,7 @@ export function GameInteraction({
     <section className="game-interaction-card">
       <div className="game-interaction-heading">
         <div><Bot size={17} /><span>你准备怎么做？</span></div>
-        <small>第 {session.currentScene?.turn ?? 1} 幕</small>
+        <small>第 {session.currentScene?.turn ?? 1} 场次</small>
       </div>
       <div className="game-choice-grid">
         {choices.map((choice) => (

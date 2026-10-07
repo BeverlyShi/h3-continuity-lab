@@ -1,11 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
 import {
-  fetchDirectorTurnState,
-  resumeDirectorTurn,
+  streamDirectorRewrite,
   streamDirectorTurn,
   type DirectorVideoMode,
 } from '../services/directorClient'
-import { resolveReferenceDescriptors } from '../services/sessionSegments'
+import { toImageDataUrl } from '../services/dataUrl'
 import { getDirectorModelProvider, type DirectorModelId } from '../config/directorModels'
 import { describeStoryInput } from '../stories/palace'
 import type {
@@ -14,16 +13,15 @@ import type {
   DirectorStatus,
   DirectorStreamEvent,
 } from '../types/director'
-import type { DirectorTurnContext, SceneVideoClip } from '../types/game'
+import type { DirectorTurnContext } from '../types/game'
 import type { StoryChoice } from '../types/story'
 import type { Actor, CreatedActor } from '../types/actor'
-import type { VideoCharacterReference } from '../types/video'
 import type { useGameSession } from './useGameSession'
 
 type GameController = ReturnType<typeof useGameSession>
 
-// 返回一个非空字符串时，useDirectorAgent 会把它作为错误消息追加到对话记录（例如 auto 模式缺少 fal key）。
-export type OnAwaitingUpload = (sceneId: string, clip: SceneVideoClip) => string | void
+// 导演交出（或重写出）分镜、流已正常结束时调用；返回非空字符串时作为错误消息追加到对话记录（例如缺少视频 Key）。
+export type OnVideoPlanReady = (sceneId: string, fromSequence: number) => string | void
 
 const makeMessage = (
   role: DirectorChatMessage['role'],
@@ -31,6 +29,8 @@ const makeMessage = (
 ): DirectorChatMessage => ({ id: crypto.randomUUID(), role, text, createdAt: Date.now() })
 
 const apiKeyLabels = { deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' } as const
+
+export const MAX_REWRITE_REASON_LENGTH = 200
 
 export function useDirectorAgent(
   game: GameController,
@@ -43,28 +43,28 @@ export function useDirectorAgent(
   thinkingEnabled: boolean,
   actors: Actor[],
   onActorsCreated: (created: CreatedActor[]) => Promise<void> | void,
-  onAwaitingUpload?: OnAwaitingUpload,
+  onVideoPlanReady?: OnVideoPlanReady,
 ) {
   const [messages, setMessages] = useState<DirectorChatMessage[]>([])
   const [status, setStatus] = useState<DirectorStatus>('idle')
   const runningRef = useRef(false)
-  // 选角结果按人物 ID 缓存，供后续段落把 character 描述符解析成实际图片。
-  const characterReferencesRef = useRef<Record<string, VideoCharacterReference>>({})
 
   const append = useCallback((role: DirectorChatMessage['role'], text: string) => {
     setMessages((current) => [...current, makeMessage(role, text)])
   }, [])
 
-  const createEventHandler = useCallback((traceId: string) => {
+  // rewriteSceneId 存在时是重写请求：不发布场景，done 也不改变会话状态。
+  const createEventHandler = useCallback((traceId: string, rewriteSceneId?: string) => {
     let videoSkipReason: string | undefined
     let scenePublished = false
+    let videoPlan: { sceneId: string; fromSequence: number } | undefined
 
-    const getSceneId = () => game.getSessionSnapshot()?.currentScene?.id ?? null
+    const getSceneId = () => rewriteSceneId ?? game.getSessionSnapshot()?.currentScene?.id ?? null
 
     const handleEvent = (event: DirectorStreamEvent) => {
       if (event.type === 'status') append('status', event.text)
 
-      if (event.type === 'scene') {
+      if (event.type === 'scene' && !rewriteSceneId) {
         setStatus('publishing')
         const published = game.publishTurn({ scene: event.scene, characters: event.characters })
         if (published) {
@@ -82,93 +82,44 @@ export function useDirectorAgent(
           })
           append('status', `新建演员 ${created.map((actor) => actor.name).join('、')}，待生成参考图，请到演员库复制 prompt 生成后上传。`)
         }
-        if (sceneId) {
-          const applied = game.applySceneCasting(sceneId, event.casting, actors)
-          characterReferencesRef.current = applied?.characterReferences ?? {}
-        }
+        if (sceneId) game.applySceneCasting(sceneId, event.casting, actors)
         append(
           'status',
           event.casting.unmatchedCharacterIds.length
             ? `选角完成，${event.casting.unmatchedCharacterIds.length} 个人物暂无匹配演员。`
-            : '本幕选角完成。',
+            : '本场次选角完成。',
         )
       }
 
       if (event.type === 'cast_error') {
         append('error', `场景选角失败：${event.message}`)
+        videoSkipReason = event.message
         const sceneId = getSceneId()
-        if (sceneId) {
-          game.setSceneCastingError(sceneId, event.message)
-          game.finishTurn(sceneId, event.message)
-        }
-      }
-
-      if (event.type === 'segment_written') {
-        const sceneId = getSceneId()
-        if (sceneId) {
-          const resolved = resolveReferenceDescriptors(event.referenceImages, {
-            characterReferences: characterReferencesRef.current,
-            currentClips: game.getSessionSnapshot()?.currentScene?.videoClips ?? [],
-            previousSceneTailFrameUrl: game.getPreviousSceneTailFrameUrl(sceneId),
-          })
-          game.addWrittenSegment(sceneId, event.segment, event.referenceImages, resolved)
-        }
-        append('status', `导演写好第 ${event.segment.sequence} 段（累计 ${event.cumulativeSeconds} 秒）。`)
-      }
-
-      if (event.type === 'awaiting_upload') {
-        const sceneId = getSceneId()
-        if (sceneId) {
-          const resolved = resolveReferenceDescriptors(event.referenceImages, {
-            characterReferences: characterReferencesRef.current,
-            currentClips: game.getSessionSnapshot()?.currentScene?.videoClips ?? [],
-            previousSceneTailFrameUrl: game.getPreviousSceneTailFrameUrl(sceneId),
-          })
-          game.markAwaitingUpload(sceneId, {
-            sequence: event.sequence,
-            toolCallId: event.toolCallId,
-            traceId,
-            prompt: event.prompt,
-            seconds: event.seconds,
-            descriptors: event.referenceImages,
-            references: resolved,
-          })
-          append('status', `等待第 ${event.sequence} 段视频${videoMode === 'auto' || videoMode === 'comfy' ? '生成' : '上传'}。`)
-          const clip = game.getSessionSnapshot()?.currentScene?.videoClips?.find((item) => item.sequence === event.sequence)
-          const warning = clip ? onAwaitingUpload?.(sceneId, clip) : undefined
-          if (warning) append('error', warning)
-        }
-      }
-
-      if (event.type === 'segment_generated') {
-        const sceneId = getSceneId()
-        if (sceneId) {
-          game.completeSegment(sceneId, event.sequence, {
-            durationSeconds: event.durationSeconds,
-            visualState: event.visualState,
-          })
-        }
-        append('status', `第 ${event.sequence} 段实测 ${event.durationSeconds.toFixed(1)} 秒，导演继续。`)
+        if (sceneId) game.setSceneCastingError(sceneId, event.message)
       }
 
       if (event.type === 'video_plan') {
         const sceneId = getSceneId()
-        if (sceneId) game.setSceneVideoPlan(sceneId, event.video)
-      }
-
-      if (event.type === 'scene_visual_state') {
-        const sceneId = getSceneId()
-        if (sceneId) game.setSceneVisualState(sceneId, event.visualState)
+        if (sceneId) {
+          game.applyVideoPlan(sceneId, event, {
+            characterReferences: game.getCharacterReferences(actors),
+            previousSceneTailFrameUrl: game.getPreviousSceneTailFrameUrl(sceneId),
+          })
+          videoPlan = { sceneId, fromSequence: event.fromSequence }
+        }
+        append('status', rewriteSceneId
+          ? `导演重写了第 ${event.fromSequence} 段，第 ${event.fromSequence} 段起需要重新生成。`
+          : `导演写好本场次 ${event.video.videoPrompts.length} 段分镜（共 ${event.video.totalDuration} 秒）。`)
       }
 
       if (event.type === 'video_plan_error') {
         videoSkipReason = event.message
-        append('error', `视频计划生成失败：${event.message}`)
+        append('error', rewriteSceneId ? `重写失败：${event.message}` : `本场次不生成视频：${event.message}`)
       }
 
-      if (event.type === 'done') {
+      if (event.type === 'done' && !rewriteSceneId) {
         const sceneId = getSceneId()
-        if (sceneId) game.finishTurn(sceneId, videoSkipReason)
+        if (sceneId) game.finishDirectorRun(sceneId, { hasVideoPlan: Boolean(videoPlan), skippedReason: videoSkipReason })
       }
 
       if (event.type === 'harness_trace') {
@@ -176,8 +127,19 @@ export function useDirectorAgent(
       }
     }
 
-    return { handleEvent, isScenePublished: () => scenePublished }
-  }, [actors, append, game, onActorsCreated, onAwaitingUpload, onTraceUpdate, videoMode])
+    return {
+      handleEvent,
+      isScenePublished: () => scenePublished,
+      getVideoPlan: () => videoPlan,
+      getSkipReason: () => videoSkipReason,
+    }
+  }, [actors, append, game, onActorsCreated, onTraceUpdate])
+
+  const notifyVideoPlanReady = useCallback((plan: { sceneId: string; fromSequence: number } | undefined) => {
+    if (!plan) return
+    const warning = onVideoPlanReady?.(plan.sceneId, plan.fromSequence)
+    if (warning) append('error', warning)
+  }, [append, onVideoPlanReady])
 
   const requireApiKey = useCallback(() => {
     const provider = getDirectorModelProvider(modelId)
@@ -188,7 +150,32 @@ export function useDirectorAgent(
     return null
   }, [append, bigModelApiKey, deepseekApiKey, modelId, openRouterApiKey])
 
-  const runTurn = useCallback(async (context: DirectorTurnContext) => {
+  const castableActors = useCallback(() => actors.map(({ id, name, gender, minAge, maxAge, appearance, referenceImageUrl }) => ({
+    id,
+    name,
+    gender,
+    minAge,
+    maxAge,
+    ...(appearance ? { appearance } : {}),
+    hasImage: Boolean(referenceImageUrl),
+  })), [actors])
+
+  // 上一场次有完整视频时附上最后一帧；读不到图片就不附，导演只能换场景开场，不让场次失败。
+  const attachPreviousScene = useCallback(async (context: DirectorTurnContext): Promise<DirectorTurnContext> => {
+    const session = game.getSessionSnapshot()
+    const previous = session?.currentScene
+    if (!session || !previous?.tailFrameUrl) return context
+    try {
+      const tailFrameDataUrl = await toImageDataUrl(previous.tailFrameUrl)
+      const characterIds = new Set(previous.characterIds ?? [])
+      const characters = session.characters.filter((character) => characterIds.has(character.id))
+      return { ...context, previousScene: { tailFrameDataUrl, characters } }
+    } catch {
+      return context
+    }
+  }, [game])
+
+  const runTurn = useCallback(async (baseContext: DirectorTurnContext) => {
     if (runningRef.current) return false
     const requiredApiKey = requireApiKey()
     if (!requiredApiKey) return false
@@ -198,9 +185,9 @@ export function useDirectorAgent(
       type: 'start',
       run: {
         id: traceId,
-        gameSessionId: context.sessionId,
-        turn: context.turn,
-        action: describeStoryInput(context.input),
+        gameSessionId: baseContext.sessionId,
+        turn: baseContext.turn,
+        action: describeStoryInput(baseContext.input),
         startedAt: Date.now(),
         status: 'running',
         entries: [],
@@ -212,78 +199,96 @@ export function useDirectorAgent(
     const handler = createEventHandler(traceId)
 
     try {
-      const result = await streamDirectorTurn({
+      const context = await attachPreviousScene(baseContext)
+      await streamDirectorTurn({
         openRouterApiKey,
         deepseekApiKey,
         bigModelApiKey,
         context,
         traceId,
-        actors: actors.map(({ id, name, gender, minAge, maxAge, appearance, referenceImageUrl }) => ({
-          id,
-          name,
-          gender,
-          minAge,
-          maxAge,
-          ...(appearance ? { appearance } : {}),
-          hasImage: Boolean(referenceImageUrl),
-        })),
+        actors: castableActors(),
         castings: game.getCastings(),
         videoMode,
         model: modelId,
         thinkingEnabled,
         onEvent: handler.handleEvent,
       })
-      if (!handler.isScenePublished()) throw new Error('当前回合已经变化，无法发布这个场景。')
+      if (!handler.isScenePublished()) throw new Error('当前场次已经变化，无法发布这个场景。')
       setStatus('idle')
-      if (!result.paused) onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
+      onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
+      notifyVideoPlanReady(handler.getVideoPlan())
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : '导演执行失败。'
       setStatus('error')
       append('error', message)
       onTraceUpdate({ type: 'error', traceId, endedAt: Date.now(), message })
+      // 场景已经发布、玩家输入已消耗，无法再重试：按已收到的分镜收尾，避免卡在导演写作中。
+      const sceneId = game.getSessionSnapshot()?.currentScene?.id
+      if (handler.isScenePublished() && sceneId) {
+        const videoPlan = handler.getVideoPlan()
+        game.finishDirectorRun(sceneId, {
+          hasVideoPlan: Boolean(videoPlan),
+          skippedReason: handler.getSkipReason() ?? `导演连接中断：${message}`,
+        })
+        notifyVideoPlanReady(videoPlan)
+      }
       return false
     } finally {
       runningRef.current = false
     }
-  }, [actors, append, bigModelApiKey, createEventHandler, deepseekApiKey, game, modelId, onTraceUpdate, openRouterApiKey, requireApiKey, thinkingEnabled, videoMode])
+  }, [append, attachPreviousScene, bigModelApiKey, castableActors, createEventHandler, deepseekApiKey, game, modelId, notifyVideoPlanReady, onTraceUpdate, openRouterApiKey, requireApiKey, thinkingEnabled, videoMode])
 
-  const resumeTurn = useCallback(async ({ sequence, tailFrameDataUrl, durationSeconds }: {
-    sequence: number
-    tailFrameDataUrl: string
-    durationSeconds: number
-  }) => {
+  const rewriteSegment = useCallback(async (sceneId: string, sequence: number, reason: string) => {
     if (runningRef.current) return false
     const session = game.getSessionSnapshot()
-    const pendingUpload = session?.pendingUpload
-    const sceneId = session?.currentScene?.id
-    if (!session || !pendingUpload || !sceneId || pendingUpload.sequence !== sequence) return false
+    const scene = session?.currentScene
+    const cleanReason = reason.trim()
+    if (!session || scene?.id !== sceneId || session.status !== 'awaiting_video') return false
+    if (!cleanReason || cleanReason.length > MAX_REWRITE_REASON_LENGTH) return false
+    if (!scene.videoClips?.some((clip) => clip.sequence === sequence)) return false
     const requiredApiKey = requireApiKey()
     if (!requiredApiKey) return false
 
+    const traceId = crypto.randomUUID()
+    onTraceUpdate({
+      type: 'start',
+      run: {
+        id: traceId,
+        gameSessionId: session.id,
+        turn: scene.turn,
+        action: `重写第 ${sequence} 段：${cleanReason}`,
+        startedAt: Date.now(),
+        status: 'running',
+        entries: [],
+      },
+    })
+    append('player', `请重写第 ${sequence} 段：${cleanReason}`)
+
     runningRef.current = true
     setStatus('thinking')
-    const traceId = pendingUpload.traceId
-    const handler = createEventHandler(traceId)
+    const handler = createEventHandler(traceId, sceneId)
 
     try {
-      const result = await resumeDirectorTurn({
-        sessionId: session.id,
-        sequence,
-        toolCallId: pendingUpload.toolCallId,
-        tailFrameDataUrl,
-        durationSeconds,
+      await streamDirectorRewrite({
         openRouterApiKey,
         deepseekApiKey,
         bigModelApiKey,
+        sessionId: session.id,
+        sequence,
+        reason: cleanReason,
+        traceId,
+        actors: castableActors(),
+        model: modelId,
+        thinkingEnabled,
         onEvent: handler.handleEvent,
       })
       setStatus('idle')
-      if (!result.paused) onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
+      onTraceUpdate({ type: 'complete', traceId, endedAt: Date.now() })
+      notifyVideoPlanReady(handler.getVideoPlan())
       return true
     } catch (error) {
-      const message = error instanceof Error ? error.message : '恢复导演回合失败。'
-      game.failSegment(sceneId, sequence, message)
+      const message = error instanceof Error ? error.message : '导演重写失败。'
       setStatus('error')
       append('error', message)
       onTraceUpdate({ type: 'error', traceId, endedAt: Date.now(), message })
@@ -291,18 +296,7 @@ export function useDirectorAgent(
     } finally {
       runningRef.current = false
     }
-  }, [append, bigModelApiKey, createEventHandler, deepseekApiKey, game, onTraceUpdate, openRouterApiKey, requireApiKey])
-
-  const syncTurnState = useCallback(async () => {
-    const session = game.getSessionSnapshot()
-    if (!session || session.status === 'awaiting_action') return { needsRetry: false }
-    try {
-      const serverState = await fetchDirectorTurnState(session.id)
-      return game.adoptServerTurnState(serverState, { characterReferences: characterReferencesRef.current })
-    } catch {
-      return { needsRetry: false }
-    }
-  }, [game])
+  }, [append, bigModelApiKey, castableActors, createEventHandler, deepseekApiKey, game, modelId, notifyVideoPlanReady, onTraceUpdate, openRouterApiKey, requireApiKey, thinkingEnabled])
 
   const startStory = useCallback(() => {
     if (runningRef.current) return false
@@ -332,11 +326,9 @@ export function useDirectorAgent(
   }, [append, game, runTurn])
 
   const retry = useCallback(async () => {
-    const sync = await syncTurnState()
-    if (!sync.needsRetry) return false
     const context = game.getPendingContext()
     return context ? runTurn(context) : false
-  }, [game, runTurn, syncTurnState])
+  }, [game, runTurn])
 
   const reset = useCallback(() => {
     if (runningRef.current) return false
@@ -345,5 +337,5 @@ export function useDirectorAgent(
     return true
   }, [])
 
-  return { messages, status, startStory, submitChoice, submitFreeform, resumeTurn, syncTurnState, retry, reset }
+  return { messages, status, startStory, submitChoice, submitFreeform, rewriteSegment, retry, reset }
 }

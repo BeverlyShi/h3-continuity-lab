@@ -98,25 +98,24 @@ export const scenePublishSchema = Type.Object({
   dialogues: Type.Array(sceneDialogueSchema, { description: '按 narrative 中人物对白出现顺序逐句列出；每组双引号对应一项，无对白时提交空数组。' }),
 }, { additionalProperties: false })
 
-export const writeSegmentSchema = Type.Object({
-  sequence: Type.Integer({ minimum: 1, maximum: 3, description: '本段序号，新写为已写段数+1，重写为已写的某个段号。' }),
-  characters: Type.Array(Type.String({ minLength: 1, maxLength: 50 }), {
-    maxItems: 6,
-    uniqueItems: true,
-    description: '本段实际入画或说话的人物 ID，首段按此顺序附参考图。',
-  }),
-  seconds: Type.Integer({ minimum: 5, maximum: 15, description: '本段时长秒数，5–15 的整数；不得低于本段台词字数 ÷ 3.5 再加 1 秒。' }),
-  prompt: Type.String({ minLength: 20, maxLength: 2400, description: '本段分镜正文，由若干时间块组成，每块以“0–4秒：”开头，从 0 秒开始首尾相接，最后一块结束于 seconds。在实际说话位置写 {{line_1}} 形式的台词占位符，不抄写台词正文，不写内部人物 ID。' }),
-  isLast: Type.Boolean({ description: '本段是否为本幕最后一段。' }),
-  style: Type.Optional(Type.String({ minLength: 10, maxLength: 400, description: '整幕统一的画面质感、色调和光源，一句话；只在第 1 段提交，后续段忽略。' })),
+export const writeSceneVideoSchema = Type.Object({
+  opening: Type.Optional(Type.Union([Type.Literal('continue'), Type.Literal('new_shot')], {
+    description: 'continue：第 1 段以上一场次最后一帧为首帧接着拍，需先调用 inspect_last_frame；new_shot：换场景或换时间，第 1 段用人物参考图开场。整场写作时必填，重写单段时省略。',
+  })),
+  style: Type.Optional(Type.String({ minLength: 10, maxLength: 400, description: '整个场次统一的画面质感、色调和光源，一句话。整场写作时必填，重写单段时省略。' })),
+  segments: Type.Optional(Type.Array(videoPlanSegmentSchema, {
+    minItems: 1,
+    maxItems: 3,
+    description: '整场写作时按顺序提交 2–3 段；重写单段时只提交被重写的那一段。',
+  })),
+  rewriteSequence: Type.Optional(Type.Integer({ minimum: 1, maximum: 3, description: '只在玩家要求重写某一段时填写，表示 segments 中唯一一段替换第几段。' })),
+  skipVideo: Type.Optional(Type.Object({
+    reason: Type.String({ minLength: 1, maxLength: 200, description: '本场次不生成视频的原因。' }),
+  }, { additionalProperties: false })),
 }, { additionalProperties: false })
 
-export const generateSegmentSchema = Type.Object({
-  sequence: Type.Integer({ minimum: 1, maximum: 3, description: '要生成的段号，必须已通过 write_segment 写好。' }),
-}, { additionalProperties: false })
-
-export type WriteSegmentInput = Static<typeof writeSegmentSchema>
-export type GenerateSegmentInput = Static<typeof generateSegmentSchema>
+export type WriteSceneVideoInput = Static<typeof writeSceneVideoSchema>
+export type SceneVideoOpening = NonNullable<WriteSceneVideoInput['opening']>
 
 // 服务端不持有任何图片；描述符由前端解析成图。
 export type VideoReferenceDescriptor =

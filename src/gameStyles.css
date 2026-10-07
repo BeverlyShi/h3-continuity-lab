@@ -134,9 +134,10 @@
 .game-video-timeline-heading { height: 24px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .game-video-timeline-heading > span { display: flex; align-items: center; gap: 6px; color: #475569; font-size: 11px; font-weight: 650; }
 .game-video-timeline-heading > small { color: #94a3b8; font-size: 9px; }
-.game-video-timeline-track { min-height: 68px; padding: 6px; display: flex; align-items: center; overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 7px; background: #f8fafc; scrollbar-width: thin; }
-.game-video-timeline-item-wrap { position: relative; display: flex; flex: 0 0 auto; align-items: center; }
-.game-video-timeline-link { width: 22px; display: grid; flex: 0 0 22px; grid-template-columns: 1fr; place-items: center; color: #cbd5e1; }
+.game-video-timeline-track { min-height: 68px; padding: 6px; display: flex; align-items: flex-start; overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 7px; background: #f8fafc; scrollbar-width: thin; }
+.game-video-timeline-item-wrap { position: relative; display: flex; flex: 0 0 auto; align-items: flex-start; }
+.game-video-timeline-clip { display: flex; flex-direction: column; gap: 4px; }
+.game-video-timeline-link { width: 22px; height: 54px; display: grid; flex: 0 0 22px; grid-template-columns: 1fr; place-items: center; color: #cbd5e1; }
 .game-video-timeline-link svg:last-child { display: none; }
 .game-video-timeline-link.linked { color: #94a3b8; }
 .game-video-timeline-link.linked svg:first-child { display: none; }
@@ -149,6 +150,7 @@
 .game-video-timeline-item.selected { border-color: #be123c; box-shadow: 0 0 0 2px rgba(190,18,60,.18); }
 .game-video-timeline-item img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; }
 .game-video-timeline-item.waiting { border-color: #cbd5e1; color: #64748b; background: #f8fafc; }
+.game-video-timeline-item.pending { border-color: #fda4af; color: #9f1239; background: #fff1f2; }
 .game-video-timeline-item.generating { border-color: #fde68a; color: #b45309; background: #fffbeb; }
 .game-video-timeline-item.extracting { border-color: #bae6fd; color: #0369a1; background: #f0f9ff; }
 .game-video-timeline-item.failed { border-color: #fecaca; color: #b91c1c; background: #fef2f2; }
@@ -159,8 +161,7 @@
 .game-video-timeline-meta small { flex: 0 0 auto; color: #e2e8f0; font-size: 9px; font-weight: 550; }
 .game-video-timeline-item:not(.ready) .game-video-timeline-meta { color: currentColor; background: rgba(255,255,255,.72); }
 .game-video-timeline-item:not(.ready) .game-video-timeline-meta small { color: currentColor; opacity: .75; }
-.game-video-timeline-retry { position: absolute; z-index: 2; top: 4px; right: 4px; width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid #fecaca; border-radius: 5px; color: #b91c1c; background: white; cursor: pointer; }
-.game-video-timeline-retry:hover { background: #fee2e2; }
+.game-video-timeline-tag { position: absolute; z-index: 1; top: 4px; left: 4px; padding: 1px 5px; border-radius: 4px; color: white; background: rgba(21,128,61,.85); font-size: 9px; font-weight: 650; }
 .game-video-timeline-prompt { margin-top: 8px; padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 6px; color: #475569; background: #f8fafc; }
 .game-video-timeline-prompt strong { display: block; margin-bottom: 3px; font-size: 10px; font-weight: 650; }
 .game-video-timeline-prompt-body { max-height: 160px; overflow-y: auto; scrollbar-width: thin; }
@@ -257,12 +258,22 @@
 }
 
 .game-video-upload-help { margin: 6px 0 10px; color: #64748b; font-size: 11px; line-height: 1.7; }
-.game-video-timeline-item-wrap:has(.game-video-upload) { padding-bottom: 30px; }
-.game-video-upload { position: absolute; bottom: 0; right: 0; display: flex; align-items: center; justify-content: center; gap: 5px; padding: 5px 9px; border: 1px solid #cbd5e1; border-radius: 5px; color: #475569; background: white; font-size: 10px; cursor: pointer; }
-.game-video-clip-actions { position: absolute; bottom: 0; right: 0; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
-.game-video-timeline-item-wrap:has(.game-video-clip-actions > :nth-child(2)) { padding-bottom: 60px; }
-.game-video-clip-actions .game-video-upload { position: static; white-space: nowrap; }
+.game-video-clip-actions { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.game-video-upload { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 5px; color: #475569; background: white; font-size: 10px; white-space: nowrap; cursor: pointer; }
+.game-video-upload:hover:not(:disabled) { border-color: #94a3b8; }
 .game-video-upload.primary { border-color: #fda4af; color: #9f1239; background: #fff1f2; }
+.game-video-upload.active { border-color: #be123c; color: #9f1239; }
+.game-video-scene-actions { margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.game-video-scene-actions small { color: #94a3b8; font-size: 10px; line-height: 1.6; }
+.game-video-reference-warning { margin: 0 0 8px; padding: 7px 10px; border: 1px solid #fde68a; border-radius: 6px; color: #92400e; background: #fffbeb; font-size: 11px; line-height: 1.7; }
+.game-video-rewrite { margin-top: 8px; padding: 10px; border: 1px solid #fecdd3; border-radius: 6px; background: #fff1f2; }
+.game-video-rewrite label { margin: 0 0 6px; color: #9f1239; font-size: 11px; font-weight: 650; }
+.game-video-rewrite textarea { min-height: 64px; font-size: 12px; line-height: 18px; }
+.game-video-rewrite-footer { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.game-video-rewrite-footer > span { margin-right: auto; color: #94a3b8; font-size: 10px; }
+.game-interaction-card.waiting.video { flex-wrap: wrap; }
+.game-interaction-card.waiting.video > div { flex: 1 1 160px; }
+.game-interaction-card.waiting.video > button { flex: 1 1 100%; }
 .game-video-upload:disabled, .game-video-action:disabled { opacity: .45; cursor: not-allowed; }
 .game-video-prompt-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
 .game-video-action { display: inline-flex; align-items: center; gap: 4px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px; color: #475569; background: white; font-size: 10px; cursor: pointer; }

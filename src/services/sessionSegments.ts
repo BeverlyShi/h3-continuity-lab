@@ -1,16 +1,14 @@
-import type { GameScene, GameSession, GameSessionStatus, SceneVideoClip } from '../types/game.ts'
-import type {
-  TailFrameVisualState,
-  VideoGenerationRequest,
-  VideoPromptSegment,
-  VideoReferenceDescriptor,
-} from '../types/story.ts'
+import type { GameScene, GameSession, SceneVideoClip } from '../types/game.ts'
+import type { VideoGenerationRequest, VideoReferenceDescriptor } from '../types/story.ts'
 import type { VideoCharacterReference, VideoInputReferenceImage } from '../types/video.ts'
-import type { DirectorTurnStateResponse } from './directorClient.ts'
 
 const now = () => Date.now()
 
 const isCurrentScene = (session: GameSession, sceneId: string) => session.currentScene?.id === sceneId
+
+const findScene = (session: GameSession, sceneId: string) =>
+  session.sceneHistory.find((scene) => scene.id === sceneId)
+    ?? (session.currentScene?.id === sceneId ? session.currentScene : undefined)
 
 const patchScene = (session: GameSession, sceneId: string, patch: (scene: GameScene) => GameScene): GameSession => {
   const apply = (scene: GameScene) => scene.id === sceneId ? patch(scene) : scene
@@ -25,157 +23,6 @@ const patchScene = (session: GameSession, sceneId: string, patch: (scene: GameSc
 export type ResolvedSegmentReferences = {
   referenceImages: VideoInputReferenceImage[]
   startImageUrl?: string
-}
-
-// 覆盖同 sequence 的 clip，并删除 sequence 更大的 clip：重写一段会作废之后的段落。
-export const addWrittenSegment = (
-  session: GameSession,
-  sceneId: string,
-  segment: VideoPromptSegment,
-  descriptors: VideoReferenceDescriptor[],
-  references: ResolvedSegmentReferences,
-): GameSession => patchScene(session, sceneId, (scene) => {
-  const kept = (scene.videoClips ?? []).filter((clip) => clip.sequence < segment.sequence)
-  const clip: SceneVideoClip = {
-    ...segment,
-    status: 'written',
-    referenceDescriptors: descriptors,
-    referenceImages: references.referenceImages,
-    startImageUrl: references.startImageUrl,
-  }
-  return { ...scene, videoClips: [...kept, clip] }
-})
-
-export type MarkAwaitingUploadInput = {
-  sequence: number
-  toolCallId: string
-  traceId: string
-  prompt: string
-  seconds: number
-  descriptors: VideoReferenceDescriptor[]
-  references: ResolvedSegmentReferences
-}
-
-const clearClipMedia = (clip: SceneVideoClip): SceneVideoClip => ({
-  ...clip,
-  uploadId: undefined,
-  videoUrl: undefined,
-  tailFrameUrl: undefined,
-  actualDuration: undefined,
-  visualState: undefined,
-  error: undefined,
-})
-
-// 同一 sequence 可再次到达（重拍）：清空该 clip 及之后 clip 的媒体字段，重新等待上传/生成。
-export const markAwaitingUpload = (session: GameSession, sceneId: string, input: MarkAwaitingUploadInput): GameSession => {
-  if (!isCurrentScene(session, sceneId)) return session
-  const patched = patchScene(session, sceneId, (scene) => {
-    const clips = scene.videoClips ?? []
-    const existing = clips.find((clip) => clip.sequence === input.sequence)
-    const base: SceneVideoClip = existing ?? {
-      sequence: input.sequence,
-      startTime: 0,
-      endTime: input.seconds,
-      characterIds: [],
-      prompt: input.prompt,
-      status: 'written',
-    }
-    const updated: SceneVideoClip = clearClipMedia({
-      ...base,
-      // 同一次 generate_segment（刷新后与服务端对齐）保留 Comfy 任务；导演重拍是新的调用，要重新提交。
-      comfyJobId: base.toolCallId === input.toolCallId ? base.comfyJobId : undefined,
-      prompt: input.prompt,
-      status: 'awaiting_upload',
-      toolCallId: input.toolCallId,
-      referenceDescriptors: input.descriptors,
-      referenceImages: input.references.referenceImages,
-      startImageUrl: input.references.startImageUrl,
-    })
-    const videoClips = [
-      ...clips.filter((clip) => clip.sequence < input.sequence),
-      updated,
-      ...clips.filter((clip) => clip.sequence > input.sequence).map((clip) => ({ ...clearClipMedia(clip), comfyJobId: undefined })),
-    ]
-    return { ...scene, videoClips }
-  })
-  return {
-    ...patched,
-    status: 'awaiting_upload',
-    pendingUpload: { sceneId, sequence: input.sequence, toolCallId: input.toolCallId, traceId: input.traceId },
-  }
-}
-
-export type CommitSegmentMediaInput = {
-  uploadId?: string
-  videoUrl: string
-  tailFrameUrl: string
-  actualDuration: number
-}
-
-// 只允许提交 pendingUpload 记录的那一段。
-export const commitSegmentMedia = (
-  session: GameSession,
-  sceneId: string,
-  sequence: number,
-  input: CommitSegmentMediaInput,
-): GameSession => {
-  if (session.pendingUpload?.sceneId !== sceneId || session.pendingUpload.sequence !== sequence) return session
-  return patchScene(session, sceneId, (scene) => ({
-    ...scene,
-    videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
-      ? { ...clip, ...input, status: 'analyzing', error: undefined }
-      : clip),
-  }))
-}
-
-// 上传/生成/resume 出错：clip 标记失败，session 仍停在 awaiting_upload，等待重试。
-export const failSegment = (session: GameSession, sceneId: string, sequence: number, error: string): GameSession =>
-  patchScene(session, sceneId, (scene) => ({
-    ...scene,
-    videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
-      ? { ...clip, status: 'failed', error }
-      : clip),
-  }))
-
-export type CompleteSegmentInput = {
-  durationSeconds: number
-  visualState: TailFrameVisualState
-}
-
-// segment_generated 到达：该段就绪，回合回到导演继续写下一段。
-export const completeSegment = (
-  session: GameSession,
-  sceneId: string,
-  sequence: number,
-  input: CompleteSegmentInput,
-): GameSession => {
-  if (!isCurrentScene(session, sceneId)) return session
-  const patched = patchScene(session, sceneId, (scene) => ({
-    ...scene,
-    videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
-      ? { ...clip, status: 'ready', actualDuration: input.durationSeconds, visualState: input.visualState, error: undefined }
-      : clip),
-  }))
-  return { ...patched, status: 'awaiting_agent', pendingUpload: undefined }
-}
-
-export const setSceneVideoPlan = (session: GameSession, sceneId: string, video: VideoGenerationRequest): GameSession =>
-  patchScene(session, sceneId, (scene) => ({ ...scene, videoRequest: video }))
-
-// scene.tailFrameUrl 跟随最后一个就绪 clip 的尾帧，供下一幕的 previous_scene_tail_frame 描述符解析。
-export const setSceneVisualState = (session: GameSession, sceneId: string, visualState: TailFrameVisualState): GameSession =>
-  patchScene(session, sceneId, (scene) => {
-    const lastReady = [...(scene.videoClips ?? [])]
-      .filter((clip) => clip.status === 'ready')
-      .sort((left, right) => left.sequence - right.sequence)
-      .at(-1)
-    return { ...scene, tailVisualState: visualState, tailFrameUrl: lastReady?.tailFrameUrl ?? scene.tailFrameUrl }
-  })
-
-export const finishTurn = (session: GameSession, sceneId: string, skippedReason?: string): GameSession => {
-  if (!isCurrentScene(session, sceneId)) return session
-  const patched = patchScene(session, sceneId, (scene) => ({ ...scene, videoSkippedReason: skippedReason }))
-  return { ...patched, status: 'awaiting_action' as GameSessionStatus, pendingUpload: undefined }
 }
 
 export type ResolveReferenceContext = {
@@ -230,43 +77,209 @@ export const resolveReferenceDescriptors = (
   return { referenceImages, startImageUrl, missing }
 }
 
-export type AdoptServerTurnStateResult = {
-  session: GameSession
-  needsRetry: boolean
+const clearClipMedia = (clip: SceneVideoClip): SceneVideoClip => ({
+  ...clip,
+  uploadId: undefined,
+  videoUrl: undefined,
+  tailFrameUrl: undefined,
+  actualDuration: undefined,
+  comfyJobId: undefined,
+  error: undefined,
+  startImageUrl: undefined,
+  referenceImages: undefined,
+})
+
+// 第 sequence 段之后的段作废：首帧要等前一段重新完成，统一回到 waiting。
+const resetClipsAfter = (clips: SceneVideoClip[], sequence: number) => clips.map((clip) =>
+  clip.sequence > sequence ? { ...clearClipMedia(clip), status: 'waiting' as const } : clip)
+
+const isComplete = (clips: SceneVideoClip[]) => clips.length > 0 && clips.every((clip) => clip.status === 'ready')
+
+export type VideoPlanInput = {
+  video: VideoGenerationRequest
+  references: VideoReferenceDescriptor[][]
+  fromSequence: number
 }
 
-// 存档加载完成后与服务端对齐：服务端已经空闲但本地还停在导演回合/等待上传，说明续跑连接中断，交给玩家重试；
-// 服务端还在等上传，就把本地状态和 pendingUpload 对齐到服务端记录的段号。
-export const adoptServerTurnState = (
+// fromSequence 之前的段原样保留；之后的段换成新 prompt 并清空媒体，上一段已就绪的可以直接生成。
+export const applyVideoPlan = (
   session: GameSession,
-  serverState: DirectorTurnStateResponse,
-  references: Omit<ResolveReferenceContext, 'currentClips'>,
-): AdoptServerTurnStateResult => {
-  const sceneId = session.currentScene?.id
-  // 第一幕在 publish_scene 之前中断：本地只有待处理的输入、还没有场景，服务端空闲时同样交给玩家重试。
-  if (!sceneId) {
-    return { session, needsRetry: serverState.status === 'idle' && session.status === 'awaiting_agent' }
-  }
-
-  if (serverState.status === 'idle') {
-    if (session.status === 'awaiting_upload' || session.status === 'awaiting_agent') {
-      return { session: { ...session, status: 'awaiting_agent', pendingUpload: undefined }, needsRetry: true }
+  sceneId: string,
+  plan: VideoPlanInput,
+  ctx: Omit<ResolveReferenceContext, 'currentClips'>,
+): GameSession => {
+  if (!isCurrentScene(session, sceneId)) return session
+  return patchScene(session, sceneId, (scene) => {
+    const previous = scene.videoClips ?? []
+    const clips: SceneVideoClip[] = []
+    plan.video.videoPrompts.forEach((segment, index) => {
+      const existing = previous.find((clip) => clip.sequence === segment.sequence)
+      if (existing && segment.sequence < plan.fromSequence) {
+        clips.push(existing)
+        return
+      }
+      const descriptors = plan.references[index] ?? []
+      const before = clips.at(-1)
+      const status = !before || before.status === 'ready' ? 'pending' : 'waiting'
+      const resolved = status === 'pending'
+        ? resolveReferenceDescriptors(descriptors, { ...ctx, currentClips: clips })
+        : undefined
+      clips.push({
+        ...segment,
+        status,
+        referenceDescriptors: descriptors,
+        referenceImages: resolved?.referenceImages,
+        startImageUrl: resolved?.startImageUrl,
+      })
+    })
+    return {
+      ...scene,
+      videoRequest: plan.video,
+      videoClips: clips,
+      videoSkippedReason: undefined,
+      tailFrameUrl: isComplete(clips) ? scene.tailFrameUrl : undefined,
     }
-    return { session, needsRetry: false }
+  })
+}
+
+// 重新生成已就绪的段：该段与之后的段都作废，场次回到等待视频。
+export const markClipGenerating = (
+  session: GameSession,
+  sceneId: string,
+  sequence: number,
+  references: ResolvedSegmentReferences,
+): GameSession => {
+  const target = findScene(session, sceneId)?.videoClips?.find((clip) => clip.sequence === sequence)
+  if (!target) return session
+  const wasReady = target.status === 'ready'
+  const patched = patchScene(session, sceneId, (scene) => {
+    const clips = (scene.videoClips ?? []).map((clip) => clip.sequence === sequence
+      ? {
+          ...(wasReady ? clearClipMedia(clip) : clip),
+          status: 'generating' as const,
+          error: undefined,
+          referenceImages: references.referenceImages,
+          startImageUrl: references.startImageUrl,
+        }
+      : clip)
+    return wasReady
+      ? { ...scene, videoClips: resetClipsAfter(clips, sequence), tailFrameUrl: undefined }
+      : { ...scene, videoClips: clips }
+  })
+  return wasReady && isCurrentScene(session, sceneId) && session.status === 'awaiting_action'
+    ? { ...patched, status: 'awaiting_video' }
+    : patched
+}
+
+export type CommitClipMediaInput = {
+  uploadId?: string
+  videoUrl: string
+  tailFrameUrl: string
+  actualDuration: number
+}
+
+// 某段就绪：之后的段重新排队，下一段以这段尾帧开场；最后一段就绪即开放选择。
+export const commitClipMedia = (
+  session: GameSession,
+  sceneId: string,
+  sequence: number,
+  media: CommitClipMediaInput,
+): GameSession => {
+  const scene = findScene(session, sceneId)
+  const clips = scene?.videoClips ?? []
+  if (!scene || !clips.some((clip) => clip.sequence === sequence)) return session
+
+  const laterWasReady = clips.some((clip) => clip.sequence > sequence && clip.status === 'ready')
+  let next = resetClipsAfter(clips, sequence).map((clip) => clip.sequence === sequence
+    ? { ...clip, ...media, status: 'ready' as const, error: undefined, comfyJobId: undefined }
+    : clip)
+  const following = [...next]
+    .filter((clip) => clip.sequence > sequence)
+    .sort((left, right) => left.sequence - right.sequence)[0]
+  if (following) {
+    const resolved = resolveReferenceDescriptors(following.referenceDescriptors ?? [], { characterReferences: {}, currentClips: next })
+    next = next.map((clip) => clip === following
+      ? {
+          ...clip,
+          status: 'pending' as const,
+          startImageUrl: resolved.startImageUrl ?? media.tailFrameUrl,
+          referenceImages: resolved.referenceImages,
+        }
+      : clip)
   }
 
-  const resolved = resolveReferenceDescriptors(serverState.awaiting.referenceImages, {
-    ...references,
-    currentClips: session.currentScene?.videoClips ?? [],
-  })
-  const next = markAwaitingUpload(session, sceneId, {
-    sequence: serverState.awaiting.sequence,
-    toolCallId: serverState.awaiting.toolCallId,
-    traceId: serverState.awaiting.traceId,
-    prompt: serverState.awaiting.prompt,
-    seconds: serverState.awaiting.seconds,
-    descriptors: serverState.awaiting.referenceImages,
-    references: resolved,
-  })
-  return { session: next, needsRetry: false }
+  const complete = isComplete(next)
+  const lastTail = [...next].sort((left, right) => left.sequence - right.sequence).at(-1)?.tailFrameUrl
+  const patched = patchScene(session, sceneId, (item) => ({
+    ...item,
+    videoClips: next,
+    tailFrameUrl: complete ? lastTail : undefined,
+    videoSkippedReason: complete ? undefined : item.videoSkippedReason,
+  }))
+  if (!isCurrentScene(session, sceneId)) return patched
+  if (complete && session.status === 'awaiting_video') return { ...patched, status: 'awaiting_action' }
+  if (!complete && laterWasReady && session.status === 'awaiting_action') return { ...patched, status: 'awaiting_video' }
+  return patched
+}
+
+export const setClipComfyJob = (session: GameSession, sceneId: string, sequence: number, comfyJobId: string): GameSession =>
+  patchScene(session, sceneId, (scene) => ({
+    ...scene,
+    videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence ? { ...clip, comfyJobId } : clip),
+  }))
+
+// Comfy 任务本身失败时任务 ID 作废（dropComfyJob），网络出错或超时则保留，重试时接着查同一个任务。
+export const failClip = (
+  session: GameSession,
+  sceneId: string,
+  sequence: number,
+  error: string,
+  { dropComfyJob = false }: { dropComfyJob?: boolean } = {},
+): GameSession =>
+  patchScene(session, sceneId, (scene) => ({
+    ...scene,
+    videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
+      ? { ...clip, status: 'failed', error, ...(dropComfyJob ? { comfyJobId: undefined } : {}) }
+      : clip),
+  }))
+
+export type FinishDirectorRunInput = {
+  hasVideoPlan: boolean
+  skippedReason?: string
+}
+
+// 导演普通场次的 done：交出了分镜就等视频，否则直接开放选择并记下没有视频的原因。
+export const finishDirectorRun = (session: GameSession, sceneId: string, input: FinishDirectorRunInput): GameSession => {
+  if (!isCurrentScene(session, sceneId)) return session
+  const clips = findScene(session, sceneId)?.videoClips ?? []
+  if (input.hasVideoPlan && clips.length) {
+    return { ...session, status: isComplete(clips) ? 'awaiting_action' : 'awaiting_video', updatedAt: now() }
+  }
+  const patched = patchScene(session, sceneId, (scene) => ({ ...scene, videoSkippedReason: input.skippedReason }))
+  return { ...patched, status: 'awaiting_action' }
+}
+
+export const PLAYER_SKIPPED_VIDEO_REASON = '玩家跳过了本场次视频'
+
+// 跳过视频：没有完整的最后一帧，下一场次只能换场景开场。
+export const skipSceneVideo = (session: GameSession, sceneId: string): GameSession => {
+  if (!isCurrentScene(session, sceneId) || session.status !== 'awaiting_video') return session
+  const patched = patchScene(session, sceneId, (scene) => ({
+    ...scene,
+    videoSkippedReason: PLAYER_SKIPPED_VIDEO_REASON,
+    tailFrameUrl: undefined,
+  }))
+  return { ...patched, status: 'awaiting_action' }
+}
+
+// 对比前后两份会话，找出不再被任何段引用的本地视频与 blob URL，交给调用方删除和释放。
+export const findDiscardedMedia = (before: GameSession | null, after: GameSession | null) => {
+  const clipsOf = (session: GameSession | null) => (session?.sceneHistory ?? []).flatMap((scene) => scene.videoClips ?? [])
+  const kept = new Set(clipsOf(after).flatMap((clip) => [clip.uploadId, clip.videoUrl]).filter(Boolean))
+  const discarded = clipsOf(before)
+  return {
+    uploadIds: [...new Set(discarded.flatMap((clip) => clip.uploadId && !kept.has(clip.uploadId) ? [clip.uploadId] : []))],
+    objectUrls: [...new Set(discarded.flatMap((clip) =>
+      clip.videoUrl?.startsWith('blob:') && !kept.has(clip.videoUrl) ? [clip.videoUrl] : []))],
+  }
 }

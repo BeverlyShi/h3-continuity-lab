@@ -150,7 +150,7 @@ test('rejects a single line longer than the 20 Han character budget', async () =
   await assert.rejects(() => tool.execute('tool-long-line', withDialogues(['沈'.repeat(21)])), (error: unknown) => {
     assert.ok(error instanceof Error)
     assert.match(error.message, /台词 line_1 有 21 个汉字，超过单句 20 字上限/)
-    assert.match(error.message, /留到下一回合/)
+    assert.match(error.message, /留到下一个场次/)
     assert.match(error.message, /不要把对白改写成叙述/)
     return true
   })
@@ -160,7 +160,7 @@ test('rejects more lines than a single beat can hold', async () => {
   const tool = createPublishSceneTool()
   await assert.rejects(
     () => tool.execute('tool-too-many-lines', withDialogues(Array.from({ length: DIALOGUE_MAX_LINES + 1 }, () => '知道了。'))),
-    /本幕有 7 句台词，超过 6 句上限/,
+    /本场次有 7 句台词，超过 6 句上限/,
   )
 })
 
@@ -169,8 +169,8 @@ test('rejects a scene whose lines fit individually but blow the whole-scene budg
   const texts = [...Array.from({ length: 4 }, () => `${'沈'.repeat(18)}。`), `${'沈'.repeat(19)}。`]
   await assert.rejects(() => tool.execute('tool-over-budget', withDialogues(texts)), (error: unknown) => {
     assert.ok(error instanceof Error)
-    assert.match(error.message, new RegExp(`本幕台词合计 ${DIALOGUE_TOTAL_MAX_HAN + 1} 字，超出 ${DIALOGUE_TOTAL_MAX_HAN} 字预算`))
-    assert.match(error.message, /一幕对应 15–45 秒画面/)
+    assert.match(error.message, new RegExp(`本场次台词合计 ${DIALOGUE_TOTAL_MAX_HAN + 1} 字，超出 ${DIALOGUE_TOTAL_MAX_HAN} 字预算`))
+    assert.match(error.message, /一个场次对应 15–45 秒画面/)
     return true
   })
 })

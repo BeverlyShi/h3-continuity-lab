@@ -23,7 +23,7 @@ export const SCENE_PUBLISH_ARGUMENTS_EXAMPLE = JSON.stringify({
   dialogues: [{ id: 'line_1', characterId: 'steward', text: '你识字吗？' }],
 })
 
-export const PUBLISH_SCENE_DESCRIPTION = '提交完整 JSON 对象，顶层包含 scene、characters、dialogues。scene 内仅有 title、narrative、choices；choices 必须有 3 项，id 各为 1、2、3。人物对白用双引号，dialogues 按出现顺序逐句列出唯一 ID、characterId 和完整原文；无对白提交空数组。人物和台词数组不能嵌套在 scene 内。校验失败时重新提交完整参数。本回合只能发布一次。'
+export const PUBLISH_SCENE_DESCRIPTION = '提交完整 JSON 对象，顶层包含 scene、characters、dialogues。scene 内仅有 title、narrative、choices；choices 必须有 3 项，id 各为 1、2、3。人物对白用双引号，dialogues 按出现顺序逐句列出唯一 ID、characterId 和完整原文；无对白提交空数组。人物和台词数组不能嵌套在 scene 内。校验失败时重新提交完整参数。本场次只能发布一次。'
 
 export const prepareScenePublishArguments = (args: unknown): ScenePublish => {
   if (!Check(scenePublishSchema, args)) {
@@ -40,7 +40,7 @@ export const prepareScenePublishArguments = (args: unknown): ScenePublish => {
     const issues = [...Errors(scenePublishSchema, args)].slice(0, 8)
       .map((issue) => `${issue.instancePath || '/'} ${issue.message}`)
       .join('；')
-    throw new Error(`publish_scene 参数不符合 schema：${issues || '结构无效'}。\n${guidance.join('\n')}\n修正后重新提交完整 JSON，不只提交修改片段。结构示例（请替换为本幕内容）：${SCENE_PUBLISH_ARGUMENTS_EXAMPLE}`)
+    throw new Error(`publish_scene 参数不符合 schema：${issues || '结构无效'}。\n${guidance.join('\n')}\n修正后重新提交完整 JSON，不只提交修改片段。结构示例（请替换为本场次内容）：${SCENE_PUBLISH_ARGUMENTS_EXAMPLE}`)
   }
 
   return args
@@ -99,13 +99,13 @@ export const assertValidScenePublish = (turn: ScenePublish) => {
     }
   }
   if (turn.dialogues.length > DIALOGUE_MAX_LINES) {
-    budgetIssues.push(`本幕有 ${turn.dialogues.length} 句台词，超过 ${DIALOGUE_MAX_LINES} 句上限`)
+    budgetIssues.push(`本场次有 ${turn.dialogues.length} 句台词，超过 ${DIALOGUE_MAX_LINES} 句上限`)
   }
   if (totalHan > DIALOGUE_TOTAL_MAX_HAN) {
-    budgetIssues.push(`本幕台词合计 ${totalHan} 字，超出 ${DIALOGUE_TOTAL_MAX_HAN} 字预算`)
+    budgetIssues.push(`本场次台词合计 ${totalHan} 字，超出 ${DIALOGUE_TOTAL_MAX_HAN} 字预算`)
   }
   if (budgetIssues.length) {
-    throw new Error(`${budgetIssues.join('；')}。一幕对应 15–45 秒画面，请缩短台词或把后续对话留到下一回合；不要把对白改写成叙述，也不要删掉已有事件。`)
+    throw new Error(`${budgetIssues.join('；')}。一个场次对应 15–45 秒画面，请缩短台词或把后续对话留到下一个场次；不要把对白改写成叙述，也不要删掉已有事件。`)
   }
 }
 
@@ -127,7 +127,7 @@ export const createPublishSceneTool = (
   prepareArguments: prepareScenePublishArguments,
   executionMode: 'sequential',
   execute: async (_toolCallId, turn) => {
-    if (options.isPublished?.()) throw new Error('本回合场景已经发布，不能重复发布；请继续选角、编写分镜或结束回合。')
+    if (options.isPublished?.()) throw new Error('本场次场景已经发布，不能重复发布；请继续选角或编写分镜。')
     assertValidScenePublish(turn)
     await onPublish?.(turn)
     const text = ['场景已发布。', options.describeCasting?.(turn)].filter(Boolean).join('\n')

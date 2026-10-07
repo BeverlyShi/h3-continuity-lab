@@ -2,7 +2,7 @@ import type { DirectorModelId } from '../config/directorModels'
 import type { CastableActor, CharacterCasting, SceneCastingResult } from '../types/actor'
 import type { DirectorStreamEvent } from '../types/director'
 import type { DirectorTurnContext } from '../types/game'
-import type { SceneCharacter, StoryScene, VideoGenerationRequest, VideoReferenceDescriptor } from '../types/story'
+import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../types/story'
 
 export function parseDirectorEvent(line: string): DirectorStreamEvent {
   const event = JSON.parse(line) as DirectorStreamEvent
@@ -17,22 +17,20 @@ export type StreamedDirectorTurn = {
   characters: SceneCharacter[]
   casting?: SceneCastingResult
   video?: VideoGenerationRequest
-  paused: boolean
 }
 
 export type DirectorVideoMode = 'auto' | 'comfy' | 'manual' | 'off'
 
-// 流结束时既没有 done 也没有 awaiting_upload，说明连接被意外打断（网络中断、代理超时等）。
+// 流结束时没有 done，说明连接被意外打断（网络中断、代理超时等）。
 export async function readDirectorStream(
   response: Response,
   onEvent: (event: DirectorStreamEvent) => void,
-): Promise<{ paused: boolean; done: boolean }> {
+): Promise<void> {
   if (!response.body) throw new Error('浏览器不支持导演流式响应。')
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let paused = false
   let done = false
   let streamError = ''
 
@@ -40,7 +38,6 @@ export async function readDirectorStream(
     if (!line.trim()) return
     const event = parseDirectorEvent(line)
     onEvent(event)
-    if (event.type === 'awaiting_upload') paused = true
     if (event.type === 'done') done = true
     if (event.type === 'error') streamError = event.error
   }
@@ -56,8 +53,7 @@ export async function readDirectorStream(
   consumeLine(buffer)
 
   if (streamError) throw new Error(streamError)
-  if (!done && !paused) throw new Error('导演连接意外中断，请重试。')
-  return { paused, done }
+  if (!done) throw new Error('导演连接意外中断，请重试。')
 }
 
 type StreamDirectorTurnOptions = {
@@ -120,7 +116,7 @@ export async function streamDirectorTurn({
   let casting: SceneCastingResult | undefined
   let video: VideoGenerationRequest | undefined
 
-  const { paused } = await readDirectorStream(response, (event) => {
+  await readDirectorStream(response, (event) => {
     if (event.type === 'scene') {
       scene = event.scene
       characters = event.characters
@@ -131,74 +127,52 @@ export async function streamDirectorTurn({
   })
 
   if (!scene || !characters) throw new Error('Pi Agent 没有发布故事场景。')
-  return { scene, characters, ...(casting ? { casting } : {}), video, paused }
+  return { scene, characters, ...(casting ? { casting } : {}), video }
 }
 
-export type ResumeDirectorTurnOptions = {
-  sessionId: string
-  sequence: number
-  toolCallId: string
-  tailFrameDataUrl: string
-  durationSeconds: number
+type StreamDirectorRewriteOptions = {
   openRouterApiKey?: string
   deepseekApiKey?: string
   bigModelApiKey?: string
+  sessionId: string
+  sequence: number
+  reason: string
+  traceId: string
+  actors?: CastableActor[]
+  model: DirectorModelId
+  thinkingEnabled?: boolean
   signal?: AbortSignal
   onEvent: (event: DirectorStreamEvent) => void
 }
 
-export type ResumedDirectorTurn = {
-  paused: boolean
-  video?: VideoGenerationRequest
-}
-
-export async function resumeDirectorTurn({
-  sessionId,
-  sequence,
-  toolCallId,
-  tailFrameDataUrl,
-  durationSeconds,
+// 让导演重写当前场次第 sequence 段；成功时流里只有一次 video_plan（fromSequence = sequence）。
+export async function streamDirectorRewrite({
   openRouterApiKey,
   deepseekApiKey,
   bigModelApiKey,
+  sessionId,
+  sequence,
+  reason,
+  traceId,
+  actors = [],
+  model,
+  thinkingEnabled = false,
   signal,
   onEvent,
-}: ResumeDirectorTurnOptions): Promise<ResumedDirectorTurn> {
-  const response = await fetch('/api/director/resume', {
+}: StreamDirectorRewriteOptions): Promise<{ video?: VideoGenerationRequest }> {
+  const response = await fetch('/api/director/rewrite', {
     method: 'POST',
     headers: buildDirectorHeaders({ openRouterApiKey, deepseekApiKey, bigModelApiKey }),
-    body: JSON.stringify({ sessionId, sequence, toolCallId, tailFrameDataUrl, durationSeconds }),
+    body: JSON.stringify({ sessionId, sequence, reason, traceId, actors, model, thinkingEnabled }),
     signal,
   })
 
-  if (!response.ok) throw new Error(await readErrorBody(response, `恢复导演回合失败（${response.status}）。`))
+  if (!response.ok) throw new Error(await readErrorBody(response, `导演重写请求失败（${response.status}）。`))
 
   let video: VideoGenerationRequest | undefined
-  const { paused } = await readDirectorStream(response, (event) => {
+  await readDirectorStream(response, (event) => {
     if (event.type === 'video_plan') video = event.video
     onEvent(event)
   })
-
-  return { paused, video }
-}
-
-export type DirectorTurnStateResponse =
-  | { status: 'idle' }
-  | {
-    status: 'awaiting_upload'
-    awaiting: {
-      sequence: number
-      toolCallId: string
-      prompt: string
-      seconds: number
-      referenceImages: VideoReferenceDescriptor[]
-      traceId: string
-    }
-  }
-
-export async function fetchDirectorTurnState(sessionId: string): Promise<DirectorTurnStateResponse> {
-  const response = await fetch(`/api/director/turn-state?sessionId=${encodeURIComponent(sessionId)}`)
-  const body = await response.json().catch(() => ({})) as DirectorTurnStateResponse & { error?: string }
-  if (!response.ok) throw new Error(body.error ?? `查询回合状态失败（${response.status}）。`)
-  return body
+  return { video }
 }

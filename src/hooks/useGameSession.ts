@@ -1,33 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { clearGameSession, loadGameSession, saveGameSession } from '../services/gameStorage'
 import { palaceStory } from '../stories/palace'
-import type { DirectorTurnStateResponse } from '../services/directorClient'
 import {
-  addWrittenSegment as addWrittenSegmentReducer,
-  adoptServerTurnState as adoptServerTurnStateReducer,
-  commitSegmentMedia as commitSegmentMediaReducer,
-  completeSegment as completeSegmentReducer,
-  failSegment as failSegmentReducer,
-  finishTurn as finishTurnReducer,
-  markAwaitingUpload as markAwaitingUploadReducer,
-  setSceneVideoPlan as setSceneVideoPlanReducer,
-  setSceneVisualState as setSceneVisualStateReducer,
-  type CommitSegmentMediaInput,
-  type CompleteSegmentInput,
-  type MarkAwaitingUploadInput,
+  applyVideoPlan as applyVideoPlanReducer,
+  commitClipMedia as commitClipMediaReducer,
+  failClip as failClipReducer,
+  findDiscardedMedia,
+  finishDirectorRun as finishDirectorRunReducer,
+  markClipGenerating as markClipGeneratingReducer,
+  setClipComfyJob as setClipComfyJobReducer,
+  skipSceneVideo as skipSceneVideoReducer,
+  type CommitClipMediaInput,
+  type FinishDirectorRunInput,
   type ResolveReferenceContext,
   type ResolvedSegmentReferences,
+  type VideoPlanInput,
 } from '../services/sessionSegments'
-import type { DirectorTurnContext, GameScene, GameSession, SceneVideoClip } from '../types/game'
-import type {
-  ScenePublish,
-  StoryChoice,
-  StoryInput,
-  TailFrameVisualState,
-  VideoGenerationRequest,
-  VideoPromptSegment,
-  VideoReferenceDescriptor,
-} from '../types/story'
+import type { DirectorTurnContext, GameScene, GameSession } from '../types/game'
+import type { ScenePublish, StoryChoice, StoryInput } from '../types/story'
 import type { Actor } from '../types/actor'
 import type { SceneCastingResult } from '../types/actor'
 import { buildCharacterReferences } from '../services/casting'
@@ -44,15 +34,13 @@ const toTurnContext = (session: GameSession): DirectorTurnContext | null => sess
       sessionId: session.id,
       turn: session.turn,
       input: session.pendingInput,
-      previousVisualState: session.currentScene?.tailVisualState,
-      hasPreviousTailFrame: Boolean(session.currentScene?.tailFrameUrl),
     }
   : null
 
 const makeNewSession = (): GameSession => {
   const createdAt = now()
   return {
-    schemaVersion: 9,
+    schemaVersion: 10,
     id: crypto.randomUUID(),
     storyId: palaceStory.id,
     status: 'awaiting_agent',
@@ -87,7 +75,7 @@ export function useGameSession() {
     return task.then((result) => {
       setStorageError('')
       setStorageNotice(result.degraded
-        ? `本地空间紧张，已释放最早 ${result.droppedScenes} 幕的图片。`
+        ? `本地空间紧张，已释放最早 ${result.droppedScenes} 个场次的图片。`
         : '')
     }, (error: unknown) => {
       setStorageError(error instanceof Error ? error.message : '无法保存当前场景。')
@@ -127,13 +115,13 @@ export function useGameSession() {
       videoClips: item.videoClips?.map((clip) => {
         if (!clip.uploadId) return clip
         const saved = assets.get(clip.uploadId)
-        const interrupted = clip.status === 'generating' || clip.status === 'analyzing'
+        const interrupted = clip.status === 'generating'
         return {
           ...clip,
           videoUrl: saved?.videoUrl,
           status: !saved?.asset || interrupted ? 'failed' : clip.status,
           error: !saved?.asset ? '本地视频无法读取，请重新上传。'
-            : interrupted ? '处理已中断，请重试。' : clip.error,
+            : interrupted ? '上次处理已中断，请重试这一段。' : clip.error,
         }
       }),
     })
@@ -286,93 +274,52 @@ export function useGameSession() {
 
   const getSessionSnapshot = useCallback(() => sessionRef.current, [])
 
-  // 通用的 clip 字段补丁，用于 fal 生成过程中的过渡状态（如 'generating'），不经过纯函数 reducer。
-  const updateSceneVideoClip = useCallback((
+  // 段被作废或替换后，不再被引用的本地视频要从 IndexedDB 删除，blob URL 要释放。
+  const releaseDiscardedMedia = useCallback((before: GameSession | null, after: GameSession | null) => {
+    const { uploadIds: discardedUploads, objectUrls: discardedUrls } = findDiscardedMedia(before, after)
+    discardedUploads.forEach((id) => { void deleteUploadedVideo(id).catch(() => {}) })
+    discardedUrls.forEach((url) => URL.revokeObjectURL(url))
+  }, [])
+
+  const applyReducer = useCallback((reduce: (current: GameSession) => GameSession) => {
+    const current = sessionRef.current
+    if (!current) return
+    const next = reduce(current)
+    if (next === current) return
+    void replaceSession(next)
+    releaseDiscardedMedia(current, next)
+  }, [releaseDiscardedMedia, replaceSession])
+
+  const applyVideoPlan = useCallback((
     sceneId: string,
-    sequence: number,
-    patch: Partial<SceneVideoClip>,
-  ) => {
-    const current = sessionRef.current
-    if (!current) return
-    const applyPatch = (scene: GameScene): GameScene => scene.id === sceneId
-      ? {
-          ...scene,
-          videoClips: scene.videoClips?.map((clip) => clip.sequence === sequence
-            ? { ...clip, ...patch }
-            : clip),
-        }
-      : scene
-    replaceSession({
-      ...current,
-      currentScene: current.currentScene ? applyPatch(current.currentScene) : current.currentScene,
-      sceneHistory: current.sceneHistory.map(applyPatch),
-    })
-  }, [replaceSession])
-
-  const addWrittenSegment = useCallback((
-    sceneId: string,
-    segment: VideoPromptSegment,
-    descriptors: VideoReferenceDescriptor[],
-    references: ResolvedSegmentReferences,
-  ) => {
-    const current = sessionRef.current
-    if (!current) return
-    replaceSession(addWrittenSegmentReducer(current, sceneId, segment, descriptors, references))
-  }, [replaceSession])
-
-  const markAwaitingUpload = useCallback((sceneId: string, input: MarkAwaitingUploadInput) => {
-    const current = sessionRef.current
-    if (!current) return
-    replaceSession(markAwaitingUploadReducer(current, sceneId, input))
-  }, [replaceSession])
-
-  const commitSegmentMedia = useCallback((sceneId: string, sequence: number, input: CommitSegmentMediaInput) => {
-    const current = sessionRef.current
-    if (!current) return Promise.resolve()
-    // 上传成功一定要落盘：失败要抛错，让调用方回滚刚保存的本地视频。
-    return replaceSession(commitSegmentMediaReducer(current, sceneId, sequence, input), true)
-  }, [replaceSession])
-
-  const failSegment = useCallback((sceneId: string, sequence: number, error: string) => {
-    const current = sessionRef.current
-    if (!current) return
-    replaceSession(failSegmentReducer(current, sceneId, sequence, error))
-  }, [replaceSession])
-
-  const completeSegment = useCallback((sceneId: string, sequence: number, input: CompleteSegmentInput) => {
-    const current = sessionRef.current
-    if (!current) return
-    replaceSession(completeSegmentReducer(current, sceneId, sequence, input))
-  }, [replaceSession])
-
-  const setSceneVideoPlan = useCallback((sceneId: string, video: VideoGenerationRequest) => {
-    const current = sessionRef.current
-    if (!current) return
-    replaceSession(setSceneVideoPlanReducer(current, sceneId, video))
-  }, [replaceSession])
-
-  const setSceneVisualState = useCallback((sceneId: string, visualState: TailFrameVisualState) => {
-    const current = sessionRef.current
-    if (!current) return
-    replaceSession(setSceneVisualStateReducer(current, sceneId, visualState))
-  }, [replaceSession])
-
-  const finishTurn = useCallback((sceneId: string, skippedReason?: string) => {
-    const current = sessionRef.current
-    if (!current) return
-    replaceSession(finishTurnReducer(current, sceneId, skippedReason))
-  }, [replaceSession])
-
-  const adoptServerTurnState = useCallback((
-    serverState: DirectorTurnStateResponse,
+    plan: VideoPlanInput,
     references: Omit<ResolveReferenceContext, 'currentClips'>,
-  ) => {
+  ) => applyReducer((current) => applyVideoPlanReducer(current, sceneId, plan, references)), [applyReducer])
+
+  const markClipGenerating = useCallback((sceneId: string, sequence: number, references: ResolvedSegmentReferences) =>
+    applyReducer((current) => markClipGeneratingReducer(current, sceneId, sequence, references)), [applyReducer])
+
+  const commitClipMedia = useCallback(async (sceneId: string, sequence: number, input: CommitClipMediaInput) => {
     const current = sessionRef.current
-    if (!current) return { needsRetry: false }
-    const result = adoptServerTurnStateReducer(current, serverState, references)
-    if (result.session !== current) replaceSession(result.session)
-    return { needsRetry: result.needsRetry }
-  }, [replaceSession])
+    if (!current) return
+    const next = commitClipMediaReducer(current, sceneId, sequence, input)
+    if (next === current) throw new Error('这一段已经不存在，请刷新后重试。')
+    // 媒体一定要落盘：失败要抛错，让调用方回滚刚保存的本地视频。
+    await replaceSession(next, true)
+    releaseDiscardedMedia(current, next)
+  }, [releaseDiscardedMedia, replaceSession])
+
+  const setClipComfyJob = useCallback((sceneId: string, sequence: number, comfyJobId: string) =>
+    applyReducer((current) => setClipComfyJobReducer(current, sceneId, sequence, comfyJobId)), [applyReducer])
+
+  const failClip = useCallback((sceneId: string, sequence: number, error: string, options?: { dropComfyJob?: boolean }) =>
+    applyReducer((current) => failClipReducer(current, sceneId, sequence, error, options)), [applyReducer])
+
+  const finishDirectorRun = useCallback((sceneId: string, input: FinishDirectorRunInput) =>
+    applyReducer((current) => finishDirectorRunReducer(current, sceneId, input)), [applyReducer])
+
+  const skipSceneVideo = useCallback((sceneId: string) =>
+    applyReducer((current) => skipSceneVideoReducer(current, sceneId)), [applyReducer])
 
   const getPendingContext = useCallback(() => {
     const current = sessionRef.current
@@ -407,16 +354,13 @@ export function useGameSession() {
     getCharacterReferences,
     getPreviousSceneTailFrameUrl,
     getSessionSnapshot,
-    updateSceneVideoClip,
-    addWrittenSegment,
-    markAwaitingUpload,
-    commitSegmentMedia,
-    failSegment,
-    completeSegment,
-    setSceneVideoPlan,
-    setSceneVisualState,
-    finishTurn,
-    adoptServerTurnState,
+    applyVideoPlan,
+    markClipGenerating,
+    commitClipMedia,
+    setClipComfyJob,
+    failClip,
+    finishDirectorRun,
+    skipSceneVideo,
     getPendingContext,
     getCastings,
     restart,
