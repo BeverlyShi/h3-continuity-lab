@@ -1,84 +1,117 @@
 # H3 Continuity Lab
 
-一个同时验证连续视频生成与 Agent 互动故事场景视频体验的 React 前端原型。
+H3 Continuity Lab is an interactive story game where an AI director writes each scene of a palace drama and turns it into a continuous, multi-segment video. You pick one of three choices (or type your own action), the director publishes the next scene, casts actors from your local actor library, and writes shot-by-shot prompts that are rendered with MiniMax H3 via fal or Comfy Cloud, each segment continuing from the last frame of the previous one. It is bring-your-own-key: your API keys stay in your browser, and the director agent runs entirely client-side. Built with React, TypeScript and Vite.
 
-## 本地运行
+## 项目简介
 
-需要 Node.js 20 或更高版本。
+一个「互动剧情 + AI 导演 + 连续场景视频」的实验项目。故事是《后宫》：玩家扮演一名初入宫闱的秀女，导演 agent 根据玩家的每次选择推进剧情，并把每个场次拍成一段连续的视频。
+
+术语：
+
+- **场次**：导演发布的一段剧情（narrative），附带三个选项。
+- **段**：一个视频 prompt，提交一次生成得到一个视频文件；每个场次 2～3 段。
+- **镜头**：段内两次硬切之间的连续画面。
+
+## 玩法
+
+1. 打开右上角设置，填写 API Key（见下一节）。
+2. 在「演员库」里上传演员三视图（可选）。导演选角时找不到合适演员，会自己新建演员并给出一条生图 prompt，你在外部生成图片后上传即可；没有图片时按文字外观生成。
+3. 在「游戏互动」里选择视频生成方式（API 生成 = fal，ComfyUI 生成 = Comfy Cloud），点击开始。
+4. 导演每个场次交付三样东西：剧情与选项、选角、整场 2～3 段分镜。页面按段依次生成视频，第 N 段以第 N−1 段的最后一帧作为画面参考，所以段与段之间是接着拍的；下一场次开始时，导演可以查看上一场次最后一帧，决定接着拍还是换场景。
+5. 整场视频完成后选择选项或输入自由行动，进入下一场次；也可以「跳过视频，直接选择」。某一段不满意时可以重新生成，或写一句原因「让导演重写」这一段。
+6. 已发生的场次可以随时回看，回看不会推进剧情或调用 API。
+
+右侧导演面板可切换导演模型；DeepSeek V4 Flash 与 GLM-5.3-Flash 有思考强度开关。ComfyUI 生成默认由你点击「生成本场次视频」后才提交（按秒消耗 Comfy 积分），可打开「自动生成」。
+
+## 需要哪些 Key
+
+**导演模型：至少填一个**
+
+| Key | 用途 | 申请 |
+| --- | --- | --- |
+| DeepSeek | 导演模型 DeepSeek V4 Flash；同时用于尾帧识别（查看上一场次最后一帧，决定下一场次能否接着拍）。没有 DeepSeek Key 时，每个场次只能换新画面开场 | https://platform.deepseek.com |
+| OpenRouter | 导演模型 Gemini 2.5 Flash-Lite、GPT-OSS 20B | https://openrouter.ai |
+| 智谱 BigModel | 导演模型 GLM-5.3-Flash | https://open.bigmodel.cn |
+
+**视频生成：fal 或 Comfy Cloud 二选一**
+
+| Key | 用途 | 申请 |
+| --- | --- | --- |
+| fal | 「API 生成」：调用 fal 上的 MiniMax H3 Max（有参考图用参考生视频，没有用文生视频），分镜写好后自动逐段生成 | https://fal.ai |
+| Comfy Cloud | 「ComfyUI 生成」：在你的 Comfy Cloud 订阅上运行 H3 官方工作流，按秒消耗积分 | https://platform.comfy.org |
+
+## 隐私与 Key 说明
+
+本项目没有账号体系，也没有存储用户数据的服务端。
+
+- **Key 只存在你的浏览器里**（localStorage），不会保存到本站。
+- **模型请求和 fal 请求由浏览器直连厂商**（DeepSeek、OpenRouter、智谱、fal），不经过本站。
+- **Comfy 请求经本站转发**：Comfy Cloud 不允许浏览器跨域访问，所以页面把请求发到同源的 `/api/comfy/*`，转发层只把请求原样转给 Comfy Cloud，不存储、不记录 Key 和内容。
+- **导演会话与游戏存档都在浏览器本地**（IndexedDB / localStorage）。设置弹窗里的「清理本地视频与存档」会删除游戏存档、导演会话历史和本地视频（保留 Key、模型设置和演员库）；「清除 Keys」会删除所有 Key。
+- 建议为本项目单独创建 Key，并在厂商控制台设置额度上限。在公用电脑上用完请点「清除 Keys」。
+
+## 架构
+
+```text
+浏览器（纯静态页面）
+├── 页面（React）：游戏、演员库、设置
+├── 导演 agent（src/director）：Pi Agent Core 运行在浏览器里
+│     ├── 直连 DeepSeek / OpenRouter / 智谱 ── 生成剧情、选角、分镜
+│     └── 直连 DeepSeek Vision ─────────────── 尾帧识别
+├── 视频生成
+│     ├── fal：浏览器直连 fal
+│     └── Comfy：src/comfy 组装工作流 ──→ 同源 /api/comfy/* ──→ Comfy Cloud
+└── 本地存储：localStorage（Key、设置、存档）、IndexedDB（导演会话、视频、图片、演员库）
+
+转发层（worker/comfyProxy.ts）
+└── 只放行少数几个 Comfy 接口，透传 X-API-Key，不存储、不记录
+    开发时由 server/comfyPlugin.ts 挂到 Vite 开发服务器；上线后跑在 Cloudflare Worker 里
+```
+
+### 导演 agent
+
+- 一个 agent、一个持久会话。每个场次由同一个 agent 一次跑完，用四个工具交付：
+  - `publish_scene`：发布剧情、三个选项、人物和台词清单。
+  - `cast_scene`：为新人物选角，或在演员库没有合适人选时新建演员。
+  - `inspect_last_frame`：查看上一场次最后一帧（只在要接着上一场次画面拍时调用）。
+  - `write_scene_video`：一次写完整场 2～3 段分镜。
+- 程序只拦截真实依赖（先发布才能选角，选完角才能写分镜，接着拍之前必须看过上一场次画面），不规定调用顺序。三样交齐即结束；同一工具连续 3 次校验失败则本次运行失败。
+- 选角由模型决定，程序保证不漂移：老角色沿用已绑定的演员，更换必须显式说明；同一场次两个人物不能用同一演员。
+- 分镜由「0–4秒：」这样的时间块组成（视频模型要求），每段 5～15 秒；程序整场校验时长、台词顺序与覆盖等，并逐段指出问题。分镜写法见 `skills/video-shot-prompt/SKILL.md`。
+- 长对话靠会话历史与上下文压缩保持连续；历史场次进入上下文时，剧情、人物、台词、选角原样保留，分镜压成一行。
+
+### 目录
+
+| 目录 | 说明 |
+| --- | --- |
+| `src/director` | 浏览器里的导演 agent：提示词、四个工具、模型接入、尾帧识别、会话存储（IndexedDB） |
+| `src/comfy` | Comfy Cloud 客户端与 H3 工作流模板 |
+| `src/components`、`src/pages`、`src/hooks`、`src/services` | 页面、交互状态与本地存储 |
+| `worker` | Comfy 转发层，开发服务器与 Cloudflare Worker 共用 |
+| `server` | Vite 开发服务器插件，把转发层挂到 `/api/comfy/*` |
+| `skills` | 导演加载的分镜写作规范 |
+| `tests` | Node 内置测试（`node --test`） |
+
+开发环境下顶部还有一个 Trace 页，用来查看每次导演运行的完整输入、工具调用、Token 与耗时；生产构建里不包含这个页面。
+
+## 本地开发
+
+需要 Node.js 24。
 
 ```bash
 npm install
-npm run dev
+npm run dev     # 启动开发服务器（含 /api/comfy/* 转发）
+npm test        # 运行测试
+npm run lint    # 代码检查
+npm run build   # 类型检查并构建到 dist/
 ```
 
-浏览器打开 Vite 输出的本地地址（通常为 `http://localhost:5173`）。
+注意：Comfy 转发层只挂在 `npm run dev` 的开发服务器上，`npm run preview` 预览构建产物时无法使用 ComfyUI 生成。
 
-## 验证
+## 部署
 
-```bash
-npm run lint
-npm run build
-```
+部署到 Cloudflare Workers 的说明见后续。
 
-## 当前交互
+## 许可证
 
-页面顶部提供两个独立工作区：
-
-- **视频生成**：保留连续视频生产工作流。
-- **游戏互动**：运行《后宫》互动故事验证版，并可根据每个场次的 narrative 生成连续场景视频（fal、Comfy Cloud 或手动上传）。
-- **Trace**：查看 Pi Agent、工具调用、持久 Session 与上下文压缩轨迹。
-
-### 视频生成
-
-- 在左侧创建、切换项目；每个项目拥有独立的 Prompt 与视频时间轴。
-- 输入首个 Prompt 后，时间轴立即加入“生成中”片段，fal 完成后自动播放。
-- 后续 Prompt 会依次加入时间轴，完成后成为可播放片段。
-- 当前片段结束时，如果下一段已就绪则自动续播；否则停留等待，并在下一段就绪时自动继续。
-- 用户主动暂停不会被生成完成事件打断。
-- 点击已完成的时间轴片段可以回看，右侧当前 Prompt 会同步切换。
-- 单个片段可下载；项目可通过浏览器内 FFmpeg 按时间轴顺序合并为一个 MP4。
-- 项目元数据、片段地址和 fal API Key 会保存在当前浏览器的 `localStorage` 中。
-
-### 游戏互动（Pi 导演与场景视频）
-
-- 游戏初始页展示《后宫》的简单背景与玩家身份。
-- 术语：一个 narrative 是一个**场次**；一个视频 prompt 是一**段**，提交一次生成得到一个视频文件；段内两次硬切之间的连续画面是一个**镜头**。
-- 点击“请开始故事”后，Pi Agent 会主动决定女主、入宫缘由和第一个场次。视频方式有四个入口：上传视频、API 生成（fal）、ComfyUI 生成（Comfy Cloud 官方 H3 模板）和仅文字。首次使用默认上传视频，已有选择会保留。
-- 上传视频：复制 Prompt 和下载参考图，用外部平台额度生成后逐段上传。API 生成：分镜写好后自动按段调用 fal。ComfyUI 生成：分镜写好后由玩家点击“生成本场次视频”，按秒消耗 Comfy 积分，绝不自动提交；刷新页面只会接着查询已提交的任务。
-- 故事续写需要所选导演模型对应的 Key；API 生成需要 `FAL_KEY`，ComfyUI 生成需要 `COMFY_API_KEY`，上传视频不需要；场次衔接时查看上一场次最后一帧使用 `DEEPSEEK_API_KEY`。
-- 每个场次提供三个选择，也支持自由行动；玩家输入会直接作为下一条 user message 进入同一 Pi Session。
-- 页面内置 Pi Agent Core，并通过本地 `/api/director/turn` 调用所选模型；右侧下拉框可选择 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 或 GLM-5.3-Flash。DeepSeek V4 Flash 直连官方 API，默认关闭思考模式，可在模型下方的“思考模式”开关开启 high 模式，输出上限为 16,384 tokens（包含思考），单次请求超时为 120 秒。
-- GLM-5.3-Flash 通过智谱官方通用按量接口 `https://open.bigmodel.cn/api/paas/v4` 调用，API 模型 ID 为 `glm-5.3-flash`。在设置中填写独立的 `BIGMODEL_API_KEY`，再选择该模型；GLM-5.3-Flash 不支持关闭思考，默认使用 low，可通过模型下方开关切换 high。
-- 智谱调用的 Trace 记录 token 用量；SDK 的美元费用字段未配置国内人民币价格，请以 BigModel 账单为准。
-- 每个场次由**一个 Agent** 在同一个 Pi Session 里一次跑完，交付三样东西：`publish_scene` 发布叙事、选项、人物及 `dialogues` 台词清单（结果直接列出待选角人物的候选演员）；有新人物时 `cast_scene` 提交选角决定；`write_scene_video` 一次写完整个场次 2～3 段分镜。三样交齐即结束，不再多花一次模型调用；模型停下却没交齐时提醒一次。程序只拦截真实依赖（先发布才能选角，选角完成才能写分镜），不在工具结果里规定下一步。
-- 场次衔接由导演判断：直接延续上一场次画面时先调用 `inspect_last_frame` 查看上一场次最后一帧（DeepSeek Vision），再以 `opening: continue` 让第 1 段从这一帧接着拍；换场景、换时间或上一场次没有视频时用 `opening: new_shot`，第 1 段只用人物参考图。场次内部各段之间不做尾帧分析。
-- 选角由模型决定，程序保证不漂移：老角色的演员绑定由程序沿用，更换必须显式 `recast: true` 并说明理由；同一场次两个人物不能用同一演员；没有台词的背景人物可设为 `null`。
-- 库里没有年龄相符的候选时，模型可在 `cast_scene` 里用 `create` 只写人物外观新建演员，程序据此拼出一条 16:9、纯白背景的三视图生图 prompt。新演员立即入库并绑定，用户到演员库复制 prompt、在外部网站生成图片后上传即可；参考图待生成期间页面会提示，也可以直接按文字描述生成。
-- 每段 prompt 由画面风格 → 人物行 → 画面参考 → 分镜正文 → “无音乐，无旁白”组成，导演正文只用人物姓名。人物行在点生成时按演员库拼接：有参考图的演员写“某某——人物形象参考图N”并把图传给模型，不写外貌；参考图待生成的演员写其 appearance；没有演员的背景人物由导演在正文里写外观。
-- narrative 里人物开口必须给出原话，不写“答得又快又响”这类转述；分镜里没有台词占位符的“开口、说道、回答”等会被程序拒绝。
-- narrative 的人物对白用成对双引号，心声、书信和称谓使用叙述或单引号。发布时逐句校验台词清单与 narrative 一致。分镜正文在实际说话处写 `{{line_1}}` 占位符，程序填入人物姓名和完整原文，拒绝角色 ID 泄漏、台词遗漏、重复和乱序。
-- `write_scene_video` 提交 `opening`、`style` 和每段的 `characters`、`seconds`、`prompt`。prompt 由 `0–4秒：` 形式的时间块组成（视频模型要求），从 0 秒开始首尾相接，最后一块结束于 `seconds`；每段 5～15 秒，整场 15～45 秒，`seconds` 不得低于本段台词字数 ÷ 3.5 再加 1 秒。程序整场校验并逐段指出问题。本场次不适合生成视频时可只提交 `skipVideo.reason`。
-- 所有段都按参考图生成（H3 r2v）：本段人物参考图在前，上一段（或接着拍时上一场次）最后一帧作为“画面参考图”排在最后，本段从这个画面接着拍；没有任何参考图时才用文生视频。切镜只放在段内部；第 2 段起开头写“承接上一段画面”，不重述站位和构图。写作规范（先拆镜头、正反打、写清画框、动作配景别、概述的处理）见 `skills/video-shot-prompt/SKILL.md`。
-- 页面在导演交出分镜后一次显示整个场次的全部段，按段依次生成：第 N 段以第 N−1 段尾帧为画面参考，最后一段的尾帧留给下一场次衔接。整场视频完成后开放选择，也可以“跳过视频，直接选择”（下一场次没有可接画面）。
-- 单段不满意时可以重新生成、上传替换，或“让导演重写这一段”（写一句原因，走 `/api/director/rewrite`，导演只能用 `write_scene_video` 的 `rewriteSequence` 重写那一段，程序整场重新校验）。替换或重写某段后，它之后的段需要重新生成。
-- 同一工具连续 3 次校验失败则本次运行失败；剧情已发布但分镜未完成时降级为文字模式继续。
-- 场景标题下方展示 `cast_scene` 从演员库选出的演员参考图，参考图待生成的演员显示“待生成参考图”占位；游戏播放器下方的时间轴按真实时长展示各段、生成状态、尾帧依赖和对应 Prompt，Prompt 下方按图号展示该段实际发送的人物参考图和画面参考帧，以及按文字描述生成的人物。
-- 不存在导演台账、宿籍数值或外围确定性裁决链；长对话由 Pi JSONL Session 与原生 Compaction 保持连续。
-- 右侧“Pi 故事导演”面板会显示运行进度，也可作为自由行动输入框；失败时可重试当前场次。
-- 文字场景下方保留全部场次，可随时回看；回看不会推进剧情或调用 API。
-- OpenRouter 单次导演请求最多输出 4,096 tokens、最多重试 2 次并设置 45 秒超时。
-- 当前场景、场次历史、分镜和各段状态保存在当前浏览器的 `localStorage` 中（存档格式 v10，旧存档需要重新开局）。
-- 手动上传的视频和尾帧保存在当前浏览器的 IndexedDB 中，刷新页面后恢复播放与尾帧依赖；重新开始故事会清理这局上传的本地视频。
-
-### Trace
-
-- 同一局游戏持续使用同一个 Pi Session，并在本地 `.agent-traces` 写入 JSONL 记录。
-- Trace 页面按每次导演运行（一个场次或一次重写）展示完整模型输入、所选模型与 thinking、Tool Call、Tool Result、Token、耗时与停止原因。历史场次进入上下文时，剧情、人物、台词、选角原样保留，分镜压成一行、尾帧查看结果压成一句。
-- `publish_scene`、`cast_scene`、`inspect_last_frame`、`write_scene_video` 及其结果会出现在同一次 Agent Trace 中；剧情已发布但分镜未完成时，Trace 标记为 `degraded`，游戏降级到文字模式继续。会话防重入锁在 Vite 模块重载期间仍保留；锁仅在当前服务进程内生效。
-- 当前锁定的 `pi-agent-core@0.84.4` 尚未实现 `AgentHarness.prompt()`；本版本使用可运行的基础 `Agent`，并接入同包的 JSONL Session 与 Telemetry。待 Harness 执行层发布后可在服务端单点替换。
-
-## API 接入边界
-
-当前版本是本地验证 MVP。API Key 会以明文形式保存在当前设备的浏览器存储中，并只传给本机 Vite 接口；其中 DeepSeek Key 还用于场次衔接时查看上一场次最后一帧。Harness Trace 会在本地记录完整导演上下文，可能包含剧情秘密。正式产品应把密钥和 Trace 都迁移到有鉴权、访问隔离的服务端。
-
-项目视频仍引用 fal 返回的远程地址，远程资源过期后无法恢复。项目合并依赖浏览器内存和 FFmpeg WebAssembly，长视频或大量片段可能受到设备内存、跨域策略及浏览器下载策略限制。
+[MIT](LICENSE) © 2026 BeverlyShi

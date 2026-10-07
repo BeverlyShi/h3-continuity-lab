@@ -2,5 +2,7 @@ node_modules
 dist
 .agent-traces
 .playwright-mcp
+.wrangler
+.claude/
 *.local
 .DS_Store

@@ -48,7 +48,7 @@ export function GameInteraction({
           <RotateCcw size={20} />
           <div>
             <h2>上次写作已中断</h2>
-            <p>玩家输入仍已保存，可以让 Pi 导演重写本场次。</p>
+            <p>玩家输入仍已保存，可以让导演重写本场次。</p>
           </div>
           <button className="button button-secondary" onClick={onRetry}>重试本场次</button>
         </section>
@@ -58,7 +58,7 @@ export function GameInteraction({
       <section className="game-interaction-card waiting" aria-live="polite">
         <LoaderCircle className="spin" size={20} />
         <div>
-          <h2>Pi 导演正在写本场次</h2>
+          <h2>导演正在写本场次</h2>
           <p>导演会一次写好剧情、选角和整场分镜。</p>
         </div>
       </section>

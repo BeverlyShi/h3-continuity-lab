@@ -65,11 +65,11 @@ export function ApiKeyDialog({
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="api-title" onMouseDown={(event) => event.stopPropagation()}>
         <div className="dialog-heading">
           <div className="dialog-icon"><KeyRound size={18} /></div>
-          <div><h2 id="api-title">API 连接设置</h2><p>fal 用于 API 生成，Comfy 用于 ComfyUI 生成；OpenRouter/DeepSeek/智谱用于导演，DeepSeek 还负责尾帧识别</p></div>
+          <div><h2 id="api-title">API 连接设置</h2><p>导演模型至少填一个（DeepSeek / OpenRouter / 智谱），DeepSeek 还负责尾帧识别；视频生成填 fal 或 Comfy 其一</p></div>
           <button className="icon-button" aria-label="关闭" onClick={onClose}><X size={17} /></button>
         </div>
         <form onSubmit={submit}>
-          <label htmlFor="fal-api-key">FAL_KEY（仅 API 生成需要）</label>
+          <label htmlFor="fal-api-key">fal API Key（仅 API 生成需要）</label>
           <div className="input-with-icon">
             <LockKeyhole size={15} />
             <input
@@ -77,12 +77,12 @@ export function ApiKeyDialog({
               type="password"
               value={falApiKey}
               onChange={(event) => setFalApiKey(event.target.value)}
-              placeholder="粘贴你的 FAL_KEY"
+              placeholder="粘贴你的 fal API Key"
               autoComplete="off"
               autoFocus
             />
           </div>
-          <label htmlFor="comfy-api-key">COMFY_API_KEY（仅 ComfyUI 生成需要）</label>
+          <label htmlFor="comfy-api-key">Comfy API Key（仅 ComfyUI 生成需要）</label>
           <div className="input-with-icon">
             <LockKeyhole size={15} />
             <input
@@ -94,7 +94,7 @@ export function ApiKeyDialog({
               autoComplete="off"
             />
           </div>
-          <label htmlFor="openrouter-api-key">OPENROUTER_API_KEY</label>
+          <label htmlFor="openrouter-api-key">OpenRouter API Key</label>
           <div className="input-with-icon">
             <LockKeyhole size={15} />
             <input
@@ -106,7 +106,7 @@ export function ApiKeyDialog({
               autoComplete="off"
             />
           </div>
-          <label htmlFor="deepseek-api-key">DEEPSEEK_API_KEY</label>
+          <label htmlFor="deepseek-api-key">DeepSeek API Key</label>
           <div className="input-with-icon">
             <LockKeyhole size={15} />
             <input
@@ -118,7 +118,7 @@ export function ApiKeyDialog({
               autoComplete="off"
             />
           </div>
-          <label htmlFor="bigmodel-api-key">BIGMODEL_API_KEY（智谱官方 GLM）</label>
+          <label htmlFor="bigmodel-api-key">智谱 BigModel API Key（GLM）</label>
           <div className="input-with-icon">
             <LockKeyhole size={15} />
             <input
@@ -132,12 +132,12 @@ export function ApiKeyDialog({
           </div>
           <div className="dialog-section">
             <strong>本地数据</strong>
-            <p>删除游戏存档和本地保存的视频；保留 API Key、模型设置和演员库。</p>
+            <p>删除游戏存档、导演会话历史和本地保存的视频；保留 API Key、模型设置和演员库。</p>
             <button className="button button-secondary" type="button" disabled={clearing} onClick={() => { void clearMedia() }}>
               <Trash2 size={15} />{clearing ? '清理中…' : '清理本地视频与存档'}
             </button>
           </div>
-          <div className="security-note">实验版会把 Key 明文保存在浏览器 localStorage；DeepSeek Vision 只在尾帧识别时调用。共享设备上请及时清除，正式产品应改为服务端密钥。</div>
+          <div className="security-note">Key 只明文保存在当前浏览器的 localStorage，本站不保存。模型与 fal 请求由浏览器直连对应厂商；Comfy 请求经本站同源转发，转发时不存储、不记录 Key。建议使用单独设了额度上限的 Key，公用电脑用完请点「清除 Keys」。</div>
           <div className="dialog-actions">
             {(savedFalApiKey || savedComfyApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey || savedBigModelApiKey) && <button className="button button-danger" type="button" onClick={onClear}>清除 Keys</button>}
             <button className="button button-ghost" type="button" onClick={onClose}>取消</button>

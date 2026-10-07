@@ -131,9 +131,9 @@ test('picks the API key by model provider and passes the DeepSeek key for frame 
 
 test('rejects with the configuration hint when the provider key is missing', async () => {
   for (const [model, keys, hint] of [
-    ['deepseek-v4-flash', { openRouterApiKey: 'sk-or', bigModelApiKey: 'sk-bm' }, /请先配置 DEEPSEEK_API_KEY/],
-    ['google/gemini-2.5-flash-lite', { deepseekApiKey: 'sk-ds', bigModelApiKey: 'sk-bm' }, /请先配置 OPENROUTER_API_KEY/],
-    ['z-ai/glm-5.3-flash', { openRouterApiKey: 'sk-or', deepseekApiKey: 'sk-ds', bigModelApiKey: '  ' }, /请先配置 BIGMODEL_API_KEY/],
+    ['deepseek-v4-flash', { openRouterApiKey: 'sk-or', bigModelApiKey: 'sk-bm' }, /请先在设置里填写 DeepSeek API Key/],
+    ['google/gemini-2.5-flash-lite', { deepseekApiKey: 'sk-ds', bigModelApiKey: 'sk-bm' }, /请先在设置里填写 OpenRouter API Key/],
+    ['z-ai/glm-5.3-flash', { openRouterApiKey: 'sk-or', deepseekApiKey: 'sk-ds', bigModelApiKey: '  ' }, /请先在设置里填写 智谱 BigModel API Key/],
   ] as const) {
     const { runtime, turns } = createFakeRuntime()
     const received: DirectorStreamEvent[] = []
@@ -310,7 +310,7 @@ test('streamDirectorRewrite validates its parameters and the provider key', asyn
     [{ sequence: 0 }, /段号无效/],
     [{ reason: '  ' }, /请写明重写原因/],
     [{ reason: '长'.repeat(201) }, /请写明重写原因/],
-    [{ deepseekApiKey: '' }, /DEEPSEEK_API_KEY/],
+    [{ deepseekApiKey: '' }, /DeepSeek API Key/],
   ] as const) {
     const { runtime, rewrites } = createFakeRuntime()
     await assert.rejects(streamDirectorRewrite({ ...valid, ...overrides, runtime }), message)

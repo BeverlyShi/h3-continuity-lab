@@ -228,7 +228,7 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
     <main className="game-workspace">
       <section className="game-intro">
         <div className="game-intro-copy">
-          <div className="game-eyebrow"><ScrollText size={14} /> 互动文字游戏验证版</div>
+          <div className="game-eyebrow"><ScrollText size={14} /> 互动剧情游戏</div>
           <h1>《{palaceStory.title}》</h1>
           <p>{palaceStory.summary}</p>
           <div className="game-role"><UserRound size={16} /> 你的身份：{palaceStory.role}</div>

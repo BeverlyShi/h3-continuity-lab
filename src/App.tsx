@@ -46,9 +46,9 @@ function App() {
     setIsApiDialogOpen(false)
   }
 
-  const allKeysConfigured = Boolean(
-    savedApiKey && savedDeepSeekApiKey && (savedOpenRouterApiKey || savedDeepSeekApiKey),
-  )
+  const hasModelKey = Boolean(savedDeepSeekApiKey || savedOpenRouterApiKey || savedBigModelApiKey)
+  const hasVideoKey = Boolean(savedApiKey || savedComfyApiKey)
+  const allKeysConfigured = hasModelKey && hasVideoKey
 
   return (
     <div className="app-shell">
@@ -57,7 +57,6 @@ function App() {
           <div className="brand">
             <span className="brand-mark"><Film size={16} /></span>
             <span>H3 Continuity Lab</span>
-            <span className="badge">Prototype</span>
           </div>
           <nav className="workspace-tabs" aria-label="工作区">
             <button
@@ -78,15 +77,17 @@ function App() {
               <UserRound size={15} />
               <span>演员库</span>
             </button>
-            <button
-              className={workspace === 'trace' ? 'active' : ''}
-              aria-label="Trace"
-              aria-pressed={workspace === 'trace'}
-              onClick={() => setWorkspace('trace')}
-            >
-              <Activity size={15} />
-              <span>Trace</span>
-            </button>
+            {import.meta.env.DEV && (
+              <button
+                className={workspace === 'trace' ? 'active' : ''}
+                aria-label="Trace"
+                aria-pressed={workspace === 'trace'}
+                onClick={() => setWorkspace('trace')}
+              >
+                <Activity size={15} />
+                <span>Trace</span>
+              </button>
+            )}
           </nav>
         </div>
         <button
@@ -95,7 +96,7 @@ function App() {
           onClick={() => setIsApiDialogOpen(true)}
         >
           {allKeysConfigured ? <Check size={16} /> : <KeyRound size={16} />}
-          <span>{allKeysConfigured ? 'API 已配置' : savedApiKey || savedOpenRouterApiKey || savedDeepSeekApiKey || savedBigModelApiKey ? 'API 待补充' : '设置 API Key'}</span>
+          <span>{allKeysConfigured ? 'API 已配置' : hasModelKey || hasVideoKey ? 'API 待补充' : '设置 API Key'}</span>
         </button>
       </header>
 
@@ -122,9 +123,11 @@ function App() {
           onActorsCreated={actorLibrary.addCreatedActors}
         />
       </div>
-      <div hidden={workspace !== 'trace'}>
-        <TracePage traces={traces} />
-      </div>
+      {import.meta.env.DEV && (
+        <div hidden={workspace !== 'trace'}>
+          <TracePage traces={traces} />
+        </div>
+      )}
 
       {isApiDialogOpen && (
         <ApiKeyDialog

@@ -7,7 +7,7 @@ export const BIGMODEL_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4'
 export const bigmodelProvider = () => {
   const zai = zaiProvider()
   const model = zai.getModels().find((entry) => entry.id === 'glm-5.3-flash')
-  if (!model) throw new Error('Pi 未找到 GLM-5.3-Flash 模型配置。')
+  if (!model) throw new Error('未找到 GLM-5.3-Flash 模型配置。')
   return createProvider({
     id: 'bigmodel',
     name: '智谱 BigModel',
