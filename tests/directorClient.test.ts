@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  fetchDirectorTurnState,
   parseDirectorEvent,
-  resumeDirectorTurn,
+  readDirectorStream,
+  streamDirectorRewrite,
   streamDirectorTurn,
 } from '../src/services/directorClient.ts'
 
@@ -23,11 +23,17 @@ const characters = [
 
 const video = {
   totalDuration: 15,
+  style: '冷色写实，宫灯暖光，细雪飘落。',
   videoPrompts: [
     { sequence: 1, startTime: 0, endTime: 5, characterIds: ['heroine'], prompt: '宫门缓缓关闭，沈清禾站在队伍末尾回头凝望，固定中景镜头。' },
     { sequence: 2, startTime: 5, endTime: 15, characterIds: ['heroine'], prompt: '开场延续上一画面，沈清禾保持回头姿势，随后跟上向前移动的队伍。' },
   ],
 } as const
+
+const references = [
+  [{ type: 'character', characterId: 'heroine', actorId: 'actor-a' }],
+  [{ type: 'start_frame', sequence: 1 }],
+] as const
 
 test('parses a streamed scene event', () => {
   const event = parseDirectorEvent(JSON.stringify({
@@ -53,7 +59,7 @@ test('sends the selected model and OpenRouter key, resolving with the scene and 
     requestBody = JSON.parse(String(init?.body)) as { model?: string }
     return new Response([
       JSON.stringify({ type: 'scene', scene, characters }),
-      JSON.stringify({ type: 'video_plan', video }),
+      JSON.stringify({ type: 'video_plan', video, references, fromSequence: 1 }),
       JSON.stringify({ type: 'done' }),
     ].join('\n') + '\n', { status: 200 })
   }
@@ -81,7 +87,7 @@ test('sends the selected model and OpenRouter key, resolving with the scene and 
     assert.equal(requestBody.actors?.length, 1)
     assert.equal(requestBody.castings?.length, 1)
     assert.deepEqual(receivedEvents, ['scene', 'video_plan', 'done'])
-    assert.deepEqual(result, { scene, characters, video, paused: false })
+    assert.deepEqual(result, { scene, characters, video })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -96,7 +102,7 @@ test('streams a cast result for the frontend to resolve actor reference images',
   globalThis.fetch = async () => new Response([
     JSON.stringify({ type: 'scene', scene, characters }),
     JSON.stringify({ type: 'cast', casting }),
-    JSON.stringify({ type: 'video_plan', video }),
+    JSON.stringify({ type: 'video_plan', video, references, fromSequence: 1 }),
     JSON.stringify({ type: 'done' }),
   ].join('\n') + '\n', { status: 200 })
 
@@ -114,7 +120,7 @@ test('streams a cast result for the frontend to resolve actor reference images',
       onEvent: () => {},
     })
 
-    assert.deepEqual(result, { scene, characters, casting, video, paused: false })
+    assert.deepEqual(result, { scene, characters, casting, video })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -142,7 +148,7 @@ test('resolves once the scene arrives even if the video plan fails', async () =>
       onEvent: () => {},
     })
 
-    assert.deepEqual(result, { scene, characters, video: undefined, paused: false })
+    assert.deepEqual(result, { scene, characters, video: undefined })
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -244,32 +250,37 @@ for (const thinkingEnabled of [undefined, false, true]) {
   })
 }
 
-test('reports paused=true and stops without done when the stream ends on awaiting_upload', async () => {
+test('forwards the previous scene tail frame in the turn context', async () => {
   const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => new Response([
-    JSON.stringify({ type: 'scene', scene, characters }),
-    JSON.stringify({ type: 'awaiting_upload', sequence: 1, toolCallId: 'call-1', prompt: '第一段', seconds: 5, referenceImages: [] }),
-  ].join('\n') + '\n', { status: 200 })
+  let requestBody: { context?: { previousScene?: unknown } } = {}
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as typeof requestBody
+    return new Response([
+      JSON.stringify({ type: 'scene', scene, characters }),
+      JSON.stringify({ type: 'done' }),
+    ].join('\n') + '\n')
+  }
+  const previousScene = { tailFrameDataUrl: 'data:image/jpeg;base64,AAAA', characters: [...characters] }
 
   try {
-    const result = await streamDirectorTurn({
-      context: { ok: true, sessionId: 'session-paused', turn: 1, input: { type: 'start' } },
-      traceId: 'trace-paused',
+    await streamDirectorTurn({
+      context: { ok: true, sessionId: 'session-previous', turn: 2, input: { type: 'start' }, previousScene },
+      traceId: 'trace-previous',
       model: 'google/gemini-2.5-flash-lite',
       onEvent: () => {},
     })
-    assert.equal(result.paused, true)
+    assert.deepEqual(requestBody.context?.previousScene, previousScene)
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('throws when the stream ends without done or awaiting_upload', async () => {
+test('throws when the stream ends without done', async () => {
   const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => new Response(
-    JSON.stringify({ type: 'scene', scene, characters }) + '\n',
-    { status: 200 },
-  )
+  globalThis.fetch = async () => new Response([
+    JSON.stringify({ type: 'scene', scene, characters }),
+    JSON.stringify({ type: 'video_plan', video, references, fromSequence: 1 }),
+  ].join('\n') + '\n', { status: 200 })
 
   try {
     await assert.rejects(streamDirectorTurn({
@@ -283,91 +294,85 @@ test('throws when the stream ends without done or awaiting_upload', async () => 
   }
 })
 
-test('resumeDirectorTurn posts the tail frame to /api/director/resume with the expected headers and body', async () => {
+test('readDirectorStream surfaces a streamed error event', async () => {
+  const response = new Response([
+    JSON.stringify({ type: 'status', text: '导演正在构思' }),
+    JSON.stringify({ type: 'error', error: '模型请求失败' }),
+  ].join('\n'))
+  const received: string[] = []
+  await assert.rejects(readDirectorStream(response, (event) => { received.push(event.type) }), /模型请求失败/)
+  assert.deepEqual(received, ['status', 'error'])
+})
+
+test('readDirectorStream accepts a final done line without a trailing newline', async () => {
+  const response = new Response([
+    JSON.stringify({ type: 'status', text: '导演正在构思' }),
+    JSON.stringify({ type: 'done' }),
+  ].join('\n'))
+  await readDirectorStream(response, () => {})
+})
+
+test('streamDirectorRewrite posts the rewrite request and resolves with the new plan', async () => {
   const originalFetch = globalThis.fetch
   let requestUrl = ''
   let requestHeaders = new Headers()
   let requestBody: Record<string, unknown> = {}
+  const rewritePlan = { type: 'video_plan', video, references, fromSequence: 2 }
   globalThis.fetch = async (input, init) => {
     requestUrl = String(input)
     requestHeaders = new Headers(init?.headers)
     requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
     return new Response([
-      JSON.stringify({ type: 'video_plan', video }),
+      JSON.stringify(rewritePlan),
       JSON.stringify({ type: 'done' }),
     ].join('\n') + '\n', { status: 200 })
   }
 
   try {
-    const receivedEvents: string[] = []
-    const result = await resumeDirectorTurn({
+    const received: unknown[] = []
+    const result = await streamDirectorRewrite({
+      deepseekApiKey: 'sk-ds-test',
       sessionId: 'session-1',
       sequence: 2,
-      toolCallId: 'call-2',
-      tailFrameDataUrl: 'data:image/jpeg;base64,AAAA',
-      durationSeconds: 9.5,
-      deepseekApiKey: 'sk-ds-test',
-      onEvent: (event) => { receivedEvents.push(event.type) },
+      reason: '人物站位和上一段对不上',
+      traceId: 'trace-rewrite',
+      actors: [{ id: 'actor-a', name: '演员甲', gender: 'female', minAge: 16, maxAge: 24 }],
+      model: 'deepseek-v4-flash',
+      thinkingEnabled: true,
+      onEvent: (event) => { received.push(event) },
     })
 
-    assert.equal(requestUrl, '/api/director/resume')
+    assert.equal(requestUrl, '/api/director/rewrite')
     assert.equal(requestHeaders.get('X-DeepSeek-Key'), 'sk-ds-test')
     assert.deepEqual(requestBody, {
-      sessionId: 'session-1', sequence: 2, toolCallId: 'call-2',
-      tailFrameDataUrl: 'data:image/jpeg;base64,AAAA', durationSeconds: 9.5,
-    })
-    assert.deepEqual(receivedEvents, ['video_plan', 'done'])
-    assert.deepEqual(result, { paused: false, video })
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-})
-
-test('resumeDirectorTurn reports paused=true when the turn pauses again on the next segment', async () => {
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => new Response(
-    JSON.stringify({ type: 'awaiting_upload', sequence: 3, toolCallId: 'call-3', prompt: '第三段', seconds: 5, referenceImages: [] }) + '\n',
-    { status: 200 },
-  )
-
-  try {
-    const result = await resumeDirectorTurn({
       sessionId: 'session-1',
       sequence: 2,
-      toolCallId: 'call-2',
-      tailFrameDataUrl: 'data:image/jpeg;base64,AAAA',
-      durationSeconds: 9.5,
-      onEvent: () => {},
+      reason: '人物站位和上一段对不上',
+      traceId: 'trace-rewrite',
+      actors: [{ id: 'actor-a', name: '演员甲', gender: 'female', minAge: 16, maxAge: 24 }],
+      model: 'deepseek-v4-flash',
+      thinkingEnabled: true,
     })
-    assert.deepEqual(result, { paused: true, video: undefined })
+    assert.deepEqual(received, [rewritePlan, { type: 'done' }])
+    assert.deepEqual(result, { video })
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('fetchDirectorTurnState requests the sessionId and returns the parsed status', async () => {
+test('streamDirectorRewrite throws the server error message on failure', async () => {
   const originalFetch = globalThis.fetch
-  let requestUrl = ''
-  globalThis.fetch = async (input) => {
-    requestUrl = String(input)
-    return new Response(JSON.stringify({ status: 'awaiting_upload', awaiting: { sequence: 1, toolCallId: 'call-1', prompt: 'p', seconds: 5, referenceImages: [], traceId: 't-1' } }), { status: 200 })
-  }
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: '当前场次没有可重写的分镜。' }), { status: 409 })
 
   try {
-    const result = await fetchDirectorTurnState('session-42')
-    assert.equal(requestUrl, '/api/director/turn-state?sessionId=session-42')
-    assert.equal(result.status, 'awaiting_upload')
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-})
-
-test('fetchDirectorTurnState throws the server error message on failure', async () => {
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => new Response(JSON.stringify({ error: '缺少会话 ID。' }), { status: 400 })
-
-  try {
-    await assert.rejects(fetchDirectorTurnState(''), /缺少会话 ID/)
+    await assert.rejects(streamDirectorRewrite({
+      sessionId: 'session-1',
+      sequence: 1,
+      reason: '换个开场',
+      traceId: 'trace-rewrite-error',
+      model: 'deepseek-v4-flash',
+      onEvent: () => {},
+    }), /没有可重写的分镜/)
   } finally {
     globalThis.fetch = originalFetch
   }

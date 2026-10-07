@@ -15,36 +15,36 @@
 
 互动故事讲述一名秀女初入宫闱后的经历。Pi Agent 担任故事导演，主动决定开场、创建人物与事件，并根据玩家反馈继续推进剧情。
 
-每个回合由一个 Pi Agent 在同一个 Session 里通过工具调用完成：
+术语：一个 narrative 是一个**场次**；一个视频 prompt 是一**段**（每场 2～3 段）；段内两次硬切之间的画面是一个**镜头**。
+
+每个场次由一个 Pi Agent 在同一个 Session 里一次跑完：
 
 ```text
 玩家开始、选择选项或输入自由行动
                 ↓
-输入作为 user message 进入同一 Pi Session（附上一幕尾帧实测状态与本局视频模式）
+输入作为 user message 进入同一 Pi Session（附本局视频模式、上一场次是否有可接的画面）
                 ↓
-agent 调用 publish_scene 发布正文、三个选项、人物与台词清单
+publish_scene 发布正文、三个选项、人物与台词清单，结果列出待选角人物的候选演员
                 ↓
-publish_scene 结果直接列出每个待选角人物的候选演员，agent 调用 cast_scene 提交选角决定
+cast_scene 提交选角决定（可新建演员，外观存入演员库）
                 ↓
-agent 调用 write_video_prompt 提交 2～3 段分镜，程序校验台词、时间块与秒数
+导演判断是否接着上一场次画面拍：是 → inspect_last_frame 查看上一场次最后一帧
                 ↓
-agent 调用 finish_turn 结束回合，程序把选角与视频计划推给页面
+write_scene_video 一次写完整个场次 2～3 段分镜 → 交齐即结束
                 ↓
-页面生成或上传视频片段，DeepSeek Vision 识别最终尾帧
+页面按段依次生成或上传：第 1 段 → 尾帧接第 2 段 → 第 3 段
                 ↓
-开放新选择；下一回合读取用户选择与尾帧实测状态
+整场完成（或玩家跳过视频）后开放选择；某段不满意可重做或让导演重写这一段
 ```
 
 ### Agent 边界
 
-- 只有一个 Agent 实例、一个持久 Session。模型自己决定调用顺序，程序通过工具前置条件拦截跳步：未发布场景不能写分镜，未完成选角不能写分镜，未提交视频计划（或未说明跳过原因）不能结束回合。不使用强制 `tool_choice`。
-- 工具共四个：`publish_scene`、`cast_scene`、`write_video_prompt`、`finish_turn`。视频模式为“仅文字”时不提供 `write_video_prompt`。
-- 选角由模型决定，程序保证连续性：老角色的演员绑定由程序沿用，模型更换必须显式 `recast: true`；同一幕两个人物不能使用同一演员；演员图片仍由前端按演员 ID 从本地演员库解析。
-- 库中没有年龄相符候选时，`cast_scene` 允许用 `create { name, appearance }` 新建演员：模型只写身份层外观，程序拼出 16:9、纯白背景的人物三视图 prompt 并随 `cast` 事件下发，前端把新演员写入演员库。用户在演员库复制 prompt、外部生成图片后上传；待生成期间该人物按无参考图处理，分镜每段重复其外观。
-- `write_video_prompt` 只提交 `style` 与每段的 `characters`、`seconds`、`prompt`。prompt 由 `0–4秒：` 形式的时间块组成，台词处写 `{{line_1}}` 占位符。程序替换为人物姓名与原文，校验每句台词恰好按序使用一次、时间块从 0 开始首尾相接、每段 5～15 秒且不低于台词所需、整幕 15～45 秒、正文不泄漏人物 ID。
-- 同一工具连续 3 次校验失败则结束回合；模型停下却没有调用 `finish_turn` 时程序提醒一次，再不行按已有结果降级为纯文字。
-- 同一幕片段按顺序生成，后续片段以及下一幕首段使用上一尾帧作为首帧参考。
-- `inspect_tail_frame` 只调用 DeepSeek Vision，将整幕最终尾帧转换成下一回合使用的实测视觉状态。
+- 只有一个 Agent 实例、一个持久 Session。判断标准：一步操作的结果回来后模型是否需要据此做判断，需要的才放进 agent。场次内各段生成完后导演没有需要判断的事，所以视频生成由页面执行；导演需要看画面的时机只有场次衔接，由 `inspect_last_frame` 按需完成。
+- 工具共四个：`publish_scene`、`cast_scene`、`inspect_last_frame`、`write_scene_video`；仅文字模式只提供前两个。程序只拦截真实依赖（未发布不能选角，未选完角不能写分镜，`opening: continue` 前必须看过上一场次画面），不规定调用顺序，也不在工具结果里提示“下一步”。三样交付齐全即停止，不需要结束工具。
+- 选角由模型决定，程序保证连续性：老角色的演员绑定由程序沿用，模型更换必须显式 `recast: true`；同一场次两个人物不能使用同一演员；演员图片由前端按演员 ID 从本地演员库解析。演员外观由程序拼进其出场各段的最终 prompt。
+- `write_scene_video` 整场校验时间块、台词顺序与覆盖、每段与整场秒数、人物 ID 泄漏；玩家要求重写某段时，导演用 `rewriteSequence` 只重写那一段，程序整场重新校验。
+- 同一工具连续 3 次校验失败则结束运行；模型停下却没交齐时程序提醒一次，再不行按已有结果降级为纯文字。
+- 段与段之间用上一段最后一帧接上，切镜只放在段内部；场次第 1 段接着拍时用上一场次最后一帧开场，换场景时用人物参考图开场。
 - 可在 DeepSeek V4 Flash、Gemini 2.5 Flash-Lite、GPT-OSS 20B 与 GLM-5.3-Flash 之间切换；DeepSeek V4 Flash 默认关闭思考模式，可通过模型下方的开关开启 high 模式。
 - GLM-5.3-Flash 使用独立 `BIGMODEL_API_KEY` 直连智谱官方通用按量 API，不支持完全关闭思考，默认使用 low，可通过开关切换 high。
 
@@ -53,7 +53,8 @@ agent 调用 finish_turn 结束回合，程序把选角与视频计划推给页�
 - 同一局游戏持续使用同一个 Pi JSONL Session。
 - 玩家输入、Assistant 工具调用和 ToolResult 都写入 Session。
 - 上下文接近窗口限制时使用 Pi Compaction，摘要保留女主处境、人物关系、关键事件、地点和未解决伏笔。
-- 浏览器 `localStorage` 保存页面恢复所需的当前场景、幕次历史、视频计划和片段状态。
+- 历史场次进入上下文时，玩家选择、剧情、人物、台词、选角原样保留，分镜压成一行，尾帧查看结果压成一句。
+- 浏览器 `localStorage` 保存页面恢复所需的当前场景、场次历史、分镜和各段状态。
 
 验证版不包含导演台账、宿籍或数值系统，也不执行外围确定性剧情裁决。故事连续性直接来自 Pi Session、工具结果和 Compaction 摘要。
 
@@ -62,7 +63,7 @@ agent 调用 finish_turn 结束回合，程序把选角与视频计划推给页�
 Trace 页面用于查看互动故事 Agent 的运行详情，包括：
 
 - System Prompt 与玩家输入。
-- 同一回合内 `publish_scene`、`cast_scene`、`write_video_prompt`、`finish_turn` 的调用与结果。
+- 同一次导演运行内 `publish_scene`、`cast_scene`、`inspect_last_frame`、`write_scene_video` 的调用与结果。
 - ToolResult 的结构化场景、选角与视频计划数据。
 - Pi Compaction、Token、耗时、停止原因和错误。
 

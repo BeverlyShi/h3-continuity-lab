@@ -34,6 +34,7 @@ import type { AgentTraceEntry, DirectorStreamEvent, HarnessTraceSnapshot } from 
 import type { DirectorTurnContext } from '../src/types/game.ts'
 import type { SceneCharacter, StoryScene, VideoGenerationRequest } from '../src/types/story.ts'
 import {
+  buildRewriteMessage,
   buildStoryInputMessage,
   DIRECTOR_COMPACTION_INSTRUCTIONS,
   DIRECTOR_SYSTEM_PROMPT,
@@ -51,9 +52,8 @@ import {
   resolveSceneCasting,
 } from './castSceneTool.ts'
 import { createPublishSceneTool } from './publishSceneTool.ts'
-import { createWriteSegmentTool, describeReferenceImages } from './writeSegmentTool.ts'
-import { buildResumedGenerationSummary, createGenerateSegmentTool, MAX_GENERATE_ATTEMPTS } from './generateSegmentTool.ts'
-import { createFinishTurnTool } from './finishTurnTool.ts'
+import { createWriteSceneVideoTool, describeSegmentReferences, validateSceneSegments } from './writeSceneVideoTool.ts'
+import { createInspectLastFrameTool } from './inspectLastFrameTool.ts'
 import { compileVideoPlan } from './videoPromptCompiler.ts'
 import { inspectRawToolArguments, summarizeAssistantUsage, toDurableMessage, toDurableValue } from './directorTrace.ts'
 import { withDirectorSession } from './directorSession.ts'
@@ -61,61 +61,11 @@ import { bigmodelProvider } from './bigmodelProvider.ts'
 import { analyzeTailFrame } from './tailFrameVision.ts'
 import { projectHistory } from './directorContext.ts'
 import {
-  findAwaitingUpload,
+  findRewritableScene,
   findUnresolvedToolCall,
   persistTurnState,
-  readLatestTurnState,
   type DirectorTurnState,
 } from './directorTurnState.ts'
-
-export type DirectorTurnStatusResponse =
-  | { status: 'idle' }
-  | {
-    status: 'awaiting_upload'
-    awaiting: {
-      sequence: number
-      toolCallId: string
-      prompt: string
-      seconds: number
-      referenceImages: ReturnType<typeof describeReferenceImages>
-      traceId: string
-    }
-  }
-
-// 供 /api/director/resume 内部选择 provider key：resume 请求不带 model 字段，由已存的回合状态决定。
-export async function getAwaitingModelId(sessionId: string): Promise<DirectorModelId | undefined> {
-  const session = await getOrCreateSession(sessionId)
-  const entries = await session.findEntries({ order: 'oldestFirst' })
-  return findAwaitingUpload(entries)?.state.modelId
-}
-
-// 供 GET /api/director/turn-state 只读查询：不加锁、不跑 Agent，只看最新持久化状态。
-export async function getDirectorTurnStatus(sessionId: string): Promise<DirectorTurnStatusResponse> {
-  const session = await getOrCreateSession(sessionId)
-  const entries = await session.findEntries({ order: 'oldestFirst' })
-  const awaiting = findAwaitingUpload(entries)
-  if (!awaiting) return { status: 'idle' }
-
-  const segment = awaiting.state.video.segments.find((candidate) => candidate.sequence === awaiting.pending.sequence)
-  const book = awaiting.state.castingBook
-    ? importCastingBook(awaiting.state.castingBook)
-    : createCastingBook(awaiting.state.actors, awaiting.state.castings)
-  const referenceImages = describeReferenceImages(awaiting.pending.sequence, segment?.characters ?? [], {
-    hasPreviousTailFrame: awaiting.state.context.hasPreviousTailFrame ?? Boolean(awaiting.state.context.previousVisualState),
-    lookupActor: (characterId) => lookupCastingBookActor(book, characterId),
-  })
-  return {
-    status: 'awaiting_upload',
-    awaiting: {
-      sequence: awaiting.pending.sequence,
-      toolCallId: awaiting.pending.toolCallId,
-      prompt: segment?.prompt ?? '',
-      seconds: segment?.seconds ?? 0,
-      referenceImages,
-      traceId: awaiting.state.traceId,
-    },
-  }
-}
 
 const MAX_DIRECTOR_OUTPUT_TOKENS = 4_096
 const DIRECTOR_TIMEOUT_MS = 45_000
@@ -394,22 +344,26 @@ export type DirectorTurnOutcome = {
   characters?: SceneCharacter[]
   casting?: SceneCastingResult
   video?: VideoGenerationRequest
-  paused: boolean
 }
+
+// scene：写一个新场次；rewrite：玩家要求重写本场次第 sequence 段，只开放 write_scene_video。
+type RunMode = { kind: 'scene' } | { kind: 'rewrite'; sequence: number }
 
 type RunAgentSessionOptions = {
   state: DirectorTurnState
   session: Session<JsonlSessionMetadata>
   entries: Entry[]
   apiKey: string
+  visionKey?: string
+  analyze?: typeof analyzeTailFrame
   signal?: AbortSignal
   send: (event: DirectorStreamEvent) => void
   initialMessages: AgentMessage[]
-  // 只有新回合需要：字符串会走 agent.prompt(text)；省略时走 agent.continue()（恢复流程）。
-  promptText?: string
+  promptText: string
+  mode: RunMode
 }
 
-// 新回合与恢复流程共用：模型与工具搭建、持久化订阅、compaction、暂停判定、结束处理。
+// 新场次与重写某段共用：模型与工具搭建、持久化订阅、compaction、交齐判定、结束处理。
 async function runAgentSession({
   state,
   session,
@@ -419,6 +373,9 @@ async function runAgentSession({
   send,
   initialMessages,
   promptText,
+  mode,
+  visionKey,
+  analyze = analyzeTailFrame,
 }: RunAgentSessionOptions): Promise<DirectorTurnOutcome> {
   const persistenceErrors: Array<{ message: string; timestamp: number }> = []
   const metadata = await session.getMetadata()
@@ -547,10 +504,6 @@ async function runAgentSession({
       }
     }
     if (event.type === 'message_end') {
-      // generate_segment 暂停时的占位 toolResult 不落盘，让 JSONL 停在带未决工具调用的 assistant 消息。
-      if (event.message.role === 'toolResult' && (event.message.details as { pending?: boolean } | undefined)?.pending === true) {
-        return
-      }
       const argumentDiagnostics = event.message.role === 'assistant'
         ? event.message.content.flatMap((content, index) => {
             const raw = rawToolArguments.get(index)
@@ -656,138 +609,88 @@ async function runAgentSession({
   }
 
   send({ type: 'trace_started', traceId: state.traceId, harnessSessionId: metadata.id, startedAt: state.startedAt })
-  send({ type: 'status', text: `Pi 故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 构思下一幕。` })
+  send({ type: 'status', text: mode.kind === 'rewrite'
+    ? `Pi 故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 重写第 ${mode.sequence} 段。`
+    : `Pi 故事导演正在通过 ${getDirectorModelLabel(state.modelId)} 构思下一个场次。` })
 
-  // 单个 agent 的回合状态：工具只在这里写入 state，程序据此守住前置条件。
+  // 一次运行的状态：工具只在这里写入 state，程序据此守住依赖、判断是否交齐。
   const videoEnabled = state.videoMode !== 'off'
+  const rewrite = mode.kind === 'rewrite' ? mode : undefined
   const book = state.castingBook ? importCastingBook(state.castingBook) : createCastingBook(state.actors, state.castings)
   if (state.scenePublish) book.speakingCharacterIds = new Set(state.scenePublish.dialogues.map((dialogue) => dialogue.characterId))
   let lastToolError: string | undefined
+  let rewritten = false
   const sceneCharacters = () => state.scenePublish?.characters ?? []
-  const hasPreviousTailFrame = () => state.context.hasPreviousTailFrame ?? Boolean(state.context.previousVisualState)
   const lookupActor = (characterId: string) => lookupCastingBookActor(book, characterId)
+  const lookupAppearance = (characterId: string) => {
+    const actorId = book.bindings.get(characterId)
+    const actor = actorId ? book.actors.find((candidate) => candidate.id === actorId) : undefined
+    const character = sceneCharacters().find((candidate) => candidate.id === characterId)
+    return actor?.appearance && character ? { name: character.name, appearance: actor.appearance } : undefined
+  }
 
-  const describePendingUpload = () => {
-    if (!state.pending) return undefined
-    const segment = state.video.segments.find((candidate) => candidate.sequence === state.pending!.sequence)
-    const referenceImages = describeReferenceImages(state.pending.sequence, segment?.characters ?? [], {
-      hasPreviousTailFrame: hasPreviousTailFrame(),
-      lookupActor,
-    })
-    return {
-      sequence: state.pending.sequence,
-      toolCallId: state.pending.toolCallId,
-      prompt: segment?.prompt ?? '',
-      seconds: segment?.seconds ?? 0,
-      referenceImages,
-    }
+  // 交齐即停：剧情、选角、分镜（或跳过视频的理由）都有了就结束，不再多花一次模型调用。
+  const isComplete = () => {
+    if (rewrite) return rewritten
+    if (!state.scenePublish || !isCastingComplete(book, state.scenePublish.characters)) return false
+    return !videoEnabled || Boolean(state.video) || Boolean(state.skipVideoReason)
   }
 
   const publishSceneTool = createPublishSceneTool((turn) => {
     state.scenePublish = toDurableValue(turn)
     book.speakingCharacterIds = new Set(turn.dialogues.map((dialogue) => dialogue.characterId))
     send({ type: 'scene', scene: state.scenePublish.scene, characters: state.scenePublish.characters })
-    send({ type: 'status', text: '场景已发布，正在确定人物参考素材。' })
+    send({ type: 'status', text: '剧情已发布，正在确定人物选角。' })
   }, {
     isPublished: () => Boolean(state.scenePublish),
-    describeCasting: (turn) => {
-      const status = describeCastingStatus(book, turn.characters)
-      const next = pendingCastingCharacters(book, turn.characters).length
-        ? ''
-        : `\n下一步：${videoEnabled ? '调用 write_segment 编写第 1 段分镜。' : '本局为仅文字模式，调用 finish_turn 结束回合。'}`
-      return `${status}${next}`
-    },
+    describeCasting: (turn) => describeCastingStatus(book, turn.characters),
   })
 
   const castSceneTool = createCastSceneTool(book, sceneCharacters, () => {
-    send({ type: 'status', text: '选角已确定，正在编写分镜。' })
+    send({ type: 'status', text: videoEnabled ? '选角已确定，正在编写本场次分镜。' : '选角已确定。' })
   })
 
-  const writeSegmentTool = createWriteSegmentTool({
+  const inspectLastFrameTool = createInspectLastFrameTool({
+    getPreviousScene: () => state.context.previousScene,
+    visionKey,
+    analyze,
+    signal,
+    onInspect: (visualState) => {
+      state.inspected = visualState
+      send({ type: 'status', text: '导演查看了上一场次的最后一帧。' })
+    },
+  })
+
+  const writeSceneVideoTool = createWriteSceneVideoTool({
     getCharacters: sceneCharacters,
     getDialogues: () => state.scenePublish?.dialogues ?? [],
-    getExistingSegments: () => state.video.segments,
-    getHasPreviousTailFrame: hasPreviousTailFrame,
-    lookupActor,
-    precondition: () => {
+    getRewrite: () => rewrite && state.video ? { sequence: rewrite.sequence, draft: state.video } : undefined,
+    precondition: (input) => {
       if (!state.scenePublish) return '必须先通过 publish_scene 发布场景。'
       const pending = pendingCastingCharacters(book, state.scenePublish.characters)
-      return pending.length
-        ? `以下人物尚未选角：${pending.map((character) => `${character.name}（${character.id}）`).join('、')}；请先调用 cast_scene。`
-        : null
-    },
-    onWrite: (result) => {
-      state.video.segments = state.video.segments.filter((segment) => segment.sequence < result.segment.sequence)
-      if (result.segment.style) state.video.style = result.segment.style
-      state.video.segments.push({
-        sequence: result.segment.sequence,
-        characters: result.segment.characters,
-        seconds: result.segment.seconds,
-        isLast: result.segment.isLast,
-        prompt: result.segment.prompt,
-        lineIds: result.segment.lineIds,
-        style: result.segment.style,
-        generateAttempts: 0,
-      })
-      state.video.segments.sort((left, right) => left.sequence - right.sequence)
-      const priorSeconds = result.cumulativeSeconds - result.segment.seconds
-      const referenceImages = describeReferenceImages(result.segment.sequence, result.segment.characters, {
-        hasPreviousTailFrame: hasPreviousTailFrame(),
-        lookupActor,
-      })
-      send({
-        type: 'segment_written',
-        segment: {
-          sequence: result.segment.sequence,
-          startTime: priorSeconds,
-          endTime: result.cumulativeSeconds,
-          characterIds: result.segment.characters,
-          prompt: result.segment.prompt,
-        },
-        referenceImages,
-        cumulativeSeconds: result.cumulativeSeconds,
-      })
-      send({ type: 'status', text: `第 ${result.segment.sequence} 段分镜已写好。` })
-    },
-  })
-
-  const generateSegmentTool = createGenerateSegmentTool({
-    getSegments: () => state.video.segments,
-    onGenerate: ({ sequence, toolCallId }) => {
-      for (const segment of state.video.segments) {
-        if (segment.sequence === sequence) segment.generateAttempts += 1
-        if (segment.sequence >= sequence) segment.generated = undefined
+      if (pending.length) {
+        return `以下人物尚未选角：${pending.map((character) => `${character.name}（${character.id}）`).join('、')}；请先调用 cast_scene。`
       }
-      state.pending = { sequence, toolCallId }
-      send({ type: 'status', text: `第 ${sequence} 段等待生成与上传。` })
-    },
-  })
-
-  const finishTurnTool = createFinishTurnTool({
-    check: (input) => {
-      if (!state.scenePublish) return '尚未发布场景，请先调用 publish_scene。'
-      if (!isCastingComplete(book, state.scenePublish.characters)) {
-        return `以下人物尚未选角：${pendingCastingCharacters(book, state.scenePublish.characters).map((character) => character.name).join('、')}；请先调用 cast_scene。`
-      }
-      if (videoEnabled && !input.skipVideo) {
-        const written = state.video.segments
-        if (written.length < 2) {
-          return '至少需要写完并生成 2 段视频才能结束；请继续调用 write_segment / generate_segment，或通过 skipVideo.reason 说明原因后结束。'
-        }
-        const last = written[written.length - 1]
-        if (!last.isLast) {
-          return '最后一段还没有标记为本幕最后一段（isLast），请先完成分镜；或通过 skipVideo.reason 说明原因后结束。'
-        }
-        const notGenerated = written.find((segment) => !segment.generated)
-        if (notGenerated) {
-          return `第 ${notGenerated.sequence} 段还没有生成，请先调用 generate_segment；或通过 skipVideo.reason 说明原因后结束。`
-        }
+      if (!rewrite && input.opening === 'continue') {
+        if (!state.context.previousScene) return '上一场次没有可接的视频画面，第 1 段只能用 opening: "new_shot"。'
+        if (!state.inspected) return '要接着上一场次画面拍（opening: continue），必须先调用 inspect_last_frame 查看上一场次最后一帧。'
       }
       return null
     },
-    onFinish: (input) => {
-      state.finished = true
-      state.skipVideoReason = input.skipVideo?.reason
+    onWrite: (result) => {
+      if (result.kind === 'skip') {
+        state.video = undefined
+        state.skipVideoReason = result.reason
+        send({ type: 'status', text: `导演决定本场次不生成视频：${result.reason}` })
+        return
+      }
+      state.video = toDurableValue(result.draft)
+      state.skipVideoReason = undefined
+      if (result.kind === 'rewrite') rewritten = true
+      send({
+        type: 'status',
+        text: result.kind === 'rewrite' ? `第 ${result.sequence} 段已重写。` : `本场次分镜已写好，共 ${result.segments.length} 段。`,
+      })
     },
   })
 
@@ -795,12 +698,13 @@ async function runAgentSession({
     initialState: {
       systemPrompt: DIRECTOR_SYSTEM_PROMPT,
       model,
-      tools: [
-        publishSceneTool,
-        castSceneTool,
-        ...(videoEnabled ? [writeSegmentTool, generateSegmentTool] : []),
-        finishTurnTool,
-      ],
+      tools: rewrite
+        ? [writeSceneVideoTool]
+        : [
+            publishSceneTool,
+            castSceneTool,
+            ...(videoEnabled ? [inspectLastFrameTool, writeSceneVideoTool] : []),
+          ],
       messages: initialMessages,
       thinkingLevel: getDirectorStreamPolicy(state.modelId, state.thinkingEnabled).reasoning ?? 'off',
     },
@@ -808,19 +712,11 @@ async function runAgentSession({
     streamFn: directorStreamFn,
     sessionId: metadata.id,
     maxRetryDelayMs: 5_000,
-    shouldStopAfterTurn: (() => {
-      const retrying = createRetryingStopCondition(
-        MAX_TOOL_ATTEMPTS,
-        () => state.finished,
-        (message) => { lastToolError = message },
-      )
-      return (turn: ShouldStopAfterTurnContext) => {
-        if (!turn.toolResults.some((result) => result.isError)) lastToolError = undefined
-        // generate_segment 触发的暂停：立刻停止，不计入校验失败重试次数。
-        if (state.pending) return true
-        return retrying(turn)
-      }
-    })(),
+    shouldStopAfterTurn: createRetryingStopCondition(
+      MAX_TOOL_ATTEMPTS,
+      isComplete,
+      (message) => { lastToolError = message },
+    ),
   })
 
   signal?.addEventListener('abort', () => agent.abort(), { once: true })
@@ -828,90 +724,79 @@ async function runAgentSession({
 
   const agentRunStartedAt = Date.now()
 
-  const handlePotentialPause = async (): Promise<boolean> => {
-    if (!state.pending) return false
-    phaseTimings.agentRunMs = Date.now() - agentRunStartedAt
-    await persistTiming()
-    state.status = 'awaiting_upload'
-    state.castingBook = exportCastingBook(book)
-    await persistTurnState(session, state)
-    const pendingInfo = describePendingUpload()
-    if (pendingInfo) send({ type: 'awaiting_upload', ...pendingInfo })
-    await sendTrace('suspended')
-    return true
+  const describeMissing = () => {
+    if (rewrite) return `还没有重写第 ${rewrite.sequence} 段（write_scene_video，rewriteSequence: ${rewrite.sequence}）`
+    if (state.scenePublish && !isCastingComplete(book, state.scenePublish.characters)) return '还有人物没有选角（cast_scene）'
+    return '还没有提交本场次分镜（write_scene_video）'
   }
 
   try {
-    if (promptText !== undefined) {
-      await agent.prompt(promptText)
-    } else {
-      await agent.continue()
-    }
+    await agent.prompt(promptText)
     if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
-    if (await handlePotentialPause()) {
-      return { scene: state.scenePublish?.scene, characters: state.scenePublish?.characters, paused: true }
-    }
 
-    // 模型停下来却没有结束回合：不是校验失败导致的就提醒一次，再不行按已有结果降级。
-    if (!state.finished && state.scenePublish && !lastToolError) {
-      const videoIncomplete = videoEnabled && !state.video.segments.some((segment) => segment.isLast && segment.generated)
-      const missing = videoIncomplete ? '还没有完成分镜' : '还没有调用 finish_turn'
-      send({ type: 'status', text: '导演尚未结束回合，正在提醒继续。' })
-      await agent.prompt(`本回合尚未结束：${missing}。请继续调用工具完成剩余步骤，最后调用 finish_turn。`)
+    // 模型停下却没交齐：不是校验失败导致的就提醒一次，再不行按已有结果降级。
+    if (!isComplete() && !lastToolError && (rewrite || state.scenePublish)) {
+      send({ type: 'status', text: '导演尚未交齐，正在提醒继续。' })
+      await agent.prompt(`本场次尚未完成：${describeMissing()}。请继续调用工具。`)
       if (agent.state.errorMessage) throw new Error(agent.state.errorMessage)
-      if (await handlePotentialPause()) {
-        return { scene: state.scenePublish?.scene, characters: state.scenePublish?.characters, paused: true }
-      }
     }
 
+    if (rewrite && !rewritten) {
+      throw new Error(lastToolError
+        ? `重写第 ${rewrite.sequence} 段连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastToolError}`
+        : `导演没有重写第 ${rewrite.sequence} 段。`)
+    }
     if (!state.scenePublish) {
       throw new Error(lastToolError
         ? `publish_scene 连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastToolError}`
         : 'Pi Agent 没有调用 publish_scene 发布场景。')
     }
 
-    const castingResult = toDurableValue(resolveSceneCasting(book, state.scenePublish.characters))
-    orchestrationTraceEntries.push({
-      id: `${state.traceId}:cast-result`,
-      kind: 'tool_result',
-      title: '本幕最终选角',
-      timestamp: Date.now(),
-      data: castingResult,
-    })
-    send({ type: 'cast', casting: castingResult })
+    let castingResult: SceneCastingResult | undefined
+    if (!rewrite) {
+      castingResult = toDurableValue(resolveSceneCasting(book, state.scenePublish.characters))
+      orchestrationTraceEntries.push({
+        id: `${state.traceId}:cast-result`,
+        kind: 'tool_result',
+        title: '本场次最终选角',
+        timestamp: Date.now(),
+        data: castingResult,
+      })
+      send({ type: 'cast', casting: castingResult })
+    }
 
-    const videoReady = videoEnabled && state.finished && !state.skipVideoReason && state.video.segments.length > 0
     let videoPlan: VideoGenerationRequest | undefined
-    if (videoReady) {
-      let start = 0
-      const videoPrompts = [...state.video.segments]
-        .sort((left, right) => left.sequence - right.sequence)
-        .map((segment) => {
-          const normalized = {
-            sequence: segment.sequence,
-            startTime: start,
-            endTime: start + segment.seconds,
-            characterIds: segment.characters,
-            prompt: segment.prompt,
-          }
-          start = normalized.endTime
-          return normalized
-        })
-      const request: VideoGenerationRequest = { totalDuration: start, style: state.video.style ?? '', videoPrompts }
-      videoPlan = toDurableValue(compileVideoPlan(request))
-      send({ type: 'video_plan', video: videoPlan })
-      const lastSegment = state.video.segments.find((segment) => segment.isLast)
-      if (lastSegment?.generated) send({ type: 'scene_visual_state', visualState: lastSegment.generated.visualState })
+    if (videoEnabled && state.video) {
+      const segments = validateSceneSegments(state.video.segments, state.scenePublish.characters, state.scenePublish.dialogues)
+      const videoPrompts = segments.map((segment) => ({
+        sequence: segment.sequence,
+        startTime: segment.startTime,
+        endTime: segment.endTime,
+        characterIds: segment.characterIds,
+        prompt: segment.prompt,
+      }))
+      const request: VideoGenerationRequest = {
+        totalDuration: videoPrompts.at(-1)?.endTime ?? 0,
+        style: state.video.style,
+        videoPrompts,
+      }
+      videoPlan = toDurableValue(compileVideoPlan(request, lookupAppearance))
+      send({
+        type: 'video_plan',
+        video: videoPlan,
+        references: describeSegmentReferences(state.video.opening, videoPrompts, lookupActor),
+        fromSequence: rewrite?.sequence ?? 1,
+      })
     } else if (videoEnabled) {
       const message = state.skipVideoReason
-        ? `导演跳过了本幕视频：${state.skipVideoReason}`
+        ? `导演跳过了本场次视频：${state.skipVideoReason}`
         : lastToolError
-          ? `视频计划连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastToolError}`
-          : '导演没有编写本幕视频计划。'
+          ? `分镜连续 ${MAX_TOOL_ATTEMPTS} 次未通过校验，最后一次错误：${lastToolError}`
+          : '导演没有编写本场次分镜。'
       orchestrationTraceEntries.push({
         id: `${state.traceId}:video-plan-error`,
         kind: 'error',
-        title: '视频计划未完成',
+        title: '本场次分镜未完成',
         timestamp: Date.now(),
         text: message,
         isError: true,
@@ -935,16 +820,14 @@ async function runAgentSession({
     }
 
     await persistTiming()
-    await persistTurnState(session, { status: 'finished', traceId: state.traceId })
-    const completed = state.finished && (!videoEnabled || videoReady)
-    await sendTrace(completed ? 'completed' : 'degraded')
+    await persistTurnState(session, { ...state, status: 'finished', castingBook: exportCastingBook(book) })
+    await sendTrace(isComplete() ? 'completed' : 'degraded')
     send({ type: 'done' })
     return {
       scene: state.scenePublish.scene,
       characters: state.scenePublish.characters,
       casting: castingResult,
       video: videoPlan,
-      paused: false,
     }
   } catch (error) {
     phaseTimings.agentRunMs ||= Date.now() - agentRunStartedAt
@@ -952,6 +835,22 @@ async function runAgentSession({
     await sendTrace(signal?.aborted ? 'aborted' : 'failed')
     throw error
   }
+}
+
+// 上一次运行中断（或旧版暂停回合）留下没有结果的工具调用时补一条失败结果，否则模型 API 会拒绝这段历史。
+const closeUnresolvedToolCall = async (session: Session<JsonlSessionMetadata>, entries: Entry[]) => {
+  const unresolved = findUnresolvedToolCall(entries)
+  if (!unresolved) return entries
+  await session.appendMessage({
+    role: 'toolResult',
+    toolCallId: unresolved.toolCallId,
+    toolName: unresolved.toolName,
+    content: [{ type: 'text', text: '上次运行已中断，这次工具调用作废。' }],
+    details: {},
+    isError: true,
+    timestamp: Date.now(),
+  })
+  return session.findEntries({ order: 'oldestFirst' })
 }
 
 export type DirectorAgentRequest = {
@@ -963,6 +862,9 @@ export type DirectorAgentRequest = {
   castings: CharacterCasting[]
   traceId: string
   videoMode?: DirectorVideoMode
+  // inspect_last_frame 用 DeepSeek Vision；没配时导演只能换场景开场。
+  visionKey?: string
+  analyze?: typeof analyzeTailFrame
   signal?: AbortSignal
   send: (event: DirectorStreamEvent) => void
 }
@@ -980,32 +882,14 @@ async function runPersistentDirector({
   castings,
   traceId,
   videoMode = 'auto',
+  visionKey,
+  analyze,
   signal,
   send,
 }: DirectorAgentRequest): Promise<DirectorTurnOutcome> {
   const startedAt = Date.now()
   const session = await getOrCreateSession(context.sessionId)
-  let persistedEntries = await session.findEntries({ order: 'oldestFirst' })
-
-  // 上一回合暂停后玩家没有上传就开了新回合：作废那次未决的 generate_segment。
-  const priorTurnState = readLatestTurnState(persistedEntries)
-  const unresolved = findUnresolvedToolCall(persistedEntries)
-  if (unresolved) {
-    await session.appendMessage({
-      role: 'toolResult',
-      toolCallId: unresolved.toolCallId,
-      toolName: unresolved.toolName,
-      content: [{ type: 'text', text: '玩家未上传该段视频，本次 generate_segment 作废。' }],
-      details: {},
-      isError: true,
-      timestamp: Date.now(),
-    })
-    await persistTurnState(session, {
-      status: 'abandoned',
-      traceId: priorTurnState && 'traceId' in priorTurnState ? priorTurnState.traceId : traceId,
-    })
-    persistedEntries = await session.findEntries({ order: 'oldestFirst' })
-  }
+  let persistedEntries = await closeUnresolvedToolCall(session, await session.findEntries({ order: 'oldestFirst' }))
 
   const startSeq = lastSequence(persistedEntries)
   await session.appendCustomEntry('director_trace', { traceId, modelId, thinkingEnabled, startedAt })
@@ -1022,115 +906,94 @@ async function runPersistentDirector({
     castings,
     startSeq,
     startedAt,
-    video: { segments: [] },
-    finished: false,
   }
 
   const initialMessages = context.input.type === 'start'
     ? []
     : buildSessionContext(stripTrailingFailedTurns(projectHistory(persistedEntries))).messages
 
-  const promptText = buildStoryInputMessage(context.input, context.previousVisualState, {
-    videoMode,
-    hasPreviousTailFrame: context.hasPreviousTailFrame ?? Boolean(context.previousVisualState),
-  })
-
   return runAgentSession({
     state,
     session,
     entries: persistedEntries,
     apiKey,
+    visionKey,
+    analyze,
     signal,
     send,
     initialMessages,
-    promptText,
+    promptText: buildStoryInputMessage(context.input, { videoMode, hasPreviousFrame: Boolean(context.previousScene) }),
+    mode: { kind: 'scene' },
   })
 }
 
-export type ResumeDirectorAgentRequest = {
+export type RewriteDirectorRequest = {
   sessionId: string
   sequence: number
-  toolCallId: string
-  tailFrameDataUrl: string
-  durationSeconds: number
+  reason: string
   apiKey: string
-  deepseekKey: string
+  modelId: DirectorModelId
+  thinkingEnabled?: boolean
+  // 最新演员库：玩家可能刚补了参考图或改了外观。
+  actors: CastableActor[]
+  traceId: string
   signal?: AbortSignal
   send: (event: DirectorStreamEvent) => void
-  analyze?: typeof analyzeTailFrame
 }
 
-export async function resumeDirectorAgent(request: ResumeDirectorAgentRequest): Promise<DirectorTurnOutcome> {
-  return withDirectorSession(request.sessionId, () => runResumedDirector(request))
+export async function rewriteDirectorSegment(request: RewriteDirectorRequest): Promise<DirectorTurnOutcome> {
+  return withDirectorSession(request.sessionId, () => runRewriteDirector(request))
 }
 
-async function runResumedDirector({
+async function runRewriteDirector({
   sessionId,
   sequence,
-  toolCallId,
-  tailFrameDataUrl,
-  durationSeconds,
+  reason,
   apiKey,
-  deepseekKey,
+  modelId,
+  thinkingEnabled = false,
+  actors,
+  traceId,
   signal,
   send,
-  analyze = analyzeTailFrame,
-}: ResumeDirectorAgentRequest): Promise<DirectorTurnOutcome> {
+}: RewriteDirectorRequest): Promise<DirectorTurnOutcome> {
+  const startedAt = Date.now()
   const session = await getOrCreateSession(sessionId)
-  const entries = await session.findEntries({ order: 'oldestFirst' })
-  const awaiting = findAwaitingUpload(entries)
-  if (!awaiting || awaiting.pending.sequence !== sequence || awaiting.pending.toolCallId !== toolCallId) {
-    throw new Error('当前没有等待上传的视频段，或段号、工具调用 ID 与当前状态不一致。')
+  let entries = await session.findEntries({ order: 'oldestFirst' })
+  const scene = findRewritableScene(entries)
+  if (!scene?.video) throw new Error('当前场次没有可重写的分镜。')
+  if (sequence > scene.video.segments.length) throw new Error(`本场次只有 ${scene.video.segments.length} 段。`)
+  entries = await closeUnresolvedToolCall(session, entries)
+
+  const startSeq = lastSequence(entries)
+  await session.appendCustomEntry('director_trace', { traceId, modelId, thinkingEnabled, startedAt, rewriteSequence: sequence })
+  entries = await session.findEntries({ order: 'oldestFirst' })
+
+  const latestActors = new Map(actors.map((actor) => [actor.id, actor]))
+  const castingBook = scene.castingBook && {
+    ...scene.castingBook,
+    actors: scene.castingBook.actors.map((actor) => latestActors.get(actor.id) ?? actor),
   }
-  const state = awaiting.state
-  const segment = state.video.segments.find((candidate) => candidate.sequence === sequence)
-  if (!segment) throw new Error(`未找到第 ${sequence} 段的分镜数据。`)
-
-  // VLM 失败直接抛错，不写 session；前端可以重试上传。
-  const visualState = await analyze({
-    apiKey: deepseekKey,
-    imageUrl: tailFrameDataUrl,
-    characters: state.scenePublish?.characters ?? [],
-    signal,
-  })
-
-  segment.generated = { durationSeconds, visualState }
-  state.pending = undefined
-  state.status = 'resumed'
-
-  const remainingAttempts = Math.max(0, MAX_GENERATE_ATTEMPTS - segment.generateAttempts)
-  const summaryText = buildResumedGenerationSummary({
-    sequence,
-    isLast: segment.isLast,
-    plannedSeconds: segment.seconds,
-    durationSeconds,
-    visualState,
-    remainingAttempts,
-  })
-
-  await session.appendMessage({
-    role: 'toolResult',
-    toolCallId,
-    toolName: 'generate_segment',
-    content: [{ type: 'text', text: summaryText }],
-    details: { durationSeconds, visualState },
-    isError: false,
-    timestamp: Date.now(),
-  })
-  await persistTurnState(session, state)
-  await session.appendCustomEntry('director_resume', { traceId: state.traceId, sequence })
-  send({ type: 'segment_generated', sequence, durationSeconds, visualState })
-
-  const resumedEntries = await session.findEntries({ order: 'oldestFirst' })
-  const initialMessages = buildSessionContext(stripTrailingFailedTurns(projectHistory(resumedEntries))).messages
+  const state: DirectorTurnState = {
+    ...scene,
+    status: 'running',
+    traceId,
+    modelId,
+    thinkingEnabled,
+    startSeq,
+    startedAt,
+    castingBook,
+  }
 
   return runAgentSession({
     state,
     session,
-    entries: resumedEntries,
+    entries,
     apiKey,
     signal,
     send,
-    initialMessages,
+    initialMessages: buildSessionContext(stripTrailingFailedTurns(projectHistory(entries))).messages,
+    promptText: buildRewriteMessage(sequence, reason, scene.video),
+    mode: { kind: 'rewrite', sequence },
   })
 }

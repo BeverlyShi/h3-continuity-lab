@@ -1,4 +1,4 @@
-import type { SceneCharacter, StoryScene, TailFrameVisualState, VideoGenerationRequest, VideoPromptSegment, VideoReferenceDescriptor } from './story'
+import type { SceneCharacter, StoryScene, VideoGenerationRequest, VideoReferenceDescriptor } from './story'
 import type { SceneCastingResult } from './actor'
 
 export type DirectorStatus = 'idle' | 'thinking' | 'publishing' | 'error'
@@ -78,11 +78,9 @@ export type DirectorStreamEvent =
   | { type: 'scene'; scene: StoryScene; characters: SceneCharacter[] }
   | { type: 'cast'; casting: SceneCastingResult }
   | { type: 'cast_error'; message: string }
-  | { type: 'video_plan'; video: VideoGenerationRequest }
+  // video.videoPrompts 已编译为最终 prompt；references[i] 是第 i+1 段的起始画面描述符；
+  // fromSequence 起的各段需要（重新）生成：整场写作为 1，导演重写第 N 段时为 N。
+  | { type: 'video_plan'; video: VideoGenerationRequest; references: VideoReferenceDescriptor[][]; fromSequence: number }
   | { type: 'video_plan_error'; message: string }
-  | { type: 'segment_written'; segment: VideoPromptSegment; referenceImages: VideoReferenceDescriptor[]; cumulativeSeconds: number }
-  | { type: 'awaiting_upload'; sequence: number; toolCallId: string; prompt: string; seconds: number; referenceImages: VideoReferenceDescriptor[] }
-  | { type: 'segment_generated'; sequence: number; durationSeconds: number; visualState: TailFrameVisualState }
-  | { type: 'scene_visual_state'; visualState: TailFrameVisualState }
   | { type: 'done' }
   | { type: 'error'; error: string }

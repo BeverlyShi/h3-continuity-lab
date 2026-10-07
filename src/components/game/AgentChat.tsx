@@ -99,8 +99,8 @@ export function AgentChat({
           <div className="agent-empty">
             <Bot size={19} />
             <p>{hasApiKey
-              ? '我会根据你的选择、剧情状态和上一幕尾帧状态推进下一幕。'
-              : `配置 ${apiKeyLabel} API Key 后，我会接管每一幕的推进。`}</p>
+              ? '我会根据你的选择、剧情状态和上一场次的最后一帧推进下一场次。'
+              : `配置 ${apiKeyLabel} API Key 后，我会接管每一场次的推进。`}</p>
           </div>
         )}
         {messages.map((message) => (
@@ -116,7 +116,7 @@ export function AgentChat({
         <button className="button button-secondary agent-key-button" onClick={onRequestApiKey}>配置 {apiKeyLabel} Key</button>
       ) : canRetry ? (
         <button className="button button-secondary agent-key-button" onClick={onRetry}>
-          <RotateCcw size={14} />重试当前回合
+          <RotateCcw size={14} />重试本场次
         </button>
       ) : null}
     </section>

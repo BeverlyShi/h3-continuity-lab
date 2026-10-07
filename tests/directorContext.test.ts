@@ -137,3 +137,47 @@ test('projects a two-turn session: history collapses to one-line results, curren
   const publishArgs2 = publishCall2!.message.content.find((item) => item.type === 'toolCall') as { arguments: { scene: { title: string } } }
   assert.equal(publishArgs2.arguments.scene.title, 't2')
 })
+
+test('history scenes from the whole-scene flow keep the story and casting but shrink the storyboard and the frame check', () => {
+  const storyboardArgs = { opening: 'continue', style: 's', segments: [{ characters: ['heroine'], seconds: 8, prompt: 'p1' }, { characters: ['heroine'], seconds: 8, prompt: 'p2' }] }
+  const scene1 = [
+    traceBoundary('trace-a'),
+    userEntry('玩家选择了：\nID：2'),
+    toolCallEntry('call-publish-a', 'publish_scene', { scene: { title: '夜访', narrative: 'n', choices: [] }, characters: [], dialogues: [] }),
+    toolResultEntry('call-publish-a', 'publish_scene', '场景已发布。', {}),
+    toolCallEntry('call-inspect-a', 'inspect_last_frame', {}),
+    toolResultEntry('call-inspect-a', 'inspect_last_frame', `上一场次最后一帧：${JSON.stringify(finalVisualState)}`, { state: finalVisualState }),
+    toolCallEntry('call-video-a', 'write_scene_video', storyboardArgs),
+    toolResultEntry('call-video-a', 'write_scene_video', '分镜已交付，开场方式 continue，共 2 段 16 秒：\n第 1 段 0–8 秒（无台词）\n第 2 段 8–16 秒（无台词）', {}),
+  ]
+  const rewrite = [
+    traceBoundary('trace-b'),
+    userEntry('玩家看了本场次的视频，要求重写第 2 段。'),
+    toolCallEntry('call-video-b', 'write_scene_video', { rewriteSequence: 2, segments: [{ characters: ['heroine'], seconds: 8, prompt: 'p2b' }] }),
+    toolResultEntry('call-video-b', 'write_scene_video', '第 2 段已重写，整场 2 段 16 秒：\n……', {}),
+  ]
+  const current = [traceBoundary('trace-c'), userEntry('玩家选择了：\nID：1')]
+  const projected = projectHistory([...scene1, ...rewrite, ...current])
+
+  const resultText = (toolCallId: string) => {
+    const entry = projected.find((item) => item.type === 'message' && item.message.role === 'toolResult' && item.message.toolCallId === toolCallId)
+    return entry?.type === 'message' && entry.message.role === 'toolResult' && entry.message.content[0]?.type === 'text'
+      ? entry.message.content[0].text
+      : undefined
+  }
+  const callArgs = (toolCallId: string) => {
+    for (const item of projected) {
+      if (item.type !== 'message' || item.message.role !== 'assistant') continue
+      const call = item.message.content.find((content) => content.type === 'toolCall' && content.id === toolCallId)
+      if (call?.type === 'toolCall') return call.arguments
+    }
+    return undefined
+  }
+
+  assert.equal(resultText('call-inspect-a'), '已查看上一场次最后一帧')
+  assert.equal(resultText('call-video-a'), '分镜已交付，开场方式 continue，共 2 段 16 秒')
+  assert.equal(resultText('call-video-b'), '第 2 段已重写，整场 2 段 16 秒')
+  assert.deepEqual(callArgs('call-video-a'), {})
+  assert.deepEqual(callArgs('call-video-b'), { rewriteSequence: 2 })
+  assert.equal((callArgs('call-publish-a') as { scene: { title: string } }).scene.title, '夜访')
+})

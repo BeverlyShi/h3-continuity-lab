@@ -6,17 +6,17 @@ import { buildActorImagePrompt } from './actorPortraitPrompt.ts'
 
 export const MAX_CANDIDATES_PER_CHARACTER = 8
 
-// 本局的选角账本：绑定表由程序持有，跨回合沿用，模型只对新人物做决定。
+// 本局的选角账本：绑定表由程序持有，跨场次沿用，模型只对新人物做决定。
 export type CastingBook = {
   actors: CastableActor[]
-  // 本回合新建、等待用户生成参考图的演员。
+  // 本场次新建、等待用户生成参考图的演员。
   createdActors: CreatedActor[]
   bindings: Map<string, string>
-  // 本幕已经显式决定“不给参考图”的人物。
+  // 本场次已经显式决定“不给参考图”的人物。
   declined: Set<string>
-  // 跨回合沿用的绑定：只有这些人物更换演员才需要 recast。
+  // 跨场次沿用的绑定：只有这些人物更换演员才需要 recast。
   lockedCharacterIds: Set<string>
-  // 本幕有台词的人物：必须有参考图，不能设为 null。
+  // 本场次有台词的人物：必须有参考图，不能设为 null。
   speakingCharacterIds: Set<string>
 }
 
@@ -37,7 +37,7 @@ export const createCastingBook = (
   }
 }
 
-// 暂停/恢复回合时把账本存进 director_turn_state，重建出一个等价的 CastingBook。
+// 场次结束时把账本存进 director_turn_state，重写某段时据此重建一个等价的 CastingBook。
 export type CastingBookSnapshot = {
   actors: CastableActor[]
   createdActors: CreatedActor[]
@@ -171,11 +171,11 @@ export const describeCastingStatus = (book: CastingBook, characters: SceneCharac
       const speaking = book.speakingCharacterIds.has(character.id) ? '（有台词）' : ''
       lines.push(`- ${speaking}${character.name}（${character.id}，${genderLabel} ${character.minAge}–${character.maxAge}）：${body}`)
     }
-    lines.push('请调用 cast_scene 为每个待选角人物做出决定：从候选中指定 actorId、用 create { name, appearance } 新建演员，或对没有台词的背景人物设为 null；有台词的人物必须有参考图。同一幕两个人物不能使用同一演员。')
+    lines.push('请调用 cast_scene 为每个待选角人物做出决定：从候选中指定 actorId、用 create { name, appearance } 新建演员，或对没有台词的背景人物设为 null；有台词的人物必须有参考图。同一场次两个人物不能使用同一演员。')
   } else if (book.actors.length) {
-    lines.push('本幕人物均已有选角决定，无需调用 cast_scene。')
+    lines.push('本场次人物均已有选角决定，无需调用 cast_scene。')
   } else {
-    lines.push('演员库为空，本幕人物均无台词且无参考图；无需调用 cast_scene。')
+    lines.push('演员库为空，本场次人物均无台词且无参考图；无需调用 cast_scene。')
   }
   return lines.join('\n')
 }
@@ -202,12 +202,12 @@ export const createCastSceneTool = (
 ): AgentTool<typeof castSceneSchema, SceneCastingResult> => ({
   name: 'cast_scene',
   label: '为场景选择演员',
-  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。演员库没有合适人选时，可通过 create { name, appearance } 新建演员，程序会生成三视图 prompt 交给用户生成图片；只写人物身份层外观。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。有台词的人物必须指定演员或新建，不能设为 null。提交后本幕所有人物都必须有选角决定。',
+  description: '为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由。演员库没有合适人选时，可通过 create { name, appearance } 新建演员，程序会生成三视图 prompt 交给用户生成图片；只写人物身份层外观。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。有台词的人物必须指定演员或新建，不能设为 null。提交后本场次所有人物都必须有选角决定。',
   parameters: castSceneSchema,
   executionMode: 'sequential',
   execute: async (_toolCallId, input) => {
     const characters = getCharacters()
-    if (!characters.length) throw new Error('必须先通过 publish_scene 发布本幕人物。')
+    if (!characters.length) throw new Error('必须先通过 publish_scene 发布本场次人物。')
     const charactersById = new Map(characters.map((character) => [character.id, character]))
     const actorsById = new Map(book.actors.map((actor) => [actor.id, actor]))
     const issues: string[] = []
@@ -221,7 +221,7 @@ export const createCastSceneTool = (
     for (const assignment of input.assignments) {
       const character = charactersById.get(assignment.characterId)
       if (!character) {
-        issues.push(`人物 ${assignment.characterId} 不在本幕 characters 中`)
+        issues.push(`人物 ${assignment.characterId} 不在本场次 characters 中`)
         continue
       }
       if (seenCharacterIds.has(character.id)) {
@@ -309,7 +309,7 @@ export const createCastSceneTool = (
       actorUsage.set(actorId, [...(actorUsage.get(actorId) ?? []), character.name])
     }
     for (const [actorId, names] of actorUsage) {
-      if (names.length > 1) issues.push(`演员 ${actorsById.get(actorId)?.name ?? actorId} 同时分配给了 ${names.join('、')}，同一幕不能撞脸`)
+      if (names.length > 1) issues.push(`演员 ${actorsById.get(actorId)?.name ?? actorId} 同时分配给了 ${names.join('、')}，同一场次不能撞脸`)
     }
     const undecided = characters.filter((character) => !nextBindings.has(character.id) && !nextDeclined.has(character.id))
     if (undecided.length) {
@@ -321,7 +321,7 @@ export const createCastSceneTool = (
     for (const [characterId, actorId] of nextBindings) book.bindings.set(characterId, actorId)
     book.declined.clear()
     for (const characterId of nextDeclined) book.declined.add(characterId)
-    // 本回合新建后又被覆盖的演员不再需要参考图，从账本里撤掉。
+    // 本场次新建后又被覆盖的演员不再需要参考图，从账本里撤掉。
     const boundActorIds = new Set(book.bindings.values())
     const survivingCreated = [...book.createdActors, ...created].filter((actor) => boundActorIds.has(actor.id))
     const survivingIds = new Set(survivingCreated.map((actor) => actor.id))
@@ -344,17 +344,11 @@ export const createCastSceneTool = (
       if (actor.hasImage) return `- ${character.name}：${actor.name}，有参考图`
       return `- ${character.name}：${createdIds.has(actor.id) ? '新演员 ' : ''}${actor.name}，待生成参考图`
     })
-    const pendingAppearances = characters.flatMap((character) => {
-      const actorId = book.bindings.get(character.id)
-      const actor = actorId ? actorsById.get(actorId) : undefined
-      return actor && !actor.hasImage && actor.appearance ? [`- ${actor.name}：${actor.appearance}`] : []
-    })
     const text = [
       '选角已确定：',
       ...table,
       ...(warnings.length ? [`提示：${warnings.join('；')}。`] : []),
-      ...(pendingAppearances.length ? ['无参考图人物的外观（分镜每段重复使用）：', ...pendingAppearances] : []),
-      '下一步：调用 write_segment 编写第 1 段分镜；首段只为有参考图的人物附图。',
+      '已选演员的外观由程序拼进其出场各段的 prompt，分镜正文只用人物姓名。',
     ].join('\n')
     return {
       content: [{ type: 'text', text }],

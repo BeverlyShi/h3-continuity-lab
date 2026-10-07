@@ -4,17 +4,15 @@ import type {
   SceneCharacter,
   StoryInput,
   StoryScene,
-  TailFrameVisualState,
   VideoGenerationRequest,
   VideoPromptSegment,
   VideoReferenceDescriptor,
 } from './story'
 
 export type SceneVideoClip = VideoPromptSegment & {
-  status: 'written' | 'awaiting_upload' | 'generating' | 'analyzing' | 'ready' | 'failed'
-  // written：prompt 已到，导演尚未要求生成；awaiting_upload：等玩家上传/等 fal；generating：fal 生成中（auto）
-  // analyzing：尾帧已交给服务端 resume，等 VLM 与导演续跑；ready：segment_generated 已到；failed：上传/生成/resume 出错，可重试
-  toolCallId?: string
+  status: 'waiting' | 'pending' | 'generating' | 'ready' | 'failed'
+  // waiting：等上一段完成（首帧来自上一段尾帧）；pending：可以生成或上传；generating：fal（auto）或 Comfy（comfy）生成中
+  // ready：视频与尾帧已就绪；failed：上传或生成出错，可重试、重新上传或让导演重写
   referenceDescriptors?: VideoReferenceDescriptor[]
   referenceImages?: VideoInputReferenceImage[]
   startImageUrl?: string
@@ -22,7 +20,8 @@ export type SceneVideoClip = VideoPromptSegment & {
   videoUrl?: string
   tailFrameUrl?: string
   actualDuration?: number
-  visualState?: TailFrameVisualState
+  // Comfy 任务 ID：刷新后凭它接着查原任务，避免重复提交扣费；该段被导演重写或作废时清空。
+  comfyJobId?: string
   error?: string
 }
 
@@ -36,20 +35,19 @@ export type GameScene = StoryScene & {
   castingError?: string
   videoRequest?: VideoGenerationRequest
   videoClips?: SceneVideoClip[]
-  videoMode?: 'auto' | 'manual' | 'off'
+  videoMode?: 'auto' | 'comfy' | 'manual' | 'off'
   videoSkippedReason?: string
+  // 本场次最后一段的尾帧：下一场次导演选择接着拍时，用它作首帧并交给 inspect_last_frame。
   tailFrameUrl?: string
-  tailVisualState?: TailFrameVisualState
-  visualAnalysisError?: string
 }
 
-export type GameSessionStatus = 'awaiting_agent' | 'awaiting_upload' | 'awaiting_action'
-// awaiting_agent：导演回合（含 resume 后的续跑）进行中
-// awaiting_upload：回合暂停，等玩家上传（manual）或 fal 生成（auto）第 pendingUpload.sequence 段
-// awaiting_action：finish_turn 已通过，选项开放
+export type GameSessionStatus = 'awaiting_agent' | 'awaiting_video' | 'awaiting_action'
+// awaiting_agent：导演正在写本场次（剧情、选角、分镜）
+// awaiting_video：导演已交出分镜，页面按段生成或上传视频；全部完成或玩家跳过视频后开放选择
+// awaiting_action：选项开放
 
 export type GameSession = {
-  schemaVersion: 9
+  schemaVersion: 10
   id: string
   storyId: 'palace-validation'
   status: GameSessionStatus
@@ -61,7 +59,6 @@ export type GameSession = {
   characters: SceneCharacter[]
   castings: CharacterCasting[]
   pendingInput?: StoryInput
-  pendingUpload?: { sceneId: string; sequence: number; toolCallId: string; traceId: string }
 }
 
 export type DirectorTurnContext = {
@@ -69,6 +66,6 @@ export type DirectorTurnContext = {
   sessionId: string
   turn: number
   input: StoryInput
-  previousVisualState?: TailFrameVisualState
-  hasPreviousTailFrame?: boolean
+  // 上一场次有视频时附上最后一帧（data:image/）和出场人物，供导演按需调用 inspect_last_frame。
+  previousScene?: { tailFrameDataUrl: string; characters: SceneCharacter[] }
 }

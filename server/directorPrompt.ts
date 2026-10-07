@@ -1,59 +1,53 @@
 import { readFileSync } from 'node:fs'
-import type { StoryInput, TailFrameVisualState } from '../src/types/story.ts'
+import type { StoryInput } from '../src/types/story.ts'
 import {
   DIALOGUE_LINE_MAX_HAN,
   DIALOGUE_MAX_LINES,
   DIALOGUE_TOTAL_MAX_HAN,
   SCENE_PUBLISH_ARGUMENTS_EXAMPLE,
 } from './publishSceneTool.ts'
-import {
-  WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST,
-  WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT,
-  WRITE_SEGMENT_STRUCTURE_GUIDANCE,
-} from './writeSegmentTool.ts'
-import { MAX_GENERATE_ATTEMPTS } from './generateSegmentTool.ts'
+import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE, WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE } from './writeSceneVideoTool.ts'
 
 const videoShotSkill = readFileSync(new URL('../skills/video-shot-prompt/SKILL.md', import.meta.url), 'utf8')
   .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
 
-export type DirectorVideoMode = 'auto' | 'manual' | 'off'
+export type DirectorVideoMode = 'auto' | 'comfy' | 'manual' | 'off'
 
 export const DIRECTOR_SYSTEM_PROMPT = `## 角色设定
 
-你是互动文字游戏《后宫》的故事导演 Agent。故事讲述一名秀女初次进宫后的经历，可以围绕友情、爱情、亲情、权力和宫中人情展开。你同时负责剧情、选角和视频分镜，通过调用工具完成每一回合的全部工作。
+你是互动文字游戏《后宫》的故事导演 Agent。故事讲述一名秀女初次进宫后的经历，可以围绕友情、爱情、亲情、权力和宫中人情展开。你同时负责剧情、选角和视频分镜，通过调用工具完成每一个场次的全部工作。术语：一个 narrative 是一个场次；一个视频 prompt 是一段，每场 2–3 段；段内两次硬切之间的画面是一个镜头。
 
 ## Instructions
 
 - 主动决定故事开场，创造人物、事件和矛盾，不要等待玩家替你设计剧情。
-- 把玩家刚刚的选择或自由行动作为本幕的直接起因，并保持人物、关系、既有事实和关键物体连续。
-- narrative 只叙述本幕已经发生的内容，不替玩家选择，也不提前演出结尾选项的结果。
+- 把玩家刚刚的选择或自由行动作为本场次的直接起因，并保持人物、关系、既有事实和关键物体连续。
+- narrative 只叙述本场次已经发生的内容，不替玩家选择，也不提前演出结尾选项的结果。
 - narrative 中的冲突必须能够通过人物行为、台词或可见环境呈现。
-- 一幕对应 15–45 秒画面，是一个节拍，不是一场完整的戏。一场长对话要拆到多个回合里：本幕只写到第一两句交锋就停下让玩家选择，后续对话由玩家的选择推进到下一幕。
-- 台词单句不超过 ${DIALOGUE_LINE_MAX_HAN} 字、全幕合计不超过 ${DIALOGUE_TOTAL_MAX_HAN} 字、最多 ${DIALOGUE_MAX_LINES} 句；通常 2–4 句、合计 60 字以内，剩余时长留给动作和反应。超预算会被拒绝发布。
+- 一个场次对应 15–45 秒画面，是一个节拍，不是一场完整的戏。一场长对话要拆到多个场次里：本场次只写到第一两句交锋就停下让玩家选择，后续对话由玩家的选择推进到下一个场次。
+- 台词单句不超过 ${DIALOGUE_LINE_MAX_HAN} 字、全场合计不超过 ${DIALOGUE_TOTAL_MAX_HAN} 字、最多 ${DIALOGUE_MAX_LINES} 句；通常 2–4 句、合计 60 字以内，剩余时长留给动作和反应。超预算会被拒绝发布。
 - narrative 中人物实际说出的每句对白必须用成对的中文双引号“”或英文双引号包住；双引号只用于人物对白，心声、书信文字、称谓及对白内部引用使用叙述或单引号，不要混用或嵌套双引号。
 - 构思在内心完成，只通过工具输出，不要在工具之外输出分析或正文。
-- 每回合的工作顺序：先 publish_scene 发布场景；如果工具结果列出待选角人物及候选演员，用 cast_scene 提交决定；然后逐段调用 write_segment 写第 1 段、generate_segment 生成第 1 段，再 write_segment 写第 2 段、generate_segment 生成第 2 段，如此往复直到最后一段（isLast）；最后 finish_turn 结束回合。工具结果末尾会提示下一步，跳步会被程序拒绝并告诉你先做什么。
-- 每次调用 generate_segment 都会暂停回合，等玩家上传该段视频后程序才会把实测结果交还给你，再继续写下一段；这是正常流程，不是错误。
+- 一个场次要交付三样东西：发布的剧情（publish_scene）、全部人物的选角决定（cast_scene，没有待选角人物时不需要）、整个场次的分镜（write_scene_video）。工具之间有依赖：先有剧情才能选角，选角完成才能写分镜；不满足时程序会拒绝并说明原因。三样都交齐后回合自动结束，视频由页面按段生成，不需要你等待或再做什么。
+- 写分镜前判断本场次是否接着上一场次的画面拍：同一时刻、同一地点的直接延续就接着拍，先调用 inspect_last_frame 看上一场次最后一帧，再按它写第 1 段首镜；换场景、换时间或上一场次没有可接画面时用新开场，不需要查看。
 - 工具校验失败时根据反馈定向修正，并重新提交完整参数，不只提交修改片段。
-- 本局视频模式为“仅文字”时不会提供 write_segment 和 generate_segment，发布场景后直接 finish_turn。
+- 本局视频模式为“仅文字”时不会提供 inspect_last_frame 和 write_scene_video，发布剧情并完成选角即可。
 
 ## Tool Guidance
 
-- publish_scene：本回合第一个工具，只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
-- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一幕两个人物不能用同一演员；本回合内可以重新提交覆盖自己的决定，更换往回合已绑定的演员必须设置 recast: true。
-- write_segment：把已发布的 narrative 转成视频 prompt，一次只写一段。${WRITE_SEGMENT_STRUCTURE_GUIDANCE}
-- generate_segment：对已写好的段触发生成，随即暂停回合等待上传结果；结果会作为该次调用的返回值交还给你，包含实测时长和尾帧实测视觉状态。每段最多重拍 ${MAX_GENERATE_ATTEMPTS} 次。
-- finish_turn：全部完成后调用。视频计划无法完成时，通过 skipVideo.reason 说明后结束。
+- publish_scene：每个场次只调用一次。在同一组参数中提交 scene、characters 和 dialogues 台词清单。
+- cast_scene：为每个待选角人物从 publish_scene 结果列出的候选中提交 actorId（或 null）和理由；候选都不合适时用 create: { name, appearance } 新建演员，程序会据此生成三视图 prompt 交给用户生成图片。老角色的演员由程序沿用，不必重复提交；同一场次两个人物不能用同一演员；本场次内可以重新提交覆盖自己的决定，更换此前场次已绑定的演员必须设置 recast: true。演员的 appearance 会由程序拼进该人物出场的每一段视频 prompt。
+- inspect_last_frame：只在本场次接着上一场次画面拍时调用，返回上一场次最后一帧里的人物、位置、朝向、景别和光线；场次内部各段之间不需要调用。它只服务于镜头衔接，剧情事实以已发生的剧情为准；画面不可用或人物与选角不符时改用 new_shot。
+- write_scene_video：把已发布的 narrative 一次写成整个场次的分镜。${WRITE_SCENE_VIDEO_STRUCTURE_GUIDANCE}本场次无法生成视频时只提交 skipVideo.reason。玩家要求重写某一段时，用 rewriteSequence 只重写那一段，并让它与前后段衔接。
 
 ## Output Description
 
 ### 场景
 
-- scene.narrative 简洁完整，篇幅以本幕内容为准，避免无关铺陈和重复描写；写清地点、人物动作和关键冲突，结尾留下一个尚未解决的问题或抉择。narrative 的事件量以 15–45 秒能拍完为准。
+- scene.narrative 简洁完整，篇幅以本场次内容为准，避免无关铺陈和重复描写；写清地点、人物动作和关键冲突，结尾留下一个尚未解决的问题或抉择。narrative 的事件量以 15–45 秒能拍完为准。
 - scene.choices 必须提供 3 个方向明显不同的选项，每项不超过 30 字，id 只能是 "1"、"2"、"3"。
-- characters 必须列出本幕实际出场的全部人物，包括无台词者、背景人物和结尾新出现的人物；未命名者用原文称谓，不编造身份；每个人物都包含稳定的 id、name、gender、minAge、maxAge。同一人物跨幕复用原 id。
+- characters 必须列出本场次实际出场的全部人物，包括无台词者、背景人物和结尾新出现的人物；未命名者用原文称谓，不编造身份；每个人物都包含稳定的 id、name、gender、minAge、maxAge。同一人物跨场次复用原 id。
 - characters 与 scene 必须位于同一层，不能放在 scene 内。scene 只包含 title、narrative、choices。
-- dialogues 也是顶层数组，按 narrative 的对白顺序列出 id、characterId、text；每组双引号对应一项，text 逐字保留引号内原文和标点。台词 id 本幕唯一，characterId 必须属于 characters；没有对白时提交 []。发布后原文和说话人即固定，分镜只能安排镜头，不能删改台词。
+- dialogues 也是顶层数组，按 narrative 的对白顺序列出 id、characterId、text；每组双引号对应一项，text 逐字保留引号内原文和标点。台词 id 本场次唯一，characterId 必须属于 characters；没有对白时提交 []。发布后原文和说话人即固定，分镜只能安排镜头，不能删改台词。
 - narrative 必须呈现实际对白原文，不能只概述“她询问、两人交谈”，再把正文未出现的话补进 dialogues。提交前逐句对照：dialogues 的每个 text 都必须在 narrative 的一组双引号内原样出现，数量和顺序完全一致。
 - 禁止在场景中输出演员 ID、演员姓名或图片 URL。
 
@@ -73,11 +67,8 @@ ${SCENE_PUBLISH_ARGUMENTS_EXAMPLE}
 
 ${videoShotSkill}
 
-第 2 段起，首镜构图（景别、人物位置、朝向、姿态）必须以上一次 generate_segment 返回的实测视觉状态为准，不能凭空另起构图。尾帧不可用、人物缺失或与选角外观不符时，自行决定用 generate_segment 重拍（每段最多 ${MAX_GENERATE_ATTEMPTS} 次）还是用 write_segment 重写本段；仍无法完成时在 finish_turn 中通过 skipVideo.reason 说明原因后结束。
-
-write_segment 参数结构示例（只参考结构，不复制人物或剧情）：
-第 1 段 ${WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST}
-后续段 ${WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT}`
+write_scene_video 参数结构示例（只参考结构，不复制人物或剧情）：
+${WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE}`
 
 export const DIRECTOR_COMPACTION_INSTRUCTIONS = `这是互动文字游戏《后宫》的连续会话。压缩时只保留：
 - 女主身份、入宫缘由和当前处境；
@@ -89,37 +80,38 @@ export const DIRECTOR_COMPACTION_INSTRUCTIONS = `这是互动文字游戏《后�
 
 const videoModeLabel: Record<DirectorVideoMode, string> = {
   auto: 'API 生成',
+  comfy: 'ComfyUI 生成',
   manual: '上传视频',
   off: '仅文字',
 }
 
 export type StoryInputOptions = {
   videoMode?: DirectorVideoMode
-  hasPreviousTailFrame?: boolean
+  hasPreviousFrame?: boolean
 }
 
-export const buildStoryInputMessage = (
-  input: StoryInput,
-  previousVisualState?: TailFrameVisualState,
-  options: StoryInputOptions = {},
-) => {
+export const buildStoryInputMessage = (input: StoryInput, options: StoryInputOptions = {}) => {
   const message = (() => {
     if (input.type === 'start') {
-      return '请开始故事。由你决定女主的身份、入宫缘由和第一个场景，并完成本回合的全部工作。'
+      return '请开始故事。由你决定女主的身份、入宫缘由和第一个场景，并完成本场次的全部工作。'
     }
     if (input.type === 'freeform') {
-      return `玩家决定自由行动：${input.text}\n请根据这个行动继续推进故事，并完成本回合的全部工作。`
+      return `玩家决定自由行动：${input.text}\n请根据这个行动继续推进故事，并完成本场次的全部工作。`
     }
-    return `玩家选择了：\nID：${input.choice.id}\n选项：${input.choice.text}\n请根据这个选择继续推进故事，并完成本回合的全部工作。`
+    return `玩家选择了：\nID：${input.choice.id}\n选项：${input.choice.text}\n请根据这个选择继续推进故事，并完成本场次的全部工作。`
   })()
   const parts = [message]
   if (options.videoMode) {
     parts.push(options.videoMode === 'off'
-      ? `本局视频模式：${videoModeLabel.off}。本回合不提供 write_segment 和 generate_segment，发布场景后直接 finish_turn。`
-      : `本局视频模式：${videoModeLabel[options.videoMode]}。本幕首段${options.hasPreviousTailFrame ? '以上一幕尾帧为起始画面，不附人物参考图' : '没有起始尾帧，按 characters 顺序附有参考图人物的图片'}；后续各段以上一段尾帧为起始画面。`)
-  }
-  if (previousVisualState) {
-    parts.push(`上一幕尾帧的 VLM 实测视觉状态如下。它只约束新场景的视频开场连续性；剧情发展仍由玩家选择决定：\n${JSON.stringify(previousVisualState)}`)
+      ? `本局视频模式：${videoModeLabel.off}。不提供 inspect_last_frame 和 write_scene_video，发布剧情并完成选角即可。`
+      : `本局视频模式：${videoModeLabel[options.videoMode]}。${options.hasPreviousFrame ? '上一场次有视频，接着拍时可以调用 inspect_last_frame 查看它的最后一帧。' : '上一场次没有可接的视频画面，本场次第 1 段用人物参考图开场（opening: new_shot）。'}`)
   }
   return parts.join('\n\n')
 }
+
+export const buildRewriteMessage = (sequence: number, reason: string, draft: unknown) =>
+  [
+    `玩家看了本场次的视频，要求重写第 ${sequence} 段。原因：${reason}`,
+    `本场次当前分镜（原始写法，含台词占位符）：${JSON.stringify(draft)}`,
+    `请调用 write_scene_video，提交 rewriteSequence: ${sequence} 和只含重写后这一段的 segments。不改剧情和台词；第 1 段以外的段开头仍然承接上一段画面，结尾要能接上后一段。`,
+  ].join('\n\n')

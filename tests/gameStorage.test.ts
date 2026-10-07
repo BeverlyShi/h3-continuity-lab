@@ -8,7 +8,7 @@ import type { GameScene, GameSession } from '../src/types/game.ts'
 const tailFrame = `data:image/jpeg;base64,${'a'.repeat(200_000)}`
 
 const makeScene = (id: string, overrides: Partial<GameScene> = {}): GameScene => ({
-  id, turn: 1, title: `第 ${id} 幕`, narrative: '宫门打开。', choices: [],
+  id, turn: 1, title: `第 ${id} 场次`, narrative: '宫门打开。', choices: [],
   tailFrameUrl: tailFrame,
   videoClips: [{
     sequence: 1, startTime: 0, endTime: 5, characterIds: ['heroine'], prompt: '人物回望。',
@@ -19,7 +19,7 @@ const makeScene = (id: string, overrides: Partial<GameScene> = {}): GameScene =>
 })
 
 const makeSession = (scenes: GameScene[]): GameSession => ({
-  schemaVersion: 9, id: 'game', storyId: 'palace-validation', status: 'awaiting_upload',
+  schemaVersion: 10, id: 'game', storyId: 'palace-validation', status: 'awaiting_video',
   turn: scenes.length, createdAt: 1, updatedAt: 2,
   currentScene: scenes.at(-1), sceneHistory: scenes, characters: [], castings: [],
 })
@@ -82,39 +82,38 @@ test('restores tail frames from IndexedDB and keeps character references as acto
   })
 })
 
-test('marks an interrupted analyzing clip as failed and drops its lost tail frame', async () => {
+test('drops a lost tail frame when the image record is gone', async () => {
   await withStorage(async () => {
-    // 图片记录丢失（例如清理过 IndexedDB）时，令牌无法还原；resume 请求也来不及完成。
+    // 图片记录丢失（例如清理过 IndexedDB）时，令牌无法还原。
     const scene = makeScene('one', { videoMode: 'auto' })
     scene.tailFrameUrl = 'session-image:lost'
-    scene.videoClips![0] = { ...scene.videoClips![0], status: 'analyzing', startImageUrl: 'session-image:lost', tailFrameUrl: 'session-image:lost' }
+    scene.videoClips![0] = { ...scene.videoClips![0], startImageUrl: 'session-image:lost', tailFrameUrl: 'session-image:lost' }
     localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify(makeSession([scene])))
     const restored = (await loadGameSession())!
     const clip = restored.sceneHistory[0].videoClips?.[0]
     assert.equal(restored.sceneHistory[0].tailFrameUrl, undefined)
     assert.equal(clip?.tailFrameUrl, undefined)
     assert.equal(clip?.startImageUrl, undefined)
-    assert.equal(clip?.status, 'failed')
-    assert.match(clip?.error ?? '', /中断/)
   })
 })
 
-test('marks an interrupted generating clip as failed too', async () => {
+test('marks an interrupted generating clip as failed and keeps its Comfy job', async () => {
   await withStorage(async () => {
-    const scene = makeScene('one', { videoMode: 'auto' })
-    scene.videoClips![0] = { ...scene.videoClips![0], status: 'generating', tailFrameUrl: undefined, startImageUrl: undefined }
+    const scene = makeScene('one', { videoMode: 'comfy' })
+    scene.videoClips![0] = { ...scene.videoClips![0], status: 'generating', comfyJobId: 'job-1', tailFrameUrl: undefined, startImageUrl: undefined }
     localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify(makeSession([scene])))
     const restored = (await loadGameSession())!
     const clip = restored.sceneHistory[0].videoClips?.[0]
     assert.equal(clip?.status, 'failed')
     assert.match(clip?.error ?? '', /中断/)
+    assert.equal(clip?.comfyJobId, 'job-1', '刷新后凭任务 ID 接着查原任务，不重复扣费')
   })
 })
 
 test('rejects a session saved with an older schemaVersion', async () => {
   await withStorage(async () => {
     localStorage.setItem('h3-continuity-lab:game-session', JSON.stringify({
-      ...makeSession([makeScene('one')]), schemaVersion: 8,
+      ...makeSession([makeScene('one')]), schemaVersion: 9,
     }))
     assert.equal(await loadGameSession(), null)
   })
@@ -123,7 +122,7 @@ test('rejects a session saved with an older schemaVersion', async () => {
 test('reads the legacy inlineImages format once and rewrites it into IndexedDB', async () => {
   await withStorage(async ({ images, read }) => {
     const legacy = {
-      schemaVersion: 9, id: 'game', storyId: 'palace-validation', status: 'awaiting_upload',
+      schemaVersion: 10, id: 'game', storyId: 'palace-validation', status: 'awaiting_video',
       turn: 1, createdAt: 1, updatedAt: 2, sceneHistory: [{
         id: 'one', turn: 1, title: '旧存档', narrative: '旧存档。', choices: [],
         tailFrameUrl: 'session-image:0',
@@ -152,7 +151,7 @@ test('degrades by dropping images of the oldest scenes when the quota is exceede
     assert.equal(stored.sceneHistory[0].tailFrameUrl, undefined)
     assert.equal(stored.sceneHistory[0].videoClips?.[0].startImageUrl, undefined)
     assert.equal(stored.sceneHistory[0].videoClips?.[0].referenceImages, undefined)
-    assert.ok(stored.sceneHistory[4].tailFrameUrl?.startsWith('session-image:'), '最近三幕保留图片引用')
+    assert.ok(stored.sceneHistory[4].tailFrameUrl?.startsWith('session-image:'), '最近三个场次保留图片引用')
   })
 })
 

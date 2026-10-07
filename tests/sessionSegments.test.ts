@@ -1,35 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  addWrittenSegment,
-  adoptServerTurnState,
-  commitSegmentMedia,
-  completeSegment,
-  failSegment,
-  finishTurn,
-  markAwaitingUpload,
+  applyVideoPlan,
+  commitClipMedia,
+  failClip,
+  findDiscardedMedia,
+  finishDirectorRun,
+  markClipGenerating,
+  PLAYER_SKIPPED_VIDEO_REASON,
   resolveReferenceDescriptors,
-  setSceneVideoPlan,
-  setSceneVisualState,
+  setClipComfyJob,
+  skipSceneVideo,
+  type VideoPlanInput,
 } from '../src/services/sessionSegments.ts'
 import type { GameScene, GameSession } from '../src/types/game.ts'
-import type { TailFrameVisualState, VideoPromptSegment } from '../src/types/story.ts'
-
-const visualState: TailFrameVisualState = {
-  shot_size: '中景',
-  shot_position: '人物正前方',
-  shot_content: {
-    characters: [],
-    scene: { location: '宫廊', visible_elements: '木廊', lighting: '柔光', time_of_day: '白天' },
-    key_props: [],
-  },
-  frame_quality: '清晰稳定',
-}
+import type { VideoPromptSegment, VideoReferenceDescriptor } from '../src/types/story.ts'
 
 const scene: GameScene = { id: 'scene-1', turn: 1, title: '宫门初雪', narrative: '宫门打开。', choices: [] }
 
 const makeSession = (overrides: Partial<GameSession> = {}): GameSession => ({
-  schemaVersion: 9,
+  schemaVersion: 10,
   id: 'game-1',
   storyId: 'palace-validation',
   status: 'awaiting_agent',
@@ -48,123 +38,192 @@ const segment = (sequence: number, overrides: Partial<VideoPromptSegment> = {}):
   ...overrides,
 })
 
-test('addWrittenSegment appends a clip in written status and stores resolved references', () => {
-  const next = addWrittenSegment(makeSession(), 'scene-1', segment(1), [{ type: 'character', characterId: 'heroine', actorId: 'actor-1' }], {
-    referenceImages: [{ type: 'character', imageUrl: 'heroine.jpg', label: '人物参考 · 沈清禾', actorId: 'actor-1' }],
-  })
-  const clip = next.currentScene?.videoClips?.[0]
-  assert.equal(clip?.status, 'written')
-  assert.equal(clip?.referenceImages?.[0].imageUrl, 'heroine.jpg')
-  assert.deepEqual(clip?.referenceDescriptors, [{ type: 'character', characterId: 'heroine', actorId: 'actor-1' }])
+const heroineDescriptor: VideoReferenceDescriptor = { type: 'character', characterId: 'heroine', actorId: 'actor-1' }
+
+const plan = (count: number, fromSequence = 1, prompt = (sequence: number) => `第 ${sequence} 段`): VideoPlanInput => ({
+  video: {
+    totalDuration: count * 5,
+    style: '冷色写实，宫灯暖光。',
+    videoPrompts: Array.from({ length: count }, (_, index) => segment(index + 1, { prompt: prompt(index + 1) })),
+  },
+  references: Array.from({ length: count }, (_, index) =>
+    index === 0 ? [heroineDescriptor] : [{ type: 'start_frame', sequence: index }]),
+  fromSequence,
 })
 
-test('rewriting a segment discards every later segment', () => {
-  let session = addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] })
-  session = addWrittenSegment(session, 'scene-1', segment(2), [], { referenceImages: [] })
-  session = addWrittenSegment(session, 'scene-1', segment(3), [], { referenceImages: [] })
-  const rewritten = addWrittenSegment(session, 'scene-1', segment(2, { prompt: '重写第 2 段' }), [], { referenceImages: [] })
-  const sequences = rewritten.currentScene?.videoClips?.map((clip) => clip.sequence)
-  assert.deepEqual(sequences, [1, 2])
-  assert.equal(rewritten.currentScene?.videoClips?.[1].prompt, '重写第 2 段')
+const references = {
+  characterReferences: { heroine: { characterName: '沈清禾', actorId: 'actor-1', imageUrl: 'heroine.jpg' } },
+}
+
+const media = (sequence: number, uploadId?: string) => ({
+  ...(uploadId ? { uploadId } : {}),
+  videoUrl: `blob:video-${sequence}`,
+  tailFrameUrl: `tail-${sequence}.jpg`,
+  actualDuration: 5.2,
 })
 
-test('markAwaitingUpload sets pendingUpload and clears media fields on a reshoot', () => {
-  let session = addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] })
-  session = markAwaitingUpload(session, 'scene-1', {
-    sequence: 1, toolCallId: 'call-1', traceId: 'trace-1', prompt: '第 1 段', seconds: 5,
-    descriptors: [], references: { referenceImages: [] },
-  })
-  assert.equal(session.status, 'awaiting_upload')
-  assert.deepEqual(session.pendingUpload, { sceneId: 'scene-1', sequence: 1, toolCallId: 'call-1', traceId: 'trace-1' })
-  assert.equal(session.currentScene?.videoClips?.[0].status, 'awaiting_upload')
+const clips = (session: GameSession) => session.currentScene?.videoClips ?? []
 
-  // 重拍：再次到达同一 sequence 的 awaiting_upload，清空已提交的媒体字段。
-  const reshot = markAwaitingUpload(session, 'scene-1', {
-    sequence: 1, toolCallId: 'call-1b', traceId: 'trace-1', prompt: '第 1 段', seconds: 5,
-    descriptors: [], references: { referenceImages: [] },
-  })
-  const clip = reshot.currentScene?.videoClips?.[0]
-  assert.equal(clip?.uploadId, undefined)
-  assert.equal(clip?.videoUrl, undefined)
-  assert.equal(clip?.tailFrameUrl, undefined)
-  assert.equal(clip?.toolCallId, 'call-1b')
+// 导演交出 3 段分镜并结束，进入等待视频。
+const planned = () => finishDirectorRun(
+  applyVideoPlan(makeSession(), 'scene-1', plan(3), references),
+  'scene-1',
+  { hasVideoPlan: true },
+)
+
+const allReady = () => {
+  let session = planned()
+  for (const sequence of [1, 2, 3]) session = commitClipMedia(session, 'scene-1', sequence, media(sequence, `upload-${sequence}`))
+  return session
+}
+
+test('applyVideoPlan creates clips: the first is pending with resolved references, the rest wait', () => {
+  const next = applyVideoPlan(makeSession(), 'scene-1', plan(3), references)
+  assert.deepEqual(clips(next).map((clip) => clip.status), ['pending', 'waiting', 'waiting'])
+  assert.deepEqual(clips(next)[0].referenceImages, [
+    { type: 'character', imageUrl: 'heroine.jpg', label: '人物参考 · 沈清禾', actorId: 'actor-1' },
+  ])
+  assert.deepEqual(clips(next)[1].referenceDescriptors, [{ type: 'start_frame', sequence: 1 }])
+  assert.equal(next.currentScene?.videoRequest?.videoPrompts.length, 3)
+  assert.equal(next.status, 'awaiting_agent', 'video_plan 本身不改变会话状态')
 })
 
-test('commitSegmentMedia only accepts the pending sequence', () => {
-  let session = addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] })
-  session = markAwaitingUpload(session, 'scene-1', {
-    sequence: 1, toolCallId: 'call-1', traceId: 'trace-1', prompt: '第 1 段', seconds: 5,
-    descriptors: [], references: { referenceImages: [] },
-  })
-
-  const wrongSequence = commitSegmentMedia(session, 'scene-1', 2, {
-    videoUrl: 'blob:v', tailFrameUrl: 'data:image/jpeg;base64,a', actualDuration: 5,
-  })
-  assert.equal(wrongSequence, session, '非 pending 段号不应变更 session')
-
-  const committed = commitSegmentMedia(session, 'scene-1', 1, {
-    uploadId: 'upload-1', videoUrl: 'blob:v', tailFrameUrl: 'data:image/jpeg;base64,a', actualDuration: 5.4,
-  })
-  const clip = committed.currentScene?.videoClips?.[0]
-  assert.equal(clip?.status, 'analyzing')
-  assert.equal(clip?.uploadId, 'upload-1')
-  assert.equal(clip?.actualDuration, 5.4)
+test('applyVideoPlan ignores a scene that is no longer current', () => {
+  const session = makeSession()
+  assert.equal(applyVideoPlan(session, 'other-scene', plan(2), references), session)
 })
 
-test('failSegment marks the clip failed and keeps the session awaiting upload', () => {
-  let session = addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] })
-  session = markAwaitingUpload(session, 'scene-1', {
-    sequence: 1, toolCallId: 'call-1', traceId: 'trace-1', prompt: '第 1 段', seconds: 5,
-    descriptors: [], references: { referenceImages: [] },
-  })
-  const failed = failSegment(session, 'scene-1', 1, '尾帧识别失败')
-  assert.equal(failed.status, 'awaiting_upload')
-  assert.equal(failed.currentScene?.videoClips?.[0].status, 'failed')
-  assert.equal(failed.currentScene?.videoClips?.[0].error, '尾帧识别失败')
+test('a rewrite keeps the earlier clips and resets the rewritten clip and everything after it', () => {
+  let session = planned()
+  session = setClipComfyJob(session, 'scene-1', 1, 'job-old')
+  session = commitClipMedia(session, 'scene-1', 1, media(1, 'upload-1'))
+  session = commitClipMedia(session, 'scene-1', 2, media(2, 'upload-2'))
+
+  const rewritten = applyVideoPlan(session, 'scene-1', plan(3, 2, (sequence) => `重写后第 ${sequence} 段`), references)
+  const [first, second, third] = clips(rewritten)
+  assert.equal(first, clips(session)[0], '第 1 段原样保留')
+  assert.equal(second.prompt, '重写后第 2 段')
+  assert.equal(second.status, 'pending', '上一段已就绪，重写的段可以直接生成')
+  assert.equal(second.uploadId, undefined)
+  assert.equal(second.videoUrl, undefined)
+  assert.equal(second.startImageUrl, 'tail-1.jpg')
+  assert.equal(third.status, 'waiting')
+  assert.equal(third.prompt, '重写后第 3 段')
+  assert.equal(rewritten.status, 'awaiting_video', '重写不改变会话状态')
+  assert.deepEqual(findDiscardedMedia(session, rewritten), { uploadIds: ['upload-2'], objectUrls: ['blob:video-2'] })
 })
 
-test('completeSegment marks the clip ready and returns the turn to the director', () => {
-  let session = addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] })
-  session = markAwaitingUpload(session, 'scene-1', {
-    sequence: 1, toolCallId: 'call-1', traceId: 'trace-1', prompt: '第 1 段', seconds: 5,
-    descriptors: [], references: { referenceImages: [] },
-  })
-  session = commitSegmentMedia(session, 'scene-1', 1, {
-    videoUrl: 'blob:v', tailFrameUrl: 'data:image/jpeg;base64,a', actualDuration: 5.4,
-  })
-  const completed = completeSegment(session, 'scene-1', 1, { durationSeconds: 5.4, visualState })
-  assert.equal(completed.status, 'awaiting_agent')
-  assert.equal(completed.pendingUpload, undefined)
-  assert.equal(completed.currentScene?.videoClips?.[0].status, 'ready')
-  assert.deepEqual(completed.currentScene?.videoClips?.[0].visualState, visualState)
+test('a rewrite of a clip whose previous clip is not ready leaves it waiting', () => {
+  const rewritten = applyVideoPlan(planned(), 'scene-1', plan(3, 2), references)
+  assert.deepEqual(clips(rewritten).map((clip) => clip.status), ['pending', 'waiting', 'waiting'])
 })
 
-test('finishTurn opens the choices and records the skipped reason', () => {
-  const finished = finishTurn(makeSession({ status: 'awaiting_upload' }), 'scene-1', '没有可用的视频生成器。')
+test('a ready clip unlocks the next clip with its tail frame as the start image', () => {
+  const session = commitClipMedia(planned(), 'scene-1', 1, media(1, 'upload-1'))
+  const [first, second, third] = clips(session)
+  assert.equal(first.status, 'ready')
+  assert.equal(first.uploadId, 'upload-1')
+  assert.equal(first.actualDuration, 5.2)
+  assert.equal(second.status, 'pending')
+  assert.equal(second.startImageUrl, 'tail-1.jpg')
+  assert.deepEqual(second.referenceImages, [{ type: 'start_frame', imageUrl: 'tail-1.jpg', label: '起始尾帧' }])
+  assert.equal(third.status, 'waiting')
+  assert.equal(session.status, 'awaiting_video')
+  assert.equal(session.currentScene?.tailFrameUrl, undefined)
+})
+
+test('the last ready clip completes the scene and opens the choices', () => {
+  const session = allReady()
+  assert.ok(clips(session).every((clip) => clip.status === 'ready'))
+  assert.equal(session.currentScene?.tailFrameUrl, 'tail-3.jpg')
+  assert.equal(session.status, 'awaiting_action')
+})
+
+test('committing media clears the Comfy job id', () => {
+  let session = setClipComfyJob(planned(), 'scene-1', 1, 'job-1')
+  assert.equal(clips(session)[0].comfyJobId, 'job-1')
+  session = commitClipMedia(session, 'scene-1', 1, media(1))
+  assert.equal(clips(session)[0].comfyJobId, undefined)
+})
+
+test('regenerating a ready clip sends every later clip back to waiting and reopens the video stage', () => {
+  const complete = allReady()
+  const regenerating = markClipGenerating(complete, 'scene-1', 2, { referenceImages: [], startImageUrl: 'tail-1.jpg' })
+  const [first, second, third] = clips(regenerating)
+  assert.equal(first.status, 'ready')
+  assert.equal(second.status, 'generating')
+  assert.equal(second.uploadId, undefined)
+  assert.equal(second.startImageUrl, 'tail-1.jpg')
+  assert.equal(third.status, 'waiting')
+  assert.equal(third.uploadId, undefined)
+  assert.equal(third.tailFrameUrl, undefined)
+  assert.equal(regenerating.currentScene?.tailFrameUrl, undefined)
+  assert.equal(regenerating.status, 'awaiting_video')
+  assert.deepEqual(findDiscardedMedia(complete, regenerating).uploadIds, ['upload-2', 'upload-3'])
+})
+
+test('replacing a ready clip by upload also invalidates the later clips', () => {
+  const complete = allReady()
+  const replaced = commitClipMedia(complete, 'scene-1', 1, media(1, 'upload-1b'))
+  assert.deepEqual(clips(replaced).map((clip) => clip.status), ['ready', 'pending', 'waiting'])
+  assert.equal(clips(replaced)[1].uploadId, undefined)
+  assert.equal(clips(replaced)[1].startImageUrl, 'tail-1.jpg')
+  assert.equal(replaced.currentScene?.tailFrameUrl, undefined)
+  assert.equal(replaced.status, 'awaiting_video')
+  assert.deepEqual(findDiscardedMedia(complete, replaced).uploadIds, ['upload-1', 'upload-2', 'upload-3'])
+})
+
+test('generating a pending clip keeps its Comfy job and the session status', () => {
+  let session = setClipComfyJob(planned(), 'scene-1', 1, 'job-1')
+  session = failClip(session, 'scene-1', 1, '超时')
+  const generating = markClipGenerating(session, 'scene-1', 1, { referenceImages: [] })
+  assert.equal(clips(generating)[0].status, 'generating')
+  assert.equal(clips(generating)[0].comfyJobId, 'job-1')
+  assert.equal(clips(generating)[0].error, undefined)
+  assert.equal(generating.status, 'awaiting_video')
+})
+
+test('failClip marks the clip failed and drops the Comfy job only when asked', () => {
+  const session = setClipComfyJob(planned(), 'scene-1', 1, 'job-1')
+  const kept = failClip(session, 'scene-1', 1, '网络中断')
+  assert.equal(clips(kept)[0].status, 'failed')
+  assert.equal(clips(kept)[0].error, '网络中断')
+  assert.equal(clips(kept)[0].comfyJobId, 'job-1')
+  assert.equal(kept.status, 'awaiting_video')
+  assert.equal(clips(failClip(session, 'scene-1', 1, '任务失败', { dropComfyJob: true }))[0].comfyJobId, undefined)
+})
+
+test('finishDirectorRun waits for video when the director handed over a plan', () => {
+  const session = applyVideoPlan(makeSession(), 'scene-1', plan(2), references)
+  const finished = finishDirectorRun(session, 'scene-1', { hasVideoPlan: true })
+  assert.equal(finished.status, 'awaiting_video')
+  assert.equal(finished.currentScene?.videoSkippedReason, undefined)
+})
+
+test('finishDirectorRun opens the choices and records why there is no video', () => {
+  const finished = finishDirectorRun(makeSession(), 'scene-1', { hasVideoPlan: false, skippedReason: '导演判断本场次不需要视频。' })
   assert.equal(finished.status, 'awaiting_action')
-  assert.equal(finished.pendingUpload, undefined)
-  assert.equal(finished.currentScene?.videoSkippedReason, '没有可用的视频生成器。')
+  assert.equal(finished.currentScene?.videoSkippedReason, '导演判断本场次不需要视频。')
+
+  const textOnly = finishDirectorRun(makeSession(), 'scene-1', { hasVideoPlan: false })
+  assert.equal(textOnly.status, 'awaiting_action')
+  assert.equal(textOnly.currentScene?.videoSkippedReason, undefined)
 })
 
-test('setSceneVideoPlan stores the compiled request on the scene', () => {
-  const video = { totalDuration: 15, style: '写实', videoPrompts: [segment(1), segment(2)] }
-  const next = setSceneVideoPlan(makeSession(), 'scene-1', video)
-  assert.deepEqual(next.currentScene?.videoRequest, video)
+test('skipSceneVideo opens the choices without a tail frame for the next scene', () => {
+  const session = commitClipMedia(planned(), 'scene-1', 1, media(1))
+  const skipped = skipSceneVideo(session, 'scene-1')
+  assert.equal(skipped.status, 'awaiting_action')
+  assert.equal(skipped.currentScene?.videoSkippedReason, PLAYER_SKIPPED_VIDEO_REASON)
+  assert.equal(skipped.currentScene?.tailFrameUrl, undefined)
+
+  const notWaiting = makeSession({ status: 'awaiting_action' })
+  assert.equal(skipSceneVideo(notWaiting, 'scene-1'), notWaiting)
 })
 
-test('setSceneVisualState follows the tail frame of the last ready clip', () => {
-  let session = addWrittenSegment(makeSession(), 'scene-1', segment(1), [], { referenceImages: [] })
-  session = markAwaitingUpload(session, 'scene-1', {
-    sequence: 1, toolCallId: 'call-1', traceId: 'trace-1', prompt: '第 1 段', seconds: 5,
-    descriptors: [], references: { referenceImages: [] },
-  })
-  session = commitSegmentMedia(session, 'scene-1', 1, {
-    videoUrl: 'blob:v', tailFrameUrl: 'tail-1.jpg', actualDuration: 5,
-  })
-  session = completeSegment(session, 'scene-1', 1, { durationSeconds: 5, visualState })
-  const next = setSceneVisualState(session, 'scene-1', visualState)
-  assert.equal(next.currentScene?.tailFrameUrl, 'tail-1.jpg')
-  assert.deepEqual(next.currentScene?.tailVisualState, visualState)
+test('findDiscardedMedia ignores media that is still referenced', () => {
+  const session = allReady()
+  assert.deepEqual(findDiscardedMedia(session, session), { uploadIds: [], objectUrls: [] })
 })
 
 test('resolveReferenceDescriptors resolves the three descriptor kinds and reports missing images', () => {
@@ -195,37 +254,4 @@ test('resolveReferenceDescriptors resolves the three descriptor kinds and report
     currentClips: [],
   })
   assert.deepEqual(missingStartFrame.missing, ['start_frame:1'])
-})
-
-test('adoptServerTurnState surfaces a retry when the server has gone idle mid-turn', () => {
-  const session = makeSession({ status: 'awaiting_upload', pendingUpload: { sceneId: 'scene-1', sequence: 1, toolCallId: 'call-1', traceId: 'trace-1' } })
-  const result = adoptServerTurnState(session, { status: 'idle' }, { characterReferences: {} })
-  assert.equal(result.needsRetry, true)
-  assert.equal(result.session.status, 'awaiting_agent')
-  assert.equal(result.session.pendingUpload, undefined)
-})
-
-test('adoptServerTurnState leaves an already-open turn untouched', () => {
-  const session = makeSession({ status: 'awaiting_action' })
-  const result = adoptServerTurnState(session, { status: 'idle' }, { characterReferences: {} })
-  assert.equal(result.needsRetry, false)
-  assert.equal(result.session, session)
-})
-
-test('adoptServerTurnState aligns the local pendingUpload to the server-reported segment', () => {
-  const session = makeSession({ status: 'awaiting_agent' })
-  const result = adoptServerTurnState(session, {
-    status: 'awaiting_upload',
-    awaiting: {
-      sequence: 1, toolCallId: 'call-server', prompt: '服务端记录的 Prompt', seconds: 6,
-      referenceImages: [{ type: 'character', characterId: 'heroine', actorId: 'actor-1' }],
-      traceId: 'trace-server',
-    },
-  }, { characterReferences: { heroine: { characterName: '沈清禾', actorId: 'actor-1', imageUrl: 'heroine.jpg' } } })
-  assert.equal(result.needsRetry, false)
-  assert.equal(result.session.status, 'awaiting_upload')
-  assert.deepEqual(result.session.pendingUpload, { sceneId: 'scene-1', sequence: 1, toolCallId: 'call-server', traceId: 'trace-server' })
-  const clip = result.session.currentScene?.videoClips?.[0]
-  assert.equal(clip?.prompt, '服务端记录的 Prompt')
-  assert.equal(clip?.referenceImages?.[0].imageUrl, 'heroine.jpg')
 })

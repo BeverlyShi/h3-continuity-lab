@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { KeyRound, RotateCcw, ScrollText, UserRound } from 'lucide-react'
 import { AgentChat } from '../components/game/AgentChat'
 import {
@@ -9,7 +9,7 @@ import {
 } from '../config/directorModels'
 import { GameInteraction } from '../components/game/GameInteraction'
 import { GameStage } from '../components/game/GameStage'
-import { useDirectorAgent, type OnAwaitingUpload } from '../hooks/useDirectorAgent'
+import { useDirectorAgent, type OnVideoPlanReady } from '../hooks/useDirectorAgent'
 import { useGameSession } from '../hooks/useGameSession'
 import { useSceneVideo } from '../hooks/useSceneVideo'
 import { palaceStory } from '../stories/palace'
@@ -20,6 +20,7 @@ import type { GameScene } from '../types/game'
 
 type GamePageProps = {
   savedFalApiKey: string
+  savedComfyApiKey: string
   savedOpenRouterApiKey: string
   savedDeepSeekApiKey: string
   savedBigModelApiKey: string
@@ -54,14 +55,14 @@ const loadDirectorThinking = () => {
 const loadVideoMode = (): NonNullable<GameScene['videoMode']> => {
   try {
     const mode = localStorage.getItem(VIDEO_MODE_STORAGE_KEY)
-    if (mode === 'auto' || mode === 'manual' || mode === 'off') return mode
+    if (mode === 'auto' || mode === 'comfy' || mode === 'manual' || mode === 'off') return mode
     return localStorage.getItem(VIDEO_GENERATION_STORAGE_KEY) === 'on' ? 'auto' : 'manual'
   } catch {
     return 'manual'
   }
 }
 
-export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors, onActorsCreated }: GamePageProps) {
+export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiKey, savedDeepSeekApiKey, savedBigModelApiKey, onTraceUpdate, onRequestApiKey, actors, onActorsCreated }: GamePageProps) {
   const game = useGameSession()
   const [modelId, setModelId] = useState<DirectorModelId>(loadDirectorModel)
   const [thinkingEnabled, setThinkingEnabled] = useState(loadDirectorThinking)
@@ -70,16 +71,26 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
   const apiKeyLabel = { deepseek: 'DeepSeek', openrouter: 'OpenRouter', bigmodel: '智谱 BigModel' }[activeModelProvider]
   const [videoMode, setVideoMode] = useState(loadVideoMode)
   const [narrativeExpanded, setNarrativeExpanded] = useState(true)
-  // useDirectorAgent 需要 onAwaitingUpload，onAwaitingUpload 需要 useSceneVideo，useSceneVideo 又需要 director.resumeTurn；
-  // 用 ref 打破这个初始化顺序上的循环依赖，渲染后立即在 effect 里同步成最新值。
-  const sceneVideoRef = useRef<ReturnType<typeof useSceneVideo> | null>(null)
 
-  const onAwaitingUpload: OnAwaitingUpload = useCallback((sceneId, clip) => {
+  const sceneVideo = useSceneVideo({
+    falApiKey: savedFalApiKey,
+    comfyApiKey: savedComfyApiKey,
+    videoMode,
+    game,
+    actors,
+  })
+  const { generateScene: generateSceneVideo } = sceneVideo
+
+  // ComfyUI 模式按秒扣积分：分镜就绪后不自动提交，等玩家在时间轴上点「生成本场次视频」。
+  const onVideoPlanReady: OnVideoPlanReady = useCallback((sceneId) => {
+    if (videoMode === 'comfy') {
+      return savedComfyApiKey ? undefined : '未配置 Comfy API Key，请先在设置里配置，或逐段上传视频。'
+    }
     if (videoMode !== 'auto') return undefined
-    if (!savedFalApiKey) return '未配置 fal API Key，请手动上传这一段视频，或先在设置里配置 fal Key。'
-    void sceneVideoRef.current?.generateSegmentWithFal(sceneId, clip.sequence)
+    if (!savedFalApiKey) return '未配置 fal API Key，请逐段上传视频，或先在设置里配置 fal Key。'
+    void generateSceneVideo(sceneId)
     return undefined
-  }, [savedFalApiKey, videoMode])
+  }, [generateSceneVideo, savedComfyApiKey, savedFalApiKey, videoMode])
 
   const director = useDirectorAgent(
     game,
@@ -92,25 +103,19 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
     thinkingEnabled,
     actors,
     onActorsCreated,
-    onAwaitingUpload,
+    onVideoPlanReady,
   )
-
-  const sceneVideo = useSceneVideo({
-    falApiKey: savedFalApiKey,
-    game,
-    resumeTurn: director.resumeTurn,
-  })
-  useEffect(() => {
-    sceneVideoRef.current = sceneVideo
-  })
 
   const mediaRunning = game.restoringVideos || sceneVideo.mediaBusy
 
-  // 存档与本地视频都恢复完成后，对齐一次服务端的回合状态：可能在等上传，也可能已经彻底空闲需要重试。
+  // 存档与本地视频都恢复完成后：刷新前已提交的 Comfy 任务（已在扣费）接着查结果；没提交过的段不自动提交。
   useEffect(() => {
     if (game.loading || game.restoringVideos) return
-    void director.syncTurnState()
-    // 只在存档加载完成的那一刻对齐一次，之后的状态变化都由事件流驱动。
+    const scene = game.getSessionSnapshot()?.currentScene
+    const clip = scene?.videoClips?.find((item) => item.comfyJobId && item.status !== 'ready')
+    if (videoMode !== 'comfy' || !savedComfyApiKey || !scene || !clip) return
+    void sceneVideo.generateClip(scene.id, clip.sequence)
+    // 只在存档加载完成的那一刻检查一次，之后的生成都由玩家点击触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.loading, game.restoringVideos])
 
@@ -125,12 +130,34 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
     }
   }
 
-  const uploadVideo = async (sceneId: string, sequence: number, file: File) => {
-    await sceneVideo.uploadSegmentVideo(sceneId, sequence, file)
+  const uploadClip = (sceneId: string, sequence: number, file: File) => sceneVideo.uploadClip(sceneId, sequence, file)
+
+  const hasVideoKey = videoMode === 'auto' ? Boolean(savedFalApiKey) : videoMode === 'comfy' ? Boolean(savedComfyApiKey) : false
+
+  const generateClip = (sceneId: string, sequence: number) => {
+    if (!hasVideoKey) {
+      onRequestApiKey()
+      return
+    }
+    void sceneVideo.generateClip(sceneId, sequence)
   }
 
-  const retrySegment = (sceneId: string) => {
-    void sceneVideo.retryPendingSegment(sceneId)
+  const generateScene = (sceneId: string) => {
+    if (!hasVideoKey) {
+      onRequestApiKey()
+      return
+    }
+    void sceneVideo.generateScene(sceneId)
+  }
+
+  const rewriteSegment = (sceneId: string, sequence: number, reason: string) => {
+    if (mediaRunning) return Promise.resolve(false)
+    return director.rewriteSegment(sceneId, sequence, reason)
+  }
+
+  const skipVideo = () => {
+    const sceneId = game.session?.currentScene?.id
+    if (sceneId) game.skipSceneVideo(sceneId)
   }
 
   const switchThinking = (enabled: boolean) => {
@@ -153,7 +180,7 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
   }
 
   const startStory = () => {
-    if (!activeApiKey || videoMode === 'auto' && !savedFalApiKey) {
+    if (!activeApiKey || videoMode === 'auto' && !savedFalApiKey || videoMode === 'comfy' && !savedComfyApiKey) {
       onRequestApiKey()
       return
     }
@@ -221,8 +248,10 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
             mediaRunning={mediaRunning}
             onStart={startStory}
             onVideoModeChange={switchVideoMode}
-            onUploadVideo={uploadVideo}
-            onRetrySegment={retrySegment}
+            onUploadClip={uploadClip}
+            onGenerateClip={generateClip}
+            onGenerateScene={generateScene}
+            onRewriteSegment={rewriteSegment}
             narrativeExpanded={narrativeExpanded}
             onNarrativeExpandedChange={setNarrativeExpanded}
           />
@@ -233,9 +262,12 @@ export function GamePage({ savedFalApiKey, savedOpenRouterApiKey, savedDeepSeekA
               key={`${game.session.id}:${game.session.turn}`}
               session={game.session}
               directorStatus={director.status}
+              videoMode={videoMode}
+              mediaRunning={mediaRunning}
               onChoose={director.submitChoice}
               onSubmitFreeform={director.submitFreeform}
               onRetry={() => { void director.retry() }}
+              onSkipVideo={skipVideo}
             />
           </aside>
         )}

@@ -6,9 +6,9 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { createServer, type ViteDevServer } from 'vite'
 import { SCENE_PUBLISH_ARGUMENTS_EXAMPLE } from '../server/publishSceneTool.ts'
-import { WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST, WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT } from '../server/writeSegmentTool.ts'
+import { WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE } from '../server/writeSceneVideoTool.ts'
 import type { TailFrameVisualState } from '../src/types/story.ts'
-import { installScriptedProvider, type ScriptedStep } from './helpers/scriptedProvider.ts'
+import { installScriptedProvider } from './helpers/scriptedProvider.ts'
 
 const fakeVisualState: TailFrameVisualState = {
   shot_size: '中景',
@@ -22,8 +22,7 @@ const fakeVisualState: TailFrameVisualState = {
 }
 
 const scene = JSON.parse(SCENE_PUBLISH_ARGUMENTS_EXAMPLE)
-const write1 = JSON.parse(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_FIRST)
-const write2 = JSON.parse(WRITE_SEGMENT_ARGUMENTS_EXAMPLE_NEXT)
+const storyboard = JSON.parse(WRITE_SCENE_VIDEO_ARGUMENTS_EXAMPLE)
 
 // directorPlugin.ts 通过 directorAgent.ts 在模块顶层按导入时的 cwd 固定 trace 根目录；
 // 每个用例都用独立临时目录，所以用查询串绕开 ESM 模块缓存，强制每次重新加载。
@@ -68,7 +67,6 @@ test('the director endpoint runs the single agent for both official providers wi
         const provider = installScriptedProvider([
           { tool: 'publish_scene', args: scene, reasoning: '构思场景。' },
           { tool: 'cast_scene', args: { assignments: [{ characterId: 'steward', create: { name: '崔姑姑', appearance: '四十五岁上下，面容清瘦端严，乌发圆髻，深青窄袖宫装' }, reason: '演员库为空' }] }, reasoning: '新建演员。' },
-          { tool: 'finish_turn', args: {}, reasoning: '结束。' },
         ])
         try {
           const response = await fetch(`${baseUrl}/api/director/turn`, {
@@ -91,11 +89,12 @@ test('the director endpoint runs the single agent for both official providers wi
             if (isGlm) assert.equal(request.body.thinking?.clear_thinking, false)
             assert.equal(request.body.max_tokens, 16_384)
             assert.equal('tool_choice' in request.body, false)
-            assert.deepEqual(request.body.tools?.map((tool) => tool.function.name), ['publish_scene', 'cast_scene', 'finish_turn'])
+            assert.deepEqual(request.body.tools?.map((tool) => tool.function.name), ['publish_scene', 'cast_scene'])
           }
-          // 同一回合内后续请求回放了此前的思考内容。
-          const assistants = provider.requests[2].body.messages.filter((message) => message.role === 'assistant')
-          assert.equal(assistants.length, 2)
+          // 交齐即停：选角完成后不再多发一次请求；同一场次内后续请求回放了此前的思考内容。
+          assert.equal(provider.requests.length, 2)
+          const assistants = provider.requests[1].body.messages.filter((message) => message.role === 'assistant')
+          assert.equal(assistants.length, 1)
         } finally {
           provider.restore()
         }
@@ -136,111 +135,82 @@ const actors = [
   { id: 'actor-elder', name: '演员乙', gender: 'female', minAge: 40, maxAge: 55, hasImage: true },
 ]
 
-test('a segment turn pauses over HTTP; GET turn-state reports it and POST resume drives it to completion', async () => {
+test('a scene continues from the previous frame over HTTP, and the rewrite endpoint re-emits the plan from one segment', async () => {
   await withServer(async ({ baseUrl, fetch }) => {
-    const script: ScriptedStep[] = [
+    const rewritten = {
+      characters: ['heroine', 'steward'],
+      seconds: 10,
+      prompt: '0–5秒：承接上一段画面，镜头缓缓推近。女主抬眼看向掌事姑姑。安静。\n\n5–10秒：镜头硬切为女主近景，平视，固定。她把包袱放到身侧。画外传来轻微风声。',
+    }
+    const provider = installScriptedProvider([
       { tool: 'publish_scene', args: scene },
       { tool: 'cast_scene', args: castAssignments },
-      { tool: 'write_segment', args: write1 },
-      { tool: 'generate_segment', args: { sequence: 1 } },
-      { tool: 'write_segment', args: write2 },
-      { tool: 'generate_segment', args: { sequence: 2 } },
-      { tool: 'finish_turn', args: {} },
-    ]
-    const provider = installScriptedProvider(script)
+      { tool: 'inspect_last_frame', args: {} },
+      { tool: 'write_scene_video', args: { ...storyboard, opening: 'continue' } },
+      { tool: 'write_scene_video', args: { rewriteSequence: 2, segments: [rewritten] } },
+    ])
     try {
-      const idle = await fetch(`${baseUrl}/api/director/turn-state?sessionId=http-segment`)
-      assert.deepEqual(await idle.json(), { status: 'idle' })
-
       const turnResponse = await fetch(`${baseUrl}/api/director/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
         body: JSON.stringify({
-          model: 'deepseek-v4-flash', videoMode: 'manual', traceId: 'http-segment-1', actors, castings: [],
-          context: { ok: true, sessionId: 'http-segment', turn: 1, input: { type: 'start' } },
+          model: 'deepseek-v4-flash', videoMode: 'comfy', traceId: 'http-scene-1', actors, castings: [],
+          context: {
+            ok: true, sessionId: 'http-scene', turn: 2, input: { type: 'choice', choice: scene.scene.choices[0] },
+            previousScene: { tailFrameDataUrl: 'data:image/jpeg;base64,AAAA', characters: scene.characters },
+          },
         }),
       })
       const events = await readNdjson(turnResponse)
-      assert.equal(events.some((event) => event.type === 'awaiting_upload'), true)
-      assert.equal(events.some((event) => event.type === 'done'), false)
-      const awaiting1 = events.find((event) => event.type === 'awaiting_upload')
+      assert.equal(events.filter((event) => event.type === 'error').length, 0)
+      const plan = events.find((event) => event.type === 'video_plan')
+      assert.deepEqual(plan.references[0], [{ type: 'previous_scene_tail_frame' }])
+      assert.equal(plan.fromSequence, 1)
+      assert.equal(events.at(-1)?.type, 'done')
 
-      const turnState = await fetch(`${baseUrl}/api/director/turn-state?sessionId=http-segment`)
-      const turnStateBody = await turnState.json()
-      assert.equal(turnStateBody.status, 'awaiting_upload')
-      assert.equal(turnStateBody.awaiting.sequence, 1)
-      assert.equal(turnStateBody.awaiting.toolCallId, awaiting1.toolCallId)
-
-      const resume1 = await fetch(`${baseUrl}/api/director/resume`, {
+      const rewriteResponse = await fetch(`${baseUrl}/api/director/rewrite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
-        body: JSON.stringify({
-          sessionId: 'http-segment', sequence: 1, toolCallId: awaiting1.toolCallId,
-          tailFrameDataUrl: 'data:image/png;base64,AAAA', durationSeconds: 5.2,
-        }),
+        body: JSON.stringify({ sessionId: 'http-scene', sequence: 2, reason: '人物走位跳了', traceId: 'http-scene-2', actors, model: 'deepseek-v4-flash' }),
       })
-      const resumeEvents1 = await readNdjson(resume1)
-      assert.equal(resumeEvents1.filter((event) => event.type === 'error').length, 0)
-      const awaiting2 = resumeEvents1.find((event) => event.type === 'awaiting_upload')
-      assert.ok(awaiting2)
-      assert.equal(awaiting2.sequence, 2)
-
-      const resume2 = await fetch(`${baseUrl}/api/director/resume`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
-        body: JSON.stringify({
-          sessionId: 'http-segment', sequence: 2, toolCallId: awaiting2.toolCallId,
-          tailFrameDataUrl: 'data:image/png;base64,BBBB', durationSeconds: 9.9,
-        }),
-      })
-      const resumeEvents2 = await readNdjson(resume2)
-      assert.equal(resumeEvents2.filter((event) => event.type === 'error').length, 0)
-      assert.equal(resumeEvents2.some((event) => event.type === 'video_plan'), true)
-      assert.equal(resumeEvents2.some((event) => event.type === 'scene_visual_state'), true)
-      assert.equal(resumeEvents2.at(-1)?.type, 'done')
+      const rewriteEvents = await readNdjson(rewriteResponse)
+      assert.equal(rewriteEvents.filter((event) => event.type === 'error').length, 0)
+      const replan = rewriteEvents.find((event) => event.type === 'video_plan')
+      assert.equal(replan.fromSequence, 2)
+      assert.match(replan.video.videoPrompts[1].prompt, /她把包袱放到身侧/)
+      assert.equal(rewriteEvents.at(-1)?.type, 'done')
       assert.equal(provider.remaining(), 0)
-
-      const idleAgain = await fetch(`${baseUrl}/api/director/turn-state?sessionId=http-segment`)
-      assert.deepEqual(await idleAgain.json(), { status: 'idle' })
     } finally {
       provider.restore()
     }
   })
 })
 
-test('validates the resume endpoint parameters', async () => {
+test('validates the turn context frame and the rewrite endpoint parameters', async () => {
   await withServer(async ({ baseUrl, fetch }) => {
+    const badFrame = await fetch(`${baseUrl}/api/director/turn`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-DeepSeek-Key': 'test-key' },
+      body: JSON.stringify({ model: 'deepseek-v4-flash', videoMode: 'manual', traceId: 't', actors: [], castings: [], context: {
+        ok: true, sessionId: 'http-bad-frame', turn: 2, input: { type: 'start' },
+        previousScene: { tailFrameDataUrl: 'https://example.com/frame.jpg', characters: [] },
+      } }),
+    })
+    assert.match(await badFrame.text(), /故事输入无效/)
+
     const post = (body: unknown, headers: Record<string, string> = { 'X-DeepSeek-Key': 'test-key' }) =>
-      fetch(`${baseUrl}/api/director/resume`, {
+      fetch(`${baseUrl}/api/director/rewrite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify(body),
       })
+    const valid = { sessionId: 's', sequence: 1, reason: '不满意', traceId: 't', actors: [], model: 'deepseek-v4-flash' }
 
     assert.match((await readNdjson(await post({})))[0].error, /缺少会话 ID/)
-    assert.match((await readNdjson(await post({ sessionId: 's', sequence: 0, toolCallId: 't', tailFrameDataUrl: 'data:image/png;base64,A', durationSeconds: 1 })))[0].error, /段号无效/)
-    assert.match((await readNdjson(await post({ sessionId: 's', sequence: 1, tailFrameDataUrl: 'data:image/png;base64,A', durationSeconds: 1 })))[0].error, /缺少工具调用 ID/)
-    assert.match((await readNdjson(await post({ sessionId: 's', sequence: 1, toolCallId: 't', tailFrameDataUrl: 'not-a-data-url', durationSeconds: 1 })))[0].error, /data:image\//)
-    assert.match((await readNdjson(await post({ sessionId: 's', sequence: 1, toolCallId: 't', tailFrameDataUrl: 'data:image/png;base64,A', durationSeconds: 0 })))[0].error, /视频实际时长无效/)
-    assert.match(
-      (await readNdjson(await post({ sessionId: 's', sequence: 1, toolCallId: 't', tailFrameDataUrl: 'data:image/png;base64,A', durationSeconds: 1 }, {})))[0].error,
-      /DEEPSEEK_API_KEY/,
-    )
-    assert.match(
-      (await readNdjson(await post({ sessionId: 'no-such-session', sequence: 1, toolCallId: 't', tailFrameDataUrl: 'data:image/png;base64,A', durationSeconds: 1 })))[0].error,
-      /当前没有等待上传的视频段/,
-    )
-  })
-})
-
-test('validates the turn-state endpoint and reports idle for unknown sessions', async () => {
-  await withServer(async ({ baseUrl, fetch }) => {
-    const missing = await fetch(`${baseUrl}/api/director/turn-state`)
-    assert.equal(missing.status, 400)
-    assert.match((await missing.json()).error, /缺少会话 ID/)
-
-    const unknown = await fetch(`${baseUrl}/api/director/turn-state?sessionId=never-created`)
-    assert.equal(unknown.status, 200)
-    assert.deepEqual(await unknown.json(), { status: 'idle' })
+    assert.match((await readNdjson(await post({ ...valid, sequence: 4 })))[0].error, /段号无效/)
+    assert.match((await readNdjson(await post({ ...valid, reason: '  ' })))[0].error, /请写明重写原因/)
+    assert.match((await readNdjson(await post({ ...valid, model: 'nope' })))[0].error, /不支持该模型/)
+    assert.match((await readNdjson(await post(valid, {})))[0].error, /DEEPSEEK_API_KEY/)
+    assert.match((await readNdjson(await post({ ...valid, sessionId: 'never-created' })))[0].error, /没有可重写的分镜/)
   })
 })

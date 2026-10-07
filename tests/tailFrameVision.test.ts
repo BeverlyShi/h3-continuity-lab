@@ -1,15 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyzeTailFrame, DEEPSEEK_VISION_MODEL } from '../server/tailFrameVision.ts'
-import { createInspectTailFrameTool, inspectTailFrameSchema } from '../server/inspectTailFrameTool.ts'
-import { Check } from 'typebox/value'
-
-test('accepts inline tail images from uploaded videos without a hosted image URL', () => {
-  assert.equal(Check(inspectTailFrameSchema, {
-    imageUrl: `data:image/jpeg;base64,${'a'.repeat(20_000)}`,
-    characters: [],
-  }), true)
-})
+import { createInspectLastFrameTool } from '../server/inspectLastFrameTool.ts'
+import type { TailFrameVisualState } from '../src/types/story.ts'
 
 const characters = [
   { id: 'heroine', name: '沈清禾', gender: 'female' as const, minAge: 16, maxAge: 20 },
@@ -39,10 +32,38 @@ const state = {
   frame_quality: '清晰稳定',
 }
 
-test('exposes tail-frame recognition as a dedicated agent tool', () => {
-  const tool = createInspectTailFrameTool('sk-deepseek-test')
-  assert.equal(tool.name, 'inspect_tail_frame')
-  assert.match(tool.description, /DeepSeek Vision/)
+const textOf = (result: { content: Array<{ type: string; text?: string }> }) =>
+  result.content.map((item) => item.text ?? '').join('\n')
+
+test('inspect_last_frame reports a missing frame or vision key as a normal result, not a failure', async () => {
+  const analyze = async () => { throw new Error('不应调用识别') }
+  const noFrame = createInspectLastFrameTool({ getPreviousScene: () => undefined, visionKey: 'sk', analyze, onInspect: () => {} })
+  assert.equal(noFrame.name, 'inspect_last_frame')
+  assert.match(textOf(await noFrame.execute('call-1', {})), /没有可接的视频画面.*new_shot/)
+
+  const previous = { tailFrameDataUrl: 'data:image/jpeg;base64,AAAA', characters }
+  const noKey = createInspectLastFrameTool({ getPreviousScene: () => previous, analyze, onInspect: () => {} })
+  assert.match(textOf(await noKey.execute('call-2', {})), /未配置 DeepSeek Key/)
+})
+
+test('inspect_last_frame analyzes the previous scene frame with its characters and records the state', async () => {
+  const previous = { tailFrameDataUrl: 'data:image/jpeg;base64,AAAA', characters }
+  let seen: { apiKey: string; imageUrl: string; characters: unknown } | undefined
+  let recorded: TailFrameVisualState | undefined
+  const tool = createInspectLastFrameTool({
+    getPreviousScene: () => previous,
+    visionKey: 'sk-deepseek-test',
+    analyze: async (input) => {
+      seen = input
+      return state as TailFrameVisualState
+    },
+    onInspect: (visualState) => { recorded = visualState },
+  })
+  const result = await tool.execute('call-3', {})
+  assert.deepEqual(seen, { apiKey: 'sk-deepseek-test', imageUrl: previous.tailFrameDataUrl, characters, signal: undefined })
+  assert.deepEqual(recorded, state)
+  assert.match(textOf(result), /宫墙甬道/)
+  assert.match(textOf(result), /只用于镜头衔接/)
 })
 
 test('uses only the dedicated DeepSeek vision model for tail-frame inspection', async () => {

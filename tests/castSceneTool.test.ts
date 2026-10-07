@@ -80,7 +80,7 @@ test('cast_scene allows overriding its own decision within the same turn, but cr
     /沈清禾 已绑定演员 演员甲，不能更换；确需更换请设置 recast: true/)
   assert.equal(book.bindings.get('heroine'), 'actor-a')
 
-  // 显式 recast 后，本回合内可以再次覆盖，无需重复设置 recast。
+  // 显式 recast 后，本场次内可以再次覆盖，无需重复设置 recast。
   const recast = await tool.execute('cast-recast-ok', { assignments: [{ characterId: 'heroine', actorId: 'actor-c', reason: '剧情需要', recast: true }] })
   assert.deepEqual(recast.details.castings, [{ characterId: 'heroine', actorId: 'actor-c' }])
   assert.match(textOf(recast), /年龄区间不重叠/)
@@ -109,7 +109,7 @@ test('cast_scene validates actors, gender, duplicates and completeness before ch
   ] }), (error: unknown) => {
     assert.ok(error instanceof Error)
     assert.match(error.message, /演员 演员乙 的性别与人物 沈清禾 不符/)
-    assert.match(error.message, /人物 ghost 不在本幕 characters 中/)
+    assert.match(error.message, /人物 ghost 不在本场次 characters 中/)
     assert.match(error.message, /演员 actor-z 不存在/)
     return true
   })
@@ -134,7 +134,7 @@ test('describes casting status with candidates for each pending character and re
   assert.match(status, /沿用已有选角：沈清禾 → 演员甲/)
   assert.match(status, /待选角人物：/)
   assert.match(status, /- 皇帝（emperor，男 30–42）：候选 演员乙（actor-b，35–50）/)
-  assert.match(status, /请调用 cast_scene 为每个待选角人物做出决定：从候选中指定 actorId、用 create \{ name, appearance \} 新建演员，或对没有台词的背景人物设为 null；有台词的人物必须有参考图。同一幕两个人物不能使用同一演员。/)
+  assert.match(status, /请调用 cast_scene 为每个待选角人物做出决定：从候选中指定 actorId、用 create \{ name, appearance \} 新建演员，或对没有台词的背景人物设为 null；有台词的人物必须有参考图。同一场次两个人物不能使用同一演员。/)
   assert.deepEqual(resolveSceneCasting(book, characters), { castings: [{ characterId: 'heroine', actorId: 'actor-a' }], unmatchedCharacterIds: ['emperor'] })
   assert.match(describeCastingStatus(createCastingBook([], []), characters), /演员库为空/)
   const speakingEmpty = createCastingBook([], [], ['heroine'])
@@ -190,8 +190,7 @@ test('cast_scene creates an actor with a generated three-view prompt when no can
   assert.equal(book.actors.length, 4)
   assert.match(textOf(result), /李公公：新演员 演员丁，待生成参考图/)
   assert.match(textOf(result), /沈清禾：演员甲，有参考图/)
-  assert.match(textOf(result), /无参考图人物的外观（分镜每段重复使用）：/)
-  assert.match(textOf(result), new RegExp(`演员丁：${appearance}`))
+  assert.match(textOf(result), /已选演员的外观由程序拼进其出场各段的 prompt/)
   assert.equal(isCastingComplete(book, scene), true)
 
   // 同回合改主意：新建的演员不再被使用，连同待生成 prompt 一起撤掉。

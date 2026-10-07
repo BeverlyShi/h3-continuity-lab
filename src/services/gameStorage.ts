@@ -8,7 +8,7 @@ const SESSION_IMAGE_PREFIX = 'session-image:'
 const MISSING_IMAGE = 'missing:session-image'
 const IMAGE_KEEP_SCENES = 3
 
-// 同一张图片在多幕之间复用同一个 IndexedDB 记录。
+// 同一张图片在多个场次之间复用同一个 IndexedDB 记录。
 const imageIds = new Map<string, string>()
 const imageUrls = new Map<string, string>()
 
@@ -101,10 +101,10 @@ const restoreScene = (scene: GameScene) => {
       clip.referenceImages = clip.referenceImages.map((reference) =>
         reference.imageUrl === MISSING_IMAGE ? { ...reference, imageUrl: undefined } : reference)
     }
-    // 刷新前正在生成（auto）或已提交尾帧等 resume 续跑（analyzing）：请求已经中断，回合状态不会自动恢复，只能重试。
-    if (clip.status === 'generating' || clip.status === 'analyzing') {
+    // 刷新前正在生成：请求已经中断，只能重试；Comfy 任务 ID 保留，加载后接着查原任务，不重复扣费。
+    if (clip.status === 'generating') {
       clip.status = 'failed'
-      clip.error = '上次处理已中断，请重试这一片段。'
+      clip.error = '上次处理已中断，请重试这一段。'
     }
   }
 }
@@ -137,8 +137,8 @@ export const loadGameSession = async (): Promise<GameSession | null> => {
       : parsed) as GameSession & { inlineImages?: string[] }
     delete revived.inlineImages
     const session = revived as GameSession
-    // schemaVersion 8 及更早的存档结构不兼容逐段生成的会话模型，直接判定为无法读取（验证版可接受，玩家重新开始）。
-    if (session.schemaVersion !== 9 || !session.id || session.storyId !== 'palace-validation' || !session.status) return null
+    // schemaVersion 9 及更早的存档结构不兼容整场分镜的会话模型，直接判定为无法读取（验证版可接受，玩家重新开始）。
+    if (session.schemaVersion !== 10 || !session.id || session.storyId !== 'palace-validation' || !session.status) return null
     for (const scene of [...session.sceneHistory, ...(session.currentScene ? [session.currentScene] : [])]) {
       restoreScene(scene)
     }
