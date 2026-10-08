@@ -103,17 +103,15 @@ function App() {
               <UserRound size={15} />
               <span>演员库</span>
             </button>
-            {import.meta.env.DEV && (
-              <button
-                className={workspace === 'trace' ? 'active' : ''}
-                aria-label="Trace"
-                aria-pressed={workspace === 'trace'}
-                onClick={() => setWorkspace('trace')}
-              >
-                <Activity size={15} />
-                <span>Trace</span>
-              </button>
-            )}
+            <button
+              className={workspace === 'trace' ? 'active' : ''}
+              aria-label="Trace"
+              aria-pressed={workspace === 'trace'}
+              onClick={() => setWorkspace('trace')}
+            >
+              <Activity size={15} />
+              <span>Trace</span>
+            </button>
           </nav>
         </div>
         <button
@@ -154,11 +152,9 @@ function App() {
           portraits={portraits}
         />
       </div>
-      {import.meta.env.DEV && (
-        <div hidden={workspace !== 'trace'}>
-          <TracePage traces={traces} />
-        </div>
-      )}
+      <div hidden={workspace !== 'trace'}>
+        <TracePage traces={traces} />
+      </div>
 
       {isApiDialogOpen && (
         <ApiKeyDialog
