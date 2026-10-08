@@ -78,9 +78,9 @@ export function TracePage({ traces }: { traces: AgentTraceRun[] }) {
         <div>
           <div className="game-eyebrow"><Activity size={14} /> Agent 诊断</div>
           <h1>Trace</h1>
-          <p>Pi Agent 输入、publish_scene 工具调用、持久化 Session 与上下文压缩轨迹。</p>
+          <p>Pi Agent 输入、工具调用、持久化 Session 与上下文压缩轨迹。</p>
         </div>
-        <div className="trace-security-note"><ShieldCheck size={14} />开发视图 · Pi Agent 运行详情</div>
+        <div className="trace-security-note"><ShieldCheck size={14} />仅存在本浏览器 · 刷新后清空</div>
       </header>
 
       <div className="trace-layout">

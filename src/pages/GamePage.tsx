@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { KeyRound, RotateCcw, ScrollText, UserRound } from 'lucide-react'
+import { RotateCcw, ScrollText, UserRound } from 'lucide-react'
 import { AgentChat } from '../components/game/AgentChat'
 import {
   DEFAULT_DIRECTOR_MODEL,
@@ -230,11 +230,6 @@ export function GamePage({ savedFalApiKey, savedComfyApiKey, savedOpenRouterApiK
           <div className="game-role"><UserRound size={16} /> 你的身份：{palaceStory.role}</div>
         </div>
         <div className="game-intro-actions">
-          {!activeApiKey && (
-            <button className="button button-secondary" onClick={onRequestApiKey}>
-              <KeyRound size={15} />设置 API Key
-            </button>
-          )}
           {game.session && (
             <button
               className="button button-secondary"
